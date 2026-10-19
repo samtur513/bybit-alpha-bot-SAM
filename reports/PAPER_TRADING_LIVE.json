@@ -1,0 +1,236 @@
+{
+  "timestamp": 1792417848879,
+  "datetime_utc": "2026-10-19 13:50:48.879000+00:00",
+  "next_candle_seconds": 552,
+  "capital": 296.28594111,
+  "peak_equity": 300.0,
+  "drawdown_pct": 0.0,
+  "is_kill_switch_active": false,
+  "total_net_pnl": -3.71405889,
+  "win_rate_pct": 0.0,
+  "profit_factor": 0.0,
+  "open_positions_count": 2,
+  "radar": {
+    "BTCUSDT": {
+      "current_price": 82284.0,
+      "upper_channel": 83917.8,
+      "lower_channel": 79750.0,
+      "dist_to_long_pct": 1.99,
+      "dist_to_short_pct": 3.08,
+      "atr": 382.04,
+      "volume_ratio": 0.83,
+      "trend": "BEAR (EMA50 < EMA200)",
+      "is_in_position": false
+    },
+    "ETHUSDT": {
+      "current_price": 2407.92,
+      "upper_channel": 2520.39,
+      "lower_channel": 2315.0,
+      "dist_to_long_pct": 4.67,
+      "dist_to_short_pct": 3.86,
+      "atr": 16.08,
+      "volume_ratio": 0.65,
+      "trend": "BEAR (EMA50 < EMA200)",
+      "is_in_position": false
+    },
+    "SOLUSDT": {
+      "current_price": 104.69,
+      "upper_channel": 107.91,
+      "lower_channel": 100.32,
+      "dist_to_long_pct": 3.08,
+      "dist_to_short_pct": 4.17,
+      "atr": 0.81,
+      "volume_ratio": 0.83,
+      "trend": "BEAR (EMA50 < EMA200)",
+      "is_in_position": true
+    },
+    "SUIUSDT": {
+      "current_price": 0.9971,
+      "upper_channel": 1.0647,
+      "lower_channel": 0.9365,
+      "dist_to_long_pct": 6.78,
+      "dist_to_short_pct": 6.08,
+      "atr": 0.01,
+      "volume_ratio": 1.05,
+      "trend": "BEAR (EMA50 < EMA200)",
+      "is_in_position": false
+    },
+    "DOGEUSDT": {
+      "current_price": 0.07935,
+      "upper_channel": 0.08497,
+      "lower_channel": 0.07603,
+      "dist_to_long_pct": 7.08,
+      "dist_to_short_pct": 4.18,
+      "atr": 0.0,
+      "volume_ratio": 0.97,
+      "trend": "BEAR (EMA50 < EMA200)",
+      "is_in_position": true
+    },
+    "AVAXUSDT": {
+      "current_price": 9.681,
+      "upper_channel": 10.52,
+      "lower_channel": 9.233,
+      "dist_to_long_pct": 8.67,
+      "dist_to_short_pct": 4.63,
+      "atr": 0.09,
+      "volume_ratio": 1.05,
+      "trend": "BEAR (EMA50 < EMA200)",
+      "is_in_position": false
+    },
+    "NEARUSDT": {
+      "current_price": 4.978,
+      "upper_channel": 5.437,
+      "lower_channel": 4.52,
+      "dist_to_long_pct": 9.22,
+      "dist_to_short_pct": 9.2,
+      "atr": 0.08,
+      "volume_ratio": 1.24,
+      "trend": "BEAR (EMA50 < EMA200)",
+      "is_in_position": false
+    },
+    "LINKUSDT": {
+      "current_price": 12.021,
+      "upper_channel": 13.015,
+      "lower_channel": 11.508,
+      "dist_to_long_pct": 8.27,
+      "dist_to_short_pct": 4.27,
+      "atr": 0.1,
+      "volume_ratio": 2.15,
+      "trend": "BEAR (EMA50 < EMA200)",
+      "is_in_position": false
+    },
+    "APTUSDT": {
+      "current_price": 0.7714,
+      "upper_channel": 0.89,
+      "lower_channel": 0.7319,
+      "dist_to_long_pct": 15.37,
+      "dist_to_short_pct": 5.12,
+      "atr": 0.01,
+      "volume_ratio": 0.46,
+      "trend": "BEAR (EMA50 < EMA200)",
+      "is_in_position": false
+    },
+    "ADAUSDT": {
+      "current_price": 0.218,
+      "upper_channel": 0.2371,
+      "lower_channel": 0.2108,
+      "dist_to_long_pct": 8.76,
+      "dist_to_short_pct": 3.3,
+      "atr": 0.0,
+      "volume_ratio": 1.44,
+      "trend": "BEAR (EMA50 < EMA200)",
+      "is_in_position": false
+    },
+    "XRPUSDT": {
+      "current_price": 1.305,
+      "upper_channel": 1.3832,
+      "lower_channel": 1.2553,
+      "dist_to_long_pct": 5.99,
+      "dist_to_short_pct": 3.81,
+      "atr": 0.01,
+      "volume_ratio": 1.28,
+      "trend": "BEAR (EMA50 < EMA200)",
+      "is_in_position": false
+    },
+    "BNBUSDT": {
+      "current_price": 727.3,
+      "upper_channel": 744.85,
+      "lower_channel": 705.02,
+      "dist_to_long_pct": 2.41,
+      "dist_to_short_pct": 3.06,
+      "atr": 3.13,
+      "volume_ratio": 0.61,
+      "trend": "BEAR (EMA50 < EMA200)",
+      "is_in_position": false
+    },
+    "TIAUSDT": {
+      "current_price": 0.6034,
+      "upper_channel": 0.7674,
+      "lower_channel": 0.5185,
+      "dist_to_long_pct": 27.18,
+      "dist_to_short_pct": 14.07,
+      "atr": 0.01,
+      "volume_ratio": 0.44,
+      "trend": "BULL (EMA50 > EMA200)",
+      "is_in_position": false
+    },
+    "INJUSDT": {
+      "current_price": 8.493,
+      "upper_channel": 9.486,
+      "lower_channel": 7.058,
+      "dist_to_long_pct": 11.69,
+      "dist_to_short_pct": 16.9,
+      "atr": 0.17,
+      "volume_ratio": 0.7,
+      "trend": "BULL (EMA50 > EMA200)",
+      "is_in_position": false
+    },
+    "ARBUSDT": {
+      "current_price": 0.196,
+      "upper_channel": 0.20239,
+      "lower_channel": 0.16941,
+      "dist_to_long_pct": 3.26,
+      "dist_to_short_pct": 13.57,
+      "atr": 0.0,
+      "volume_ratio": 1.62,
+      "trend": "BULL (EMA50 > EMA200)",
+      "is_in_position": false
+    },
+    "OPUSDT": {
+      "current_price": 0.12516,
+      "upper_channel": 0.1496,
+      "lower_channel": 0.11854,
+      "dist_to_long_pct": 19.53,
+      "dist_to_short_pct": 5.29,
+      "atr": 0.0,
+      "volume_ratio": 0.78,
+      "trend": "BEAR (EMA50 < EMA200)",
+      "is_in_position": false
+    },
+    "1000PEPEUSDT": {
+      "current_price": 0.004117,
+      "upper_channel": 0.004239,
+      "lower_channel": 0.003763,
+      "dist_to_long_pct": 2.96,
+      "dist_to_short_pct": 8.6,
+      "atr": 0.0,
+      "volume_ratio": 2.04,
+      "trend": "BEAR (EMA50 < EMA200)",
+      "is_in_position": false
+    },
+    "RENDERUSDT": {
+      "current_price": 1.797,
+      "upper_channel": 2.007,
+      "lower_channel": 1.715,
+      "dist_to_long_pct": 11.69,
+      "dist_to_short_pct": 4.56,
+      "atr": 0.02,
+      "volume_ratio": 0.57,
+      "trend": "BEAR (EMA50 < EMA200)",
+      "is_in_position": false
+    }
+  },
+  "open_positions": {
+    "SOLUSDT": {
+      "direction": "LONG",
+      "qty": 2.85,
+      "entry_price": 105.25,
+      "current_price": 104.69,
+      "current_stop": 102.63875,
+      "is_pyramided": false,
+      "is_breakeven_set": false,
+      "unrealized_pnl": -1.596
+    },
+    "DOGEUSDT": {
+      "direction": "LONG",
+      "qty": 3759.0,
+      "entry_price": 0.07974,
+      "current_price": 0.07935,
+      "current_stop": 0.0777565,
+      "is_pyramided": false,
+      "is_breakeven_set": false,
+      "unrealized_pnl": -1.46601
+    }
+  },
+  "closed_trades_count": 0
+}
