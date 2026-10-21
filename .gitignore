@@ -28,6 +28,10 @@ data/
 *.parquet
 *.csv
 reports/*.csv
+reports/PAPER_TRADING_LIVE.json
+reports/PAPER_TRADING_LIVE.md
+reports/*.tmp
+reports/*.log
 bundle.b64
 deploy_bundle.b64
 make_installer.py
