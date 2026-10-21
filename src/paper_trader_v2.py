@@ -25,7 +25,7 @@ if str(BASE_DIR) not in sys.path:
 
 from src.bybit_client import BybitClient
 from src.config import REPORTS_DIR, BASE_TAKER_FEE, BASE_SLIPPAGE
-from src.core_v2 import CoreV2Engine, PortfolioSnapshot, ActivePosition
+from src.core_v2 import CoreV2Engine, PortfolioSnapshot, ActivePosition, ClosedTrade
 from src.research_v2_runner import prepare_symbol_indicators
 
 logger = logging.getLogger("PaperTraderV2")
@@ -71,10 +71,40 @@ class PaperTraderV2:
             slippage=BASE_SLIPPAGE,
         )
 
+        # Persistent state on disk
+        self.state_file = REPORTS_DIR / "BOT_STATE_PERSISTENT.json"
+        self._load_persistent_state()
+
         # Candle buffers: symbol -> list of closed 1h bars
         self.candle_buffers: Dict[str, pd.DataFrame] = {}
         self.last_processed_1h_ts: Dict[str, int] = {s: 0 for s in self.symbols}
         self.last_funding_ts: Dict[str, int] = {s: 0 for s in self.symbols}
+
+    def _load_persistent_state(self) -> None:
+        """Restores saved engine state from disk if available."""
+        if self.state_file.exists():
+            try:
+                data = json.loads(self.state_file.read_text(encoding="utf-8"))
+                self.engine.load_from_dict(data)
+                logger.info(
+                    f"RESTORED PERSISTENT STATE: Realized equity: ${self.engine.realized_equity:.2f}, "
+                    f"Open positions: {list(self.engine.open_positions.keys())}, "
+                    f"Closed trades: {len(self.engine.closed_trades)}"
+                )
+            except Exception as e:
+                logger.error(f"Failed to load persistent state: {e}")
+
+    def save_persistent_state(self) -> None:
+        """Persists current engine state to disk atomically."""
+        try:
+            data = self.engine.to_dict()
+            self.state_file.parent.mkdir(parents=True, exist_ok=True)
+            temp_file = self.state_file.with_suffix(".tmp")
+            temp_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            temp_file.replace(self.state_file)
+        except Exception as e:
+            logger.error(f"Failed to save persistent state: {e}")
+
 
     def _load_instrument_specs(self) -> None:
         """Loads lot size and tick specifications directly from Bybit in bulk."""
@@ -214,13 +244,31 @@ class PaperTraderV2:
                 net = gross - fee
                 self.engine.realized_equity += net
                 self.engine.risk_manager.record_trade_result(net > Decimal("0"))
+                self.engine.closed_trades.append(
+                    ClosedTrade(
+                        symbol=sym,
+                        direction=pos.direction,
+                        entry_time=pos.entry_time,
+                        exit_time=int(time.time() * 1000),
+                        entry_price=pos.entry_price,
+                        exit_price=exit_price,
+                        initial_qty=pos.initial_qty,
+                        final_qty=pos.current_qty,
+                        net_pnl=net,
+                        exit_reason=action.exit_reason or "TRAILED_STOP",
+                        was_pyramided=pos.is_pyramided,
+                        hold_hours=(time.time() * 1000 - pos.entry_time) / 3600000.0,
+                    )
+                )
                 del self.engine.open_positions[sym]
+                self.save_persistent_state()
                 logger.info(f"Position closed. Realized PnL: ${net:+.2f}")
 
             elif action.action_type == "PYRAMID_ADD":
                 logger.info(f"🚀 ANTI-MARTINGALE PYRAMID TRIGGERED for {sym}! Stop locked in breakeven ({pos.current_stop}), adding +{action.added_qty} volume.")
                 fee = action.added_qty * mark_p * BASE_TAKER_FEE
                 self.engine.realized_equity -= fee
+                self.save_persistent_state()
 
         # 2. Check for closed 1h candle (monitors BTCUSDT candle boundary)
         new_candle_detected = False
@@ -261,6 +309,7 @@ class PaperTraderV2:
 
             latest_ts = max(self.last_processed_1h_ts.values())
             self.engine.process_bar_event(latest_ts, bars_dict, next_opens)
+            self.save_persistent_state()
 
         snapshot = self.engine.get_portfolio_snapshot(current_prices)
         self._export_status(snapshot, current_prices, server_ts)
@@ -303,12 +352,14 @@ class PaperTraderV2:
             is_breakeven_set=False,
         )
         logger.info(f"Opened DEMO position: {symbol} {'LONG' if direction == 1 else 'SHORT'}, qty={qty}, entry={p}")
+        self.save_persistent_state()
         self.poll_cycle()
         return True
 
     def close_all_positions(self) -> None:
         """Closes all active paper positions immediately at current market price."""
         prices = self.get_live_prices()
+        now_ts = int(time.time() * 1000)
         for sym, pos in list(self.engine.open_positions.items()):
             p = prices.get(sym, pos.entry_price)
             gross = pos.current_qty * (p - pos.entry_price) if pos.direction == 1 else pos.current_qty * (pos.entry_price - p)
@@ -316,8 +367,25 @@ class PaperTraderV2:
             net = gross - fee
             self.engine.realized_equity += net
             self.engine.risk_manager.record_trade_result(net > Decimal("0"))
+            self.engine.closed_trades.append(
+                ClosedTrade(
+                    symbol=sym,
+                    direction=pos.direction,
+                    entry_time=pos.entry_time,
+                    exit_time=now_ts,
+                    entry_price=pos.entry_price,
+                    exit_price=p,
+                    initial_qty=pos.initial_qty,
+                    final_qty=pos.current_qty,
+                    net_pnl=net,
+                    exit_reason="MANUAL_CLOSE",
+                    was_pyramided=pos.is_pyramided,
+                    hold_hours=(now_ts - pos.entry_time) / 3600000.0,
+                )
+            )
             del self.engine.open_positions[sym]
             logger.info(f"Manually closed {sym}. Net PnL: ${net:+.2f}")
+        self.save_persistent_state()
         self.poll_cycle()
 
     def _export_status(self, snapshot: PortfolioSnapshot, current_prices: Dict[str, Decimal], server_ts: int) -> None:
@@ -423,6 +491,7 @@ class PaperTraderV2:
 
         md_file = REPORTS_DIR / "PAPER_TRADING_LIVE.md"
         md_file.write_text(md, encoding="utf-8")
+        self.save_persistent_state()
 
     def run_daemon(self, max_iterations: Optional[int] = None) -> None:
         """Runs the live polling loop indefinitely or for max_iterations."""

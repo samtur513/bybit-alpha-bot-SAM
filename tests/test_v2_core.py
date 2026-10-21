@@ -215,3 +215,40 @@ def test_core_v2_engine_lifecycle():
     snap = engine.get_portfolio_snapshot({"ETHUSDT": Decimal("3000.0")})
     assert snap.equity > Decimal("295.0")  # slight fee deducted
     assert snap.max_drawdown_pct < Decimal("5.0")
+
+
+def test_core_v2_engine_serialization():
+    """Verify engine serialization and deserialization across server reboots."""
+    engine = CoreV2Engine(initial_capital=Decimal("300.0"))
+    engine.realized_equity = Decimal("309.26")
+    engine.peak_equity = Decimal("309.26")
+    engine.open_positions["1000PEPEUSDT"] = ActivePosition(
+        symbol="1000PEPEUSDT",
+        direction=1,
+        initial_qty=Decimal("41800.0"),
+        current_qty=Decimal("41800.0"),
+        entry_price=Decimal("0.0045459"),
+        current_stop=Decimal("0.004365"),
+        initial_atr=Decimal("0.000072"),
+        highest_price=Decimal("0.004667"),
+        lowest_price=Decimal("0.004458"),
+        entry_time=1792497600000,
+        is_pyramided=False,
+        is_breakeven_set=False,
+    )
+
+    data = engine.to_dict()
+    assert data["realized_equity"] == "309.26"
+    assert "1000PEPEUSDT" in data["open_positions"]
+
+    # Re-instantiate a clean engine and restore
+    new_engine = CoreV2Engine(initial_capital=Decimal("300.0"))
+    assert new_engine.realized_equity == Decimal("300.0")
+    assert len(new_engine.open_positions) == 0
+
+    new_engine.load_from_dict(data)
+    assert new_engine.realized_equity == Decimal("309.26")
+    assert "1000PEPEUSDT" in new_engine.open_positions
+    pos = new_engine.open_positions["1000PEPEUSDT"]
+    assert pos.current_qty == Decimal("41800.0")
+    assert pos.current_stop == Decimal("0.004365")

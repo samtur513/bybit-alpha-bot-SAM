@@ -4,6 +4,7 @@ Built-in multi-threaded HTTP server with live market radar, candle countdown,
 and interactive demo controls.
 """
 
+import collections
 from decimal import Decimal
 import http.server
 import json
@@ -30,10 +31,25 @@ if str(BASE_DIR) not in sys.path:
 from src.paper_trader_v2 import PaperTraderV2
 from src.config import REPORTS_DIR
 
+LOG_BUFFER = collections.deque(maxlen=250)
+
+class BufferHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            LOG_BUFFER.append(msg)
+        except Exception:
+            pass
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
+root_logger = logging.getLogger()
+buf_handler = BufferHandler()
+buf_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+root_logger.addHandler(buf_handler)
+
 logger = logging.getLogger("WebDashboard")
 
 PORT = 8080
@@ -632,6 +648,23 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 }
                 payload = json.dumps(fallback).encode("utf-8")
 
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+        elif parsed.path == "/api/state":
+            state_file = REPORTS_DIR / "BOT_STATE_PERSISTENT.json"
+            payload = state_file.read_bytes() if state_file.exists() else b"{}"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+        elif parsed.path == "/api/logs":
+            payload = json.dumps(list(LOG_BUFFER), indent=2).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Access-Control-Allow-Origin", "*")

@@ -1,0 +1,28 @@
+{
+  "initial_capital": "300.0",
+  "realized_equity": "309.26",
+  "peak_equity": "310.23631424000",
+  "max_drawdown_pct": "0.0",
+  "open_positions": {
+    "1000PEPEUSDT": {
+      "symbol": "1000PEPEUSDT",
+      "direction": 1,
+      "initial_qty": "41800.0",
+      "current_qty": "41800.0",
+      "entry_price": "0.0045459",
+      "current_stop": "0.0044995",
+      "initial_atr": "0.000072",
+      "highest_price": "0.004667",
+      "lowest_price": "0.004458",
+      "entry_time": 1792497600000,
+      "is_pyramided": false,
+      "is_breakeven_set": false
+    }
+  },
+  "closed_trades": [],
+  "risk_manager": {
+    "consecutive_losses": 0,
+    "consecutive_wins": 0,
+    "is_kill_switch_active": false
+  }
+}

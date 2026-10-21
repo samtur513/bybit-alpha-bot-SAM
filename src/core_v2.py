@@ -328,3 +328,101 @@ class CoreV2Engine:
             win_rate_pct=wr,
             profit_factor=pf,
         )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serializes current engine state for persistence."""
+        return {
+            "initial_capital": str(self.initial_capital),
+            "realized_equity": str(self.realized_equity),
+            "peak_equity": str(self.peak_equity),
+            "max_drawdown_pct": str(self.max_drawdown_pct),
+            "open_positions": {
+                sym: {
+                    "symbol": p.symbol,
+                    "direction": p.direction,
+                    "initial_qty": str(p.initial_qty),
+                    "current_qty": str(p.current_qty),
+                    "entry_price": str(p.entry_price),
+                    "current_stop": str(p.current_stop),
+                    "initial_atr": str(p.initial_atr),
+                    "highest_price": str(p.highest_price),
+                    "lowest_price": str(p.lowest_price),
+                    "entry_time": p.entry_time,
+                    "is_pyramided": p.is_pyramided,
+                    "is_breakeven_set": p.is_breakeven_set,
+                }
+                for sym, p in self.open_positions.items()
+            },
+            "closed_trades": [
+                {
+                    "symbol": t.symbol,
+                    "direction": t.direction,
+                    "entry_time": t.entry_time,
+                    "exit_time": t.exit_time,
+                    "entry_price": str(t.entry_price),
+                    "exit_price": str(t.exit_price),
+                    "initial_qty": str(t.initial_qty),
+                    "final_qty": str(t.final_qty),
+                    "net_pnl": str(t.net_pnl),
+                    "exit_reason": t.exit_reason,
+                    "was_pyramided": t.was_pyramided,
+                    "hold_hours": t.hold_hours,
+                }
+                for t in self.closed_trades
+            ],
+            "risk_manager": {
+                "consecutive_losses": getattr(self.risk_manager.state, 'consecutive_losses', 0),
+                "consecutive_wins": getattr(self.risk_manager.state, 'consecutive_wins', 0),
+                "is_kill_switch_active": self.risk_manager.state.is_kill_switch_active,
+            },
+        }
+
+    def load_from_dict(self, data: Dict[str, Any]) -> None:
+        """Restores engine state from serialized dictionary."""
+        if "realized_equity" in data:
+            self.realized_equity = Decimal(str(data["realized_equity"]))
+        if "peak_equity" in data:
+            self.peak_equity = Decimal(str(data["peak_equity"]))
+        if "max_drawdown_pct" in data:
+            self.max_drawdown_pct = Decimal(str(data["max_drawdown_pct"]))
+        if "open_positions" in data:
+            self.open_positions = {}
+            for sym, p in data["open_positions"].items():
+                self.open_positions[sym] = ActivePosition(
+                    symbol=p["symbol"],
+                    direction=int(p["direction"]),
+                    initial_qty=Decimal(str(p["initial_qty"])),
+                    current_qty=Decimal(str(p["current_qty"])),
+                    entry_price=Decimal(str(p["entry_price"])),
+                    current_stop=Decimal(str(p["current_stop"])),
+                    initial_atr=Decimal(str(p.get("initial_atr", "0"))),
+                    highest_price=Decimal(str(p.get("highest_price", p["entry_price"]))),
+                    lowest_price=Decimal(str(p.get("lowest_price", p["entry_price"]))),
+                    entry_time=int(p.get("entry_time", 0)),
+                    is_pyramided=bool(p.get("is_pyramided", False)),
+                    is_breakeven_set=bool(p.get("is_breakeven_set", False)),
+                )
+        if "closed_trades" in data:
+            self.closed_trades = [
+                ClosedTrade(
+                    symbol=t["symbol"],
+                    direction=int(t["direction"]),
+                    entry_time=int(t["entry_time"]),
+                    exit_time=int(t["exit_time"]),
+                    entry_price=Decimal(str(t["entry_price"])),
+                    exit_price=Decimal(str(t["exit_price"])),
+                    initial_qty=Decimal(str(t["initial_qty"])),
+                    final_qty=Decimal(str(t["final_qty"])),
+                    net_pnl=Decimal(str(t["net_pnl"])),
+                    exit_reason=t.get("exit_reason", ""),
+                    was_pyramided=bool(t.get("was_pyramided", False)),
+                    hold_hours=float(t.get("hold_hours", 0.0)),
+                )
+                for t in data["closed_trades"]
+            ]
+        if "risk_manager" in data:
+            rm = data["risk_manager"]
+            self.risk_manager.state.is_kill_switch_active = bool(rm.get("is_kill_switch_active", False))
+            self.risk_manager.state.consecutive_losses = int(rm.get("consecutive_losses", 0))
+            self.risk_manager.state.consecutive_wins = int(rm.get("consecutive_wins", 0))
+
