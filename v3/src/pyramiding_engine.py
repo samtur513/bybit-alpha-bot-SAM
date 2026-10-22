@@ -37,6 +37,8 @@ class ActivePosition:
     realized_partial: Decimal = Decimal("0")
     funding_pnl: Decimal = Decimal("0")
     partial_taken: bool = False
+    bars_held: int = 0
+    breakout_level: Decimal = Decimal("0")
 
 
 class PyramidingEngine:

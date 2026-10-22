@@ -67,6 +67,17 @@ MIN_ADX_TREND = 18.0                   # ADX >= 18.0 catches trend ignition and 
 REENTRY_COOLDOWN_BARS = 3              # 3-bar (12-hour) cooldown after closing a position
 ENABLE_BTC_DELTA_FILTER = True         # Require BTC bullish trend for altcoin longs
 
+# Auto-Gearbox Configuration (v3.1)
+ENABLE_AUTO_GEARBOX = True
+GEARBOX_DOWN_THRESHOLD_1 = Decimal("10.0")  # 10.0% DD -> Gear 2 (1.0% risk, no pyramiding)
+GEARBOX_DOWN_THRESHOLD_2 = Decimal("16.0")  # 16.0% DD -> Gear 1 (0.5% risk, survival mode)
+GEARBOX_RECOVERY_RATIO = Decimal("0.5")     # 50% recovery from trough -> upshift
+
+# Fast-Scratch Exit Configuration (v3.1)
+ENABLE_FAST_SCRATCH_EXIT = True
+FAST_SCRATCH_BARS = 3                      # Check first 3 bars (12h) after breakout
+FAST_SCRATCH_MFE_THRESHOLD_R = Decimal("0.3")  # Scratch if profit < 0.3 ATR and price returns inside channel
+
 # Pyramiding (Anti-Martingale)
 PYRAMID_TRIGGER_ATR = Decimal("2.0")   # Add +50% at +2.0 ATR profit
 PYRAMID_ADD_RATIO = Decimal("0.5")     # 50% add-on quantity

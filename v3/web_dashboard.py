@@ -236,6 +236,7 @@ HTML_PAGE = """<!DOCTYPE html>
                 <h1>Bybit Multi-Alpha v3.0 <span class="tag-v3">Port 8082</span></h1>
             </div>
             <div class="header-meta">
+                <div class="badge" id="gearbox-badge">⚙️ Риск: Gear 3 (2.0%)</div>
                 <div class="badge" id="news-shield-status">🛡️ Новостной Щит: Инициализация...</div>
                 <div class="badge" id="btc-filter-status">BTC Тренд: --</div>
                 <div class="badge" id="universe-badge">🌐 Dynamic Top 25 Universe</div>
@@ -342,6 +343,11 @@ HTML_PAGE = """<!DOCTYPE html>
                     document.getElementById('news-shield-status').innerText = '🛡️ Новостной Щит: Defensive Only';
                 } else {
                     document.getElementById('news-shield-status').innerText = '⚪ Новостной Щит: Отключен';
+                }
+
+                if (data.gearbox_gear) {
+                    const pyra = data.gearbox_pyramiding_allowed ? ' | Pyramiding' : ' | No Add';
+                    document.getElementById('gearbox-badge').innerText = `⚙️ Gear ${data.gearbox_gear} [${Number(data.gearbox_risk_pct).toFixed(1)}%]${pyra}`;
                 }
 
                 if (data.btc_trend_status) {

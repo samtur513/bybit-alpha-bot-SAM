@@ -76,6 +76,10 @@ class CoreV3Engine:
         cooldown_bars: int = 3,
         min_adx: float = 18.0,
         enable_btc_delta_filter: bool = True,
+        enable_auto_gearbox: bool = True,
+        enable_fast_scratch: bool = True,
+        fast_scratch_bars: int = 3,
+        fast_scratch_mfe_r: Decimal = Decimal("0.3"),
     ):
         self.initial_capital = initial_capital
         self.realized_equity = initial_capital
@@ -94,6 +98,10 @@ class CoreV3Engine:
         self.portfolio_leverage = portfolio_leverage
         self.partial_tp_ratio = partial_tp_ratio
         self.cooldown_bars = cooldown_bars
+        self.enable_auto_gearbox = enable_auto_gearbox
+        self.enable_fast_scratch = enable_fast_scratch
+        self.fast_scratch_bars = fast_scratch_bars
+        self.fast_scratch_mfe_r = fast_scratch_mfe_r
 
         self.atr_stop_mult = atr_stop_mult
         self.taker_fee = taker_fee
@@ -160,6 +168,8 @@ class CoreV3Engine:
                 self.max_drawdown_pct = dd
             if dd >= self.drawdown_limit_pct:
                 self.trading_halted = True
+            if self.enable_auto_gearbox:
+                self.risk_manager.update_drawdown(equity=eq, peak_equity=self.peak_equity)
         return eq
 
     def _capacity(self, sym: str, price: Decimal, qty: Decimal, prices: Dict[str, Decimal]) -> bool:
@@ -245,6 +255,24 @@ class CoreV3Engine:
         pos.is_breakeven_set = proposal.is_breakeven_set
         origin = pos.original_entry or pos.entry_price
 
+        # Fast-Scratch Exit evaluation (v3.1)
+        # If breakout stalls within fast_scratch_bars (<= 3 bars) and price moves back
+        # inside the breakout level or entry price with profit < fast_scratch_mfe_r * initial_atr:
+        if (
+            self.enable_fast_scratch
+            and pos.bars_held <= self.fast_scratch_bars
+            and not pos.is_pyramided
+            and not pos.partial_taken
+        ):
+            unrealized_profit_dist = (close - origin) * pos.direction
+            ref_level = pos.breakout_level if pos.breakout_level > Decimal("0") else origin
+            stalled_inside = (close - ref_level) * pos.direction <= Decimal("0") or (close - origin) * pos.direction <= Decimal("0")
+
+            if stalled_inside and unrealized_profit_dist < self.fast_scratch_mfe_r * pos.initial_atr:
+                fill = execution
+                self._reduce(sym, pos.current_qty, fill, timestamp, "FAST_SCRATCH")
+                return
+
         # Partial TP evaluation (if enabled)
         if (
             self.partial_tp_ratio
@@ -255,9 +283,10 @@ class CoreV3Engine:
             if qty >= minimum and pos.current_qty - qty >= minimum and qty * execution >= rules.get("minNotional", Decimal("0")):
                 self._reduce(sym, qty, execution, timestamp, "PARTIAL_TP")
 
-        # Pyramiding Add evaluation
+        # Pyramiding Add evaluation (requires Auto-Gearbox permission)
         if (
             action.action_type == "PYRAMID_ADD"
+            and self.risk_manager.is_pyramiding_allowed
             and not pos.partial_taken
             and (execution - origin) * pos.direction >= Decimal("2.0") * pos.initial_atr
         ):
@@ -330,6 +359,7 @@ class CoreV3Engine:
                 b = bars[sym]
                 if not all(np.isfinite(b[k]) and b[k] > 0 for k in ("high", "low", "close", "atr")):
                     continue
+                self.open_positions[sym].bars_held += 1
                 opening = Decimal(str(b.get("open", b["close"])))
                 if (
                     sym in next_open_prices
@@ -428,6 +458,7 @@ class CoreV3Engine:
             ):
                 fee = sizing.qty * price * self.taker_fee
                 self.realized_equity -= fee
+                ch_level = Decimal(str(cand.breakout_boundary)) if hasattr(cand, "breakout_boundary") and cand.breakout_boundary else price
                 self.open_positions[cand.symbol] = ActivePosition(
                     symbol=cand.symbol,
                     direction=cand.direction,
@@ -441,6 +472,8 @@ class CoreV3Engine:
                     entry_time=timestamp + 14400000,
                     original_entry=price,
                     entry_fees=fee,
+                    bars_held=0,
+                    breakout_level=ch_level,
                 )
                 self.events.append(dict(kind="OPEN", symbol=cand.symbol, qty=str(sizing.qty), price=str(price)))
                 break

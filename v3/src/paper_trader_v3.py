@@ -736,6 +736,9 @@ class PaperTraderV3:
             "news_profile": "defensive_only" if getattr(self, "news_core", None) else "disabled",
             "dynamic_universe_active": ENABLE_DYNAMIC_UNIVERSE,
             "closed_trades_count": len(snapshot.closed_trades),
+            "gearbox_gear": self.engine.risk_manager.current_gear,
+            "gearbox_risk_pct": float(self.engine.risk_manager.get_effective_base_risk_pct() * 100),
+            "gearbox_pyramiding_allowed": self.engine.risk_manager.is_pyramiding_allowed,
         }
 
         self.last_status_cache = status_data
