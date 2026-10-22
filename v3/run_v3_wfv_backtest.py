@@ -190,6 +190,9 @@ def simulate_v3_interval(
         min_adx=min_adx,
         cooldown_bars=REENTRY_COOLDOWN_BARS,
         enable_btc_delta_filter=ENABLE_BTC_DELTA_FILTER,
+        enable_auto_gearbox=True,
+        enable_fast_scratch=True,
+        enable_cascade_tp=True,
     )
 
     equity_curve = []
