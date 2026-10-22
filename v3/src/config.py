@@ -78,6 +78,20 @@ ENABLE_FAST_SCRATCH_EXIT = True
 FAST_SCRATCH_BARS = 3                      # Check first 3 bars (12h) after breakout
 FAST_SCRATCH_MFE_THRESHOLD_R = Decimal("0.3")  # Scratch if profit < 0.3 ATR and price returns inside channel
 
+# 3-Stage Cascade Take-Profit (v3.1)
+ENABLE_CASCADE_TP = True
+CASCADE_TP1_R_MULT = Decimal("1.5")        # TP1: +1.5R (+1.5 ATR) -> Stop to Breakeven
+CASCADE_TP2_R_MULT = Decimal("3.0")        # TP2: +3.0R (+3.0 ATR) -> Stop to +1.5R
+CASCADE_TP1_RATIO = Decimal("0.30")        # 30% of initial qty at TP1
+CASCADE_TP2_RATIO = Decimal("0.40")        # 40% of initial qty at TP2 (Remaining 30% Runner)
+
+# RVOL & Delta OI Quantitative Filters (v3.1)
+ENABLE_RVOL_FILTER = True
+MIN_RVOL = 1.2                             # RVOL >= 1.2 volume surge
+ENABLE_DELTA_OI_FILTER = True              # Positive Delta OI confirms new money accumulation
+ENABLE_ATR_EXHAUSTION_GUARD = True
+MAX_DAILY_ATR_EXHAUSTION = 0.80            # Reject if candle has traversed >= 80% daily ATR
+
 # Pyramiding (Anti-Martingale)
 PYRAMID_TRIGGER_ATR = Decimal("2.0")   # Add +50% at +2.0 ATR profit
 PYRAMID_ADD_RATIO = Decimal("0.5")     # 50% add-on quantity

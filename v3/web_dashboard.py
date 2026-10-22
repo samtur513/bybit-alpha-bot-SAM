@@ -1,14 +1,16 @@
 """
-Live Web Dashboard & Paper Trading Server v3.0 (Port 8082).
+Live Web Dashboard & Paper Trading Server v3.1 (Port 8082).
 Features:
-- Port 8082 for parallel side-by-side A/B/C testing with v2.0 (8080) and v2.1 (8081)
-- Dynamic Universe Radar (Top Bybit Linear Perpetuals ranked by Multi-Factor Momentum)
-- Live BTC Delta Market Status badge
-- News Core v1.1 Defensive Shield status badge & webhook (/api/news_event)
-- REST API: /api/status, /api/state, /api/universe, /api/logs
+- Dynamic Universe Radar & Real-Time Screener Telemetry (400+ Bybit Linear Perpetuals)
+- RVOL, Delta OI, KER, and ATR Exhaustion metrics live display
+- News Core v1.1 Defensive Shield Live Feed, Status, and Interactive Webhook Simulator
+- Auto-Gearbox Drawdown Risk Stepping (Gear 3, Gear 2, Gear 1) live badge
+- Cascade Partial TP and Fast-Scratch active telemetry
+- REST API: /api/status, /api/universe, /api/news_event, /api/logs
 """
 
 import collections
+from datetime import datetime, timezone
 from decimal import Decimal
 import http.server
 import json
@@ -66,7 +68,7 @@ HTML_PAGE = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bybit Multi-Alpha v3.0 | Dynamic Universe & News Shield</title>
+    <title>Bybit Multi-Alpha v3.1 | Dynamic Universe & News Shield</title>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -90,7 +92,7 @@ HTML_PAGE = """<!DOCTYPE html>
             font-family: 'Inter', sans-serif;
             padding: 24px;
         }
-        .container { max-width: 1440px; margin: 0 auto; }
+        .container { max-width: 1480px; margin: 0 auto; }
         header {
             display: flex;
             justify-content: space-between;
@@ -101,12 +103,7 @@ HTML_PAGE = """<!DOCTYPE html>
             flex-wrap: wrap;
             gap: 16px;
         }
-        .title-block h1 {
-            font-size: 26px;
-            font-weight: 800;
-            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+        .title-block {
             display: flex;
             align-items: center;
             gap: 12px;
@@ -147,7 +144,7 @@ HTML_PAGE = """<!DOCTYPE html>
         }
         .metrics-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
             gap: 16px;
             margin-bottom: 24px;
         }
@@ -185,6 +182,13 @@ HTML_PAGE = """<!DOCTYPE html>
             display: flex;
             justify-content: space-between;
             align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .sub-header {
+            font-size: 12px;
+            color: var(--text-muted);
+            font-weight: 400;
         }
         table {
             width: 100%;
@@ -196,7 +200,7 @@ HTML_PAGE = """<!DOCTYPE html>
             margin-bottom: 24px;
         }
         th, td {
-            padding: 12px 16px;
+            padding: 12px 14px;
             text-align: left;
             border-bottom: 1px solid var(--border);
             font-size: 13px;
@@ -219,7 +223,65 @@ HTML_PAGE = """<!DOCTYPE html>
         }
         .badge-long { background: rgba(16, 185, 129, 0.2); color: var(--accent-green); }
         .badge-short { background: rgba(244, 63, 94, 0.2); color: var(--accent-red); }
+        .badge-pass { background: rgba(16, 185, 129, 0.2); color: var(--accent-green); font-size: 11px; padding: 2px 6px; border-radius: 4px; }
+        .badge-rej { background: rgba(244, 63, 94, 0.15); color: #fda4af; font-size: 11px; padding: 2px 6px; border-radius: 4px; }
         .badge-cooldown { background: rgba(245, 158, 11, 0.2); color: var(--accent-yellow); font-size: 10px; padding: 2px 6px; border-radius: 4px; }
+        
+        /* Grid for Live Feeds */
+        .two-col-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 24px;
+        }
+        @media (max-width: 1024px) {
+            .two-col-grid { grid-template-columns: 1fr; }
+        }
+        .card-box {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+        }
+        .btn-test {
+            background: rgba(56, 189, 248, 0.15);
+            border: 1px solid var(--accent-blue);
+            color: var(--accent-blue);
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .btn-test:hover {
+            background: var(--accent-blue);
+            color: #000;
+        }
+        .news-item {
+            padding: 10px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .news-item:last-child { border-bottom: none; }
+        .news-meta {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+        .news-headline {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-main);
+        }
+        .news-action {
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--accent-cyan);
+        }
         .footer-note {
             text-align: center;
             color: var(--text-muted);
@@ -233,13 +295,13 @@ HTML_PAGE = """<!DOCTYPE html>
     <div class="container">
         <header>
             <div class="title-block">
-                <h1>Bybit Multi-Alpha v3.0 <span class="tag-v3">Port 8082</span></h1>
+                <h1>Bybit Multi-Alpha v3.1 <span class="tag-v3">Port 8082</span></h1>
             </div>
             <div class="header-meta">
                 <div class="badge" id="gearbox-badge">⚙️ Риск: Gear 3 (2.0%)</div>
-                <div class="badge" id="news-shield-status">🛡️ Новостной Щит: Инициализация...</div>
+                <div class="badge" id="news-shield-status">🛡️ Новостной Щит: Defensive Only</div>
                 <div class="badge" id="btc-filter-status">BTC Тренд: --</div>
-                <div class="badge" id="universe-badge">🌐 Dynamic Top 25 Universe</div>
+                <div class="badge" id="universe-badge">🌐 Dynamic Universe: 25 монет</div>
                 <div class="countdown-box">4H Бар: <span id="candle-timer">--</span></div>
             </div>
         </header>
@@ -271,8 +333,9 @@ HTML_PAGE = """<!DOCTYPE html>
             </div>
         </div>
 
+        <!-- Open Positions -->
         <div class="section-header">
-            <span>Открытые позиции (4h Trend Breakout)</span>
+            <span>Открытые позиции (4h Trend Breakout + Cascade TP & Fast-Scratch)</span>
         </div>
         <table>
             <thead>
@@ -284,7 +347,7 @@ HTML_PAGE = """<!DOCTYPE html>
                     <th>Текущая ($)</th>
                     <th>Стоп ($)</th>
                     <th>Unr. PnL ($)</th>
-                    <th>Пирамидинг</th>
+                    <th>Статус / TP</th>
                 </tr>
             </thead>
             <tbody id="positions-body">
@@ -292,8 +355,54 @@ HTML_PAGE = """<!DOCTYPE html>
             </tbody>
         </table>
 
+        <!-- Two Column: Live News Shield Feed & Interactive Simulator -->
+        <div class="two-col-grid">
+            <div class="card-box">
+                <div class="section-header">
+                    <span>🛡️ Живой Мониторинг Новостного Щита</span>
+                    <span class="sub-header" id="shield-defense-mode">Режим: Defensive Only</span>
+                </div>
+                <div style="margin-bottom: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
+                    <button class="btn-test" onclick="simulateNews('CRASH_SHOCK', 'BTCUSDT')">🚨 Тест Crash Shock</button>
+                    <button class="btn-test" onclick="simulateNews('MAJOR_CATALYST', 'ETHUSDT')">🚀 Тест Major Catalyst</button>
+                    <button class="btn-test" onclick="simulateNews('REGULATORY_CRACKDOWN', 'SOLUSDT')">⚖️ Тест Регулятора</button>
+                </div>
+                <div id="news-feed-body" style="max-height: 280px; overflow-y: auto;">
+                    <div style="color: var(--text-muted); font-size: 12px; text-align: center; padding: 20px;">Ожидание новостных событий...</div>
+                </div>
+            </div>
+
+            <div class="card-box">
+                <div class="section-header">
+                    <span>🌐 Динамический Скринер (RVOL & Delta OI)</span>
+                    <span class="sub-header" id="screener-countdown">Переоценка: --</span>
+                </div>
+                <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 10px;">
+                    Оценка 400+ контрактов Bybit: Ликвидность, Волатильность, KER, RVOL, ΔOI.
+                </div>
+                <div id="screener-stats-body" style="max-height: 310px; overflow-y: auto;">
+                    <table style="margin-bottom: 0;">
+                        <thead>
+                            <tr>
+                                <th>Монета</th>
+                                <th>Score</th>
+                                <th>RVOL</th>
+                                <th>ΔOI (%)</th>
+                                <th>Оборот 24h</th>
+                                <th>Статус</th>
+                            </tr>
+                        </thead>
+                        <tbody id="screener-table-body">
+                            <tr><td colspan="6" style="text-align:center; color: var(--text-muted);">Загрузка данных скринера...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Universe Radar -->
         <div class="section-header">
-            <span>Радар рынка и Динамический скринер монет (Top Bybit Linear Perpetuals)</span>
+            <span>Радар рынка активных монет (Top Bybit Linear Perpetuals)</span>
         </div>
         <table>
             <thead>
@@ -314,13 +423,47 @@ HTML_PAGE = """<!DOCTYPE html>
         </table>
 
         <div class="footer-note">
-            Multi-Alpha Growth Engine v3.0 • Dynamic Universe Selection • 4h Breakout • News Core v1.1 Shield • Penny-Perfect Accounting
+            Multi-Alpha Growth Engine v3.1 • Auto-Gearbox • Cascade Take-Profit • Fast-Scratch • Dynamic Universe • News Core v1.1 Shield
         </div>
     </div>
 
     <script>
         function formatMoney(num) {
             return '$' + Number(num).toFixed(2);
+        }
+
+        async function simulateNews(kind, symbol) {
+            let headline = "";
+            let tier = 1;
+            let ret1m = -0.03;
+            if (kind === 'CRASH_SHOCK') {
+                headline = `CRITICAL: Major crypto insolvency panic triggers immediate market crash across ${symbol}`;
+            } else if (kind === 'MAJOR_CATALYST') {
+                headline = `BREAKING: SEC approves historic ETF and institutional catalyst for ${symbol}`;
+                ret1m = 0.04;
+            } else {
+                headline = `REGULATORY: Enforcement lawsuit announced against ${symbol} exchange infrastructure`;
+            }
+
+            try {
+                const res = await fetch('/api/news_event', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        headline: headline,
+                        symbol: symbol,
+                        source_tier: tier,
+                        ret_1m: ret1m,
+                        vol_1m: 5.0,
+                        vol_median_60m: 1.0
+                    })
+                });
+                const resData = await res.json();
+                console.log("Simulated news event result:", resData);
+                updateDashboard();
+            } catch (e) {
+                alert("Ошибка отправки тестового события: " + e);
+            }
         }
 
         async function updateDashboard() {
@@ -364,6 +507,15 @@ HTML_PAGE = """<!DOCTYPE html>
                 const s = sec % 60;
                 document.getElementById('candle-timer').innerText = `${h}ч ${m}м ${s < 10 ? '0' : ''}${s}с`;
 
+                // Screener countdown
+                if (data.screener_next_run_seconds !== undefined) {
+                    const scSec = data.screener_next_run_seconds;
+                    const scH = Math.floor(scSec / 3600);
+                    const scM = Math.floor((scSec % 3600) / 60);
+                    document.getElementById('screener-countdown').innerText = `Следующая переоценка: ${scH}ч ${scM}м`;
+                }
+
+                // Open Positions
                 const pBody = document.getElementById('positions-body');
                 const posKeys = Object.keys(data.open_positions || {});
                 if (posKeys.length === 0) {
@@ -383,12 +535,53 @@ HTML_PAGE = """<!DOCTYPE html>
                             <td>$${Number(p.current_price).toFixed(4)}</td>
                             <td>$${Number(p.current_stop).toFixed(4)}</td>
                             <td class="${unrClass}" style="font-weight:700;">${unr >= 0 ? '+' : ''}$${unr.toFixed(2)}</td>
-                            <td>${p.is_pyramided ? '🚀 Доливка +50%' : 'Ожидание +2 ATR'}</td>
+                            <td>${p.is_pyramided ? '🚀 Пирамидинг (+50%)' : (p.is_breakeven_set ? '🛡️ Безубыток установлен' : 'Ожидание импульса')}</td>
                         </tr>`;
                     }
                     pBody.innerHTML = html;
                 }
 
+                // Live News Events Feed
+                const nBody = document.getElementById('news-feed-body');
+                const newsList = data.news_recent_events || [];
+                if (newsList.length > 0) {
+                    let nHtml = '';
+                    for (const ev of newsList) {
+                        const tsStr = new Date(ev.timestamp).toLocaleTimeString();
+                        const acts = (ev.actions_taken || []).join(', ') || 'MONITOR';
+                        nHtml += `<div class="news-item">
+                            <div class="news-meta">
+                                <span>${tsStr} • <b>${ev.symbol || 'MARKET'}</b> • [${ev.event_type || 'INFO'}]</span>
+                                <span class="news-action">${acts}</span>
+                            </div>
+                            <div class="news-headline">${ev.headline}</div>
+                        </div>`;
+                    }
+                    nBody.innerHTML = nHtml;
+                }
+
+                // Screener Top Candidates Table
+                const scBody = document.getElementById('screener-table-body');
+                const candList = data.screened_candidates || [];
+                if (candList.length > 0) {
+                    let scHtml = '';
+                    for (const c of candList.slice(0, 10)) {
+                        const passBadge = c.passed_filters 
+                            ? '<span class="badge-pass">PASS</span>' 
+                            : `<span class="badge-rej" title="${c.rejection_reason || ''}">REJ</span>`;
+                        scHtml += `<tr>
+                            <td style="font-weight:700;">${c.symbol}</td>
+                            <td style="font-family:'JetBrains Mono';">${c.composite_score}</td>
+                            <td style="color:${c.rvol >= 1.2 ? 'var(--accent-cyan)' : 'inherit'}">${c.rvol || 1.0}x</td>
+                            <td style="color:${c.delta_oi_pct > 0 ? 'var(--accent-green)' : 'inherit'}">${c.delta_oi_pct > 0 ? '+' : ''}${c.delta_oi_pct || 0}%</td>
+                            <td>$${(c.turnover_24h / 1e6).toFixed(1)}M</td>
+                            <td>${passBadge}</td>
+                        </tr>`;
+                    }
+                    scBody.innerHTML = scHtml;
+                }
+
+                // Market Radar
                 const rBody = document.getElementById('radar-body');
                 const rKeys = Object.keys(data.radar || {});
                 if (rKeys.length > 0) {
@@ -449,37 +642,21 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
-        elif parsed.path == "/api/state":
-            if GLOBAL_TRADER and getattr(GLOBAL_TRADER, "engine", None):
-                try:
-                    data = GLOBAL_TRADER.engine.to_dict()
-                    payload = json.dumps(data, indent=2).encode("utf-8")
-                except Exception:
-                    payload = b"{}"
-            elif PERSISTENT_STATE_FILE.exists():
-                try:
-                    payload = PERSISTENT_STATE_FILE.read_bytes()
-                except Exception:
-                    payload = b"{}"
-            else:
-                payload = b"{}"
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
         elif parsed.path == "/api/universe":
             universe_data = []
-            if GLOBAL_TRADER and GLOBAL_TRADER.screened_universe:
+            if GLOBAL_TRADER and getattr(GLOBAL_TRADER, "screened_universe", None):
                 universe_data = [
                     {
+                        "rank": idx,
                         "symbol": a.symbol,
                         "score": round(a.composite_score, 4),
-                        "rank": idx,
+                        "passed": a.passed_filters,
+                        "rejection_reason": a.rejection_reason,
                         "turnover_24h": round(a.turnover_24h, 2),
                         "open_interest": round(a.open_interest, 2),
                         "norm_atr": round(a.norm_atr, 4),
+                        "rvol": round(getattr(a, "rvol", 1.0), 2),
+                        "delta_oi_pct": round(getattr(a, "delta_oi_pct", 0.0) * 100, 2),
                         "adx": round(a.adx, 2),
                         "rel_strength": round(a.relative_strength, 4),
                         "funding_rate": round(a.funding_rate, 6),
@@ -568,20 +745,15 @@ def start_server_and_bot():
     bot_thread.start()
     logger.info("Background PaperTraderV3 thread launched.")
 
-    class SupervisedServer(socketserver.ThreadingTCPServer):
-        allow_reuse_address = True
-        daemon_threads = True
-
-        def service_actions(self):
-            if not bot_thread.is_alive():
-                raise SystemExit("Trading worker stopped; restarting service")
-
-    with SupervisedServer(("0.0.0.0", PORT), DashboardHTTPRequestHandler) as server:
-        logger.info(f"Serving v3.0 web dashboard at http://0.0.0.0:{PORT}")
+    server_address = ("0.0.0.0", PORT)
+    with socketserver.ThreadingTCPServer(server_address, DashboardHTTPRequestHandler) as httpd:
+        logger.info(f"Multi-Alpha v3.1 Web Dashboard live on http://127.0.0.1:{PORT}")
         try:
-            server.serve_forever()
+            httpd.serve_forever()
         except KeyboardInterrupt:
-            pass
+            logger.info("Server interrupted. Shutting down...")
+            GLOBAL_TRADER.stop()
+            httpd.server_close()
 
 
 if __name__ == "__main__":

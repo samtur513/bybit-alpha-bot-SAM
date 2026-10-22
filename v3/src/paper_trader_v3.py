@@ -10,6 +10,7 @@ Enhanced with:
 7. Dedicated Web Monitor on Port 8082
 """
 
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -63,6 +64,14 @@ from v3.src.config import (
     ENABLE_EMERGENCY_EJECT,
     ENABLE_SQUEEZE_ESCAPE,
     ENABLE_RUNNER_PROTECTION,
+    ENABLE_CASCADE_TP,
+    ENABLE_FAST_SCRATCH_EXIT,
+    ENABLE_AUTO_GEARBOX,
+    ENABLE_RVOL_FILTER,
+    MIN_RVOL,
+    ENABLE_DELTA_OI_FILTER,
+    ENABLE_ATR_EXHAUSTION_GUARD,
+    MAX_DAILY_ATR_EXHAUSTION,
 )
 from v3.src.core_v3 import CoreV3Engine, PortfolioSnapshot, ActivePosition
 from v3.src.market_stream import MarketStream
@@ -131,6 +140,11 @@ class PaperTraderV3:
             min_norm_atr=MIN_NORM_ATR,
             min_adx=MIN_ADX_TREND,
             top_n=UNIVERSE_TOP_N,
+            enable_rvol_filter=ENABLE_RVOL_FILTER,
+            min_rvol=MIN_RVOL,
+            enable_delta_oi_filter=ENABLE_DELTA_OI_FILTER,
+            enable_atr_exhaustion_guard=ENABLE_ATR_EXHAUSTION_GUARD,
+            max_daily_atr_exhaustion=MAX_DAILY_ATR_EXHAUSTION,
         )
         self.screener = UniverseScreener(self.screener_config)
         self.last_screener_run_ts: float = 0.0
@@ -172,6 +186,9 @@ class PaperTraderV3:
             min_adx=float(os.getenv("BOT_MIN_ADX", str(MIN_ADX_TREND))),
             cooldown_bars=REENTRY_COOLDOWN_BARS,
             enable_btc_delta_filter=ENABLE_BTC_DELTA_FILTER,
+            enable_auto_gearbox=ENABLE_AUTO_GEARBOX,
+            enable_fast_scratch=ENABLE_FAST_SCRATCH_EXIT,
+            enable_cascade_tp=ENABLE_CASCADE_TP,
         )
 
         self.state_file = PERSISTENT_STATE_FILE
@@ -202,6 +219,17 @@ class PaperTraderV3:
             logger.info("News Core Defensive Shield initialized (defensive_only profile).")
         else:
             self.news_core = None
+
+        self.recent_news_events = deque(maxlen=25)
+        self.recent_news_events.append({
+            "timestamp": int(time.time() * 1000),
+            "headline": "News Core v1.1 Defensive Shield active. Regime Guard monitoring macro & depeg risks.",
+            "symbol": "MARKET",
+            "event_type": "SHIELD_INIT",
+            "score": 0,
+            "actions_taken": ["MONITOR"],
+            "impact": "DEFENSE_READY",
+        })
 
     def _load_instrument_specs(self) -> None:
         """Fetches Bybit market specifications with full pagination for current symbols."""
@@ -471,6 +499,20 @@ class PaperTraderV3:
                 f"score={score}, tier={source_tier} -> '{headline[:80]}...'"
             )
 
+            if not hasattr(self, "recent_news_events"):
+                self.recent_news_events = deque(maxlen=25)
+
+            event_record = {
+                "timestamp": int(now_dt.timestamp() * 1000),
+                "headline": headline,
+                "symbol": target_sym,
+                "event_type": event_type.value if hasattr(event_type, "value") else str(event_type),
+                "score": score,
+                "actions_taken": ["MONITOR"],
+                "impact": "MONITORED_NO_POSITION" if target_sym not in self.engine.open_positions else "EVALUATING",
+            }
+            self.recent_news_events.appendleft(event_record)
+
             if target_sym not in self.engine.open_positions:
                 return []
 
@@ -556,6 +598,10 @@ class PaperTraderV3:
                         )
                         self.save_persistent_state()
                         executed_actions.append(act)
+
+            if executed_actions:
+                event_record["actions_taken"] = [f"{act.action_type.name}:{act.reason}" for act in executed_actions]
+                event_record["impact"] = "SHIELD_DEFENSE_EXECUTED"
 
             return executed_actions
 
@@ -734,7 +780,11 @@ class PaperTraderV3:
             },
             "news_defense_active": bool(getattr(self, "news_core", None)),
             "news_profile": "defensive_only" if getattr(self, "news_core", None) else "disabled",
+            "news_recent_events": list(getattr(self, "recent_news_events", [])),
             "dynamic_universe_active": ENABLE_DYNAMIC_UNIVERSE,
+            "screener_last_run_utc": str(pd.to_datetime(self.last_screener_run_ts * 1000, unit="ms", utc=True)) if self.last_screener_run_ts > 0 else "Just now",
+            "screener_next_run_seconds": max(0, int(SCREENER_INTERVAL_HOURS * 3600 - (time.time() - self.last_screener_run_ts))) if self.last_screener_run_ts > 0 else 0,
+            "screened_candidates": [c.to_dict() for c in getattr(self, "screened_universe", [])[:30]],
             "closed_trades_count": len(snapshot.closed_trades),
             "gearbox_gear": self.engine.risk_manager.current_gear,
             "gearbox_risk_pct": float(self.engine.risk_manager.get_effective_base_risk_pct() * 100),
