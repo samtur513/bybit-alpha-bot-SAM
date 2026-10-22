@@ -265,74 +265,16 @@ class CoreV3Engine:
         pos.is_breakeven_set = proposal.is_breakeven_set
         origin = pos.original_entry or pos.entry_price
 
-        # Fast-Scratch Exit evaluation (v3.1)
-        # If breakout stalls within fast_scratch_bars (<= 3 bars) and price moves back
-        # inside the breakout level or entry price with profit < fast_scratch_mfe_r * initial_atr:
+        # 1. Anti-Martingale Pyramiding Add evaluation (active when not in Cascade TP mode)
+        # Compounding winner with zero added equity risk (stop moved to basket cash breakeven)
+        trigger_dist = self.pyramiding_engine.pyramid_trigger_atr_mult * pos.initial_atr
         if (
-            self.enable_fast_scratch
-            and pos.bars_held <= self.fast_scratch_bars
+            not self.enable_cascade_tp
+            and action.action_type == "PYRAMID_ADD"
+            and self.risk_manager.is_pyramiding_allowed
             and not pos.is_pyramided
             and not pos.partial_taken
-        ):
-            unrealized_profit_dist = (close - origin) * pos.direction
-            ref_level = pos.breakout_level if pos.breakout_level > Decimal("0") else origin
-            stalled_inside = (close - ref_level) * pos.direction <= Decimal("0") or (close - origin) * pos.direction <= Decimal("0")
-
-            if stalled_inside and unrealized_profit_dist < self.fast_scratch_mfe_r * pos.initial_atr:
-                fill = execution
-                self._reduce(sym, pos.current_qty, fill, timestamp, "FAST_SCRATCH")
-                return
-
-        # 3-Stage Cascade Take-Profit evaluation (v3.1)
-        if self.enable_cascade_tp and not pos.is_pyramided:
-            profit_dist = (execution - origin) * pos.direction
-
-            # TP 1: 30% of initial qty at +1.5R -> move stop to Breakeven
-            if not pos.tp1_taken and profit_dist >= self.tp1_r_mult * pos.initial_atr:
-                qty_tp1 = (pos.initial_qty * self.tp1_ratio / step).to_integral_value(rounding=ROUND_FLOOR) * step
-                if qty_tp1 >= minimum and pos.current_qty - qty_tp1 >= minimum and qty_tp1 * execution >= rules.get("minNotional", Decimal("0")):
-                    pos.tp1_taken = True
-                    self._reduce(sym, qty_tp1, execution, timestamp, "CASCADE_TP1")
-                    target = (
-                        pos.entry_price
-                        + pos.direction * (pos.entry_fees - pos.funding_pnl - pos.realized_partial) / pos.current_qty
-                    )
-                    be = target / ((Decimal("1") - self.slippage * pos.direction) * (Decimal("1") - self.taker_fee * pos.direction))
-                    if pos.direction == 1:
-                        pos.current_stop = max(pos.current_stop, be, pos.entry_price)
-                    else:
-                        pos.current_stop = min(pos.current_stop, be, pos.entry_price)
-                    pos.is_breakeven_set = True
-
-            # TP 2: 40% of initial qty at +3.0R -> move stop to +1.5R
-            elif pos.tp1_taken and not pos.tp2_taken and profit_dist >= self.tp2_r_mult * pos.initial_atr:
-                qty_tp2 = (pos.initial_qty * self.tp2_ratio / step).to_integral_value(rounding=ROUND_FLOOR) * step
-                qty_tp2 = min(qty_tp2, pos.current_qty - minimum)
-                if qty_tp2 >= minimum and pos.current_qty - qty_tp2 >= minimum and qty_tp2 * execution >= rules.get("minNotional", Decimal("0")):
-                    pos.tp2_taken = True
-                    self._reduce(sym, qty_tp2, execution, timestamp, "CASCADE_TP2")
-                    secured_stop = origin + pos.direction * self.tp1_r_mult * pos.initial_atr
-                    if pos.direction == 1:
-                        pos.current_stop = max(pos.current_stop, secured_stop)
-                    else:
-                        pos.current_stop = min(pos.current_stop, secured_stop)
-
-        # Partial TP evaluation (if enabled)
-        if (
-            self.partial_tp_ratio
-            and not pos.partial_taken
-            and (execution - origin) * pos.direction >= Decimal("3.5") * pos.initial_atr
-        ):
-            qty = (pos.current_qty * self.partial_tp_ratio / step).to_integral_value(rounding=ROUND_FLOOR) * step
-            if qty >= minimum and pos.current_qty - qty >= minimum and qty * execution >= rules.get("minNotional", Decimal("0")):
-                self._reduce(sym, qty, execution, timestamp, "PARTIAL_TP")
-
-        # Pyramiding Add evaluation (requires Auto-Gearbox permission)
-        if (
-            action.action_type == "PYRAMID_ADD"
-            and self.risk_manager.is_pyramiding_allowed
-            and not pos.partial_taken
-            and (execution - origin) * pos.direction >= Decimal("2.0") * pos.initial_atr
+            and (execution - origin) * pos.direction >= trigger_dist
         ):
             qty = action.added_qty
             price = self._fill(execution, pos.direction)
@@ -360,6 +302,66 @@ class CoreV3Engine:
                     pos.current_stop = max(pos.current_stop, be) if pos.direction == 1 else min(pos.current_stop, be)
                 pos.is_breakeven_set = (pos.current_stop - be) * pos.direction >= 0
                 self.events.append(dict(kind="PYRAMID_ADD", symbol=sym, qty=str(qty), price=str(price)))
+
+        # 2. Fast-Scratch Exit evaluation (v3.1)
+        # Only cuts position early if the breakout genuinely stalls and penetrates >= 0.5 ATR against entry
+        # with zero upward momentum (MFE < fast_scratch_mfe_r * initial_atr)
+        if (
+            self.enable_fast_scratch
+            and pos.bars_held <= self.fast_scratch_bars
+            and not pos.is_pyramided
+            and not pos.partial_taken
+        ):
+            adverse_dist = (origin - close) * pos.direction
+            mfe_dist = (pos.highest_price - origin) if pos.direction == 1 else (origin - pos.lowest_price)
+            if adverse_dist >= Decimal("0.5") * pos.initial_atr and mfe_dist < self.fast_scratch_mfe_r * pos.initial_atr:
+                fill = execution
+                self._reduce(sym, pos.current_qty, fill, timestamp, "FAST_SCRATCH")
+                return
+
+        # 3. Cascade Take-Profit evaluation (v3.1)
+        if self.enable_cascade_tp and not pos.is_pyramided:
+            profit_dist = (execution - origin) * pos.direction
+
+            # TP 1: 30% of initial qty at tp1_r_mult -> move stop to Breakeven
+            if not pos.tp1_taken and profit_dist >= self.tp1_r_mult * pos.initial_atr:
+                qty_tp1 = (pos.initial_qty * self.tp1_ratio / step).to_integral_value(rounding=ROUND_FLOOR) * step
+                if qty_tp1 >= minimum and pos.current_qty - qty_tp1 >= minimum and qty_tp1 * execution >= rules.get("minNotional", Decimal("0")):
+                    pos.tp1_taken = True
+                    self._reduce(sym, qty_tp1, execution, timestamp, "CASCADE_TP1")
+                    target = (
+                        pos.entry_price
+                        + pos.direction * (pos.entry_fees - pos.funding_pnl - pos.realized_partial) / pos.current_qty
+                    )
+                    be = target / ((Decimal("1") - self.slippage * pos.direction) * (Decimal("1") - self.taker_fee * pos.direction))
+                    if pos.direction == 1:
+                        pos.current_stop = max(pos.current_stop, be, pos.entry_price)
+                    else:
+                        pos.current_stop = min(pos.current_stop, be, pos.entry_price)
+                    pos.is_breakeven_set = True
+
+            # TP 2: 40% of initial qty at tp2_r_mult -> move stop to secured profit level
+            elif pos.tp1_taken and not pos.tp2_taken and profit_dist >= self.tp2_r_mult * pos.initial_atr:
+                qty_tp2 = (pos.initial_qty * self.tp2_ratio / step).to_integral_value(rounding=ROUND_FLOOR) * step
+                qty_tp2 = min(qty_tp2, pos.current_qty - minimum)
+                if qty_tp2 >= minimum and pos.current_qty - qty_tp2 >= minimum and qty_tp2 * execution >= rules.get("minNotional", Decimal("0")):
+                    pos.tp2_taken = True
+                    self._reduce(sym, qty_tp2, execution, timestamp, "CASCADE_TP2")
+                    secured_stop = origin + pos.direction * Decimal("1.5") * pos.initial_atr
+                    if pos.direction == 1:
+                        pos.current_stop = max(pos.current_stop, secured_stop)
+                    else:
+                        pos.current_stop = min(pos.current_stop, secured_stop)
+
+        # 4. Partial TP evaluation (if legacy ratio set)
+        if (
+            self.partial_tp_ratio
+            and not pos.partial_taken
+            and (execution - origin) * pos.direction >= Decimal("3.5") * pos.initial_atr
+        ):
+            qty = (pos.current_qty * self.partial_tp_ratio / step).to_integral_value(rounding=ROUND_FLOOR) * step
+            if qty >= minimum and pos.current_qty - qty >= minimum and qty * execution >= rules.get("minNotional", Decimal("0")):
+                self._reduce(sym, qty, execution, timestamp, "PARTIAL_TP")
 
     def process_price_event(self, timestamp: int, prices: Dict[str, Decimal]) -> None:
         """Sequential executable quotes."""

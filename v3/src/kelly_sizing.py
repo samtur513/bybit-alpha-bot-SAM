@@ -153,13 +153,6 @@ class KellyRiskManager:
             if self.state.consecutive_losses >= self.loss_streak_threshold:
                 self.state.is_kill_switch_active = True
 
-        # Check rolling win rate over last 6 trades
-        if len(self.state.recent_trade_results) >= 6:
-            recent_6 = self.state.recent_trade_results[-6:]
-            win_rate_6 = sum(1 for w in recent_6 if w) / len(recent_6)
-            if win_rate_6 < 0.25:
-                self.state.is_kill_switch_active = True
-
     def calculate_position_size(
         self,
         equity: Decimal,

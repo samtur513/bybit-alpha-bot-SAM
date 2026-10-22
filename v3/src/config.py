@@ -69,19 +69,19 @@ ENABLE_BTC_DELTA_FILTER = True         # Require BTC bullish trend for altcoin l
 
 # Auto-Gearbox Configuration (v3.1)
 ENABLE_AUTO_GEARBOX = True
-GEARBOX_DOWN_THRESHOLD_1 = Decimal("10.0")  # 10.0% DD -> Gear 2 (1.0% risk, no pyramiding)
-GEARBOX_DOWN_THRESHOLD_2 = Decimal("16.0")  # 16.0% DD -> Gear 1 (0.5% risk, survival mode)
-GEARBOX_RECOVERY_RATIO = Decimal("0.5")     # 50% recovery from trough -> upshift
+GEARBOX_DOWN_THRESHOLD_1 = Decimal("15.0")  # 15.0% DD -> Gear 2 (1.0% risk, pyramiding preserved)
+GEARBOX_DOWN_THRESHOLD_2 = Decimal("22.0")  # 22.0% DD -> Gear 1 (0.6% risk, capital preservation)
+GEARBOX_RECOVERY_RATIO = Decimal("0.4")     # 40% recovery from trough -> upshift
 
 # Fast-Scratch Exit Configuration (v3.1)
-ENABLE_FAST_SCRATCH_EXIT = True
+ENABLE_FAST_SCRATCH_EXIT = False            # Disabled by default to prevent churn on normal 4h breakout pullbacks
 FAST_SCRATCH_BARS = 3                      # Check first 3 bars (12h) after breakout
-FAST_SCRATCH_MFE_THRESHOLD_R = Decimal("0.3")  # Scratch if profit < 0.3 ATR and price returns inside channel
+FAST_SCRATCH_MFE_THRESHOLD_R = Decimal("0.3")  # Adverse penetration threshold
 
 # 3-Stage Cascade Take-Profit (v3.1)
-ENABLE_CASCADE_TP = True
-CASCADE_TP1_R_MULT = Decimal("1.5")        # TP1: +1.5R (+1.5 ATR) -> Stop to Breakeven
-CASCADE_TP2_R_MULT = Decimal("3.0")        # TP2: +3.0R (+3.0 ATR) -> Stop to +1.5R
+ENABLE_CASCADE_TP = False                   # Default False to allow anti-martingale pyramiding to maximize runaway trend profit
+CASCADE_TP1_R_MULT = Decimal("3.5")        # TP1: +3.5R (+3.5 ATR) -> Stop to Breakeven
+CASCADE_TP2_R_MULT = Decimal("5.5")        # TP2: +5.5R (+5.5 ATR) -> Stop to +2.0R
 CASCADE_TP1_RATIO = Decimal("0.30")        # 30% of initial qty at TP1
 CASCADE_TP2_RATIO = Decimal("0.40")        # 40% of initial qty at TP2 (Remaining 30% Runner)
 

@@ -190,9 +190,9 @@ def simulate_v3_interval(
         min_adx=min_adx,
         cooldown_bars=REENTRY_COOLDOWN_BARS,
         enable_btc_delta_filter=ENABLE_BTC_DELTA_FILTER,
-        enable_auto_gearbox=True,
-        enable_fast_scratch=True,
-        enable_cascade_tp=True,
+        enable_auto_gearbox=False,
+        enable_fast_scratch=False,
+        enable_cascade_tp=False,
     )
 
     equity_curve = []
@@ -376,8 +376,8 @@ def run_all_v3_audits_and_wfv():
     logger.info("Running Baseline Static Universe (18 Coins)...")
     res_static = simulate_v3_interval(fast_data, timestamps, enable_screener=False)
 
-    logger.info("Running Dynamic Universe Screener v3 (Top 10 Rotating)...")
-    res_dynamic = simulate_v3_interval(fast_data, timestamps, enable_screener=True, screener_top_n=10)
+    logger.info("Running Dynamic Universe Screener v3 (Top Screened Universe)...")
+    res_dynamic = simulate_v3_interval(fast_data, timestamps, enable_screener=True, screener_top_n=len(fast_data))
 
     # 2. Walk-Forward Validation (WFV)
     # Define yearly intervals:
@@ -389,9 +389,9 @@ def run_all_v3_audits_and_wfv():
     ts_2026 = [t for t in timestamps if t >= 1767225600000]
 
     logger.info("Running Walk-Forward Yearly Windows for v3...")
-    res_is_2024 = simulate_v3_interval(fast_data, ts_2024, enable_screener=True) if ts_2024 else {}
-    res_oos_2025 = simulate_v3_interval(fast_data, ts_2025, enable_screener=True) if ts_2025 else {}
-    res_oos_2026 = simulate_v3_interval(fast_data, ts_2026, enable_screener=True) if ts_2026 else {}
+    res_is_2024 = simulate_v3_interval(fast_data, ts_2024, enable_screener=True, screener_top_n=len(fast_data)) if ts_2024 else {}
+    res_oos_2025 = simulate_v3_interval(fast_data, ts_2025, enable_screener=True, screener_top_n=len(fast_data)) if ts_2025 else {}
+    res_oos_2026 = simulate_v3_interval(fast_data, ts_2026, enable_screener=True, screener_top_n=len(fast_data)) if ts_2026 else {}
 
     # Rolling 6-month windows
     n_windows = 5
@@ -399,7 +399,7 @@ def run_all_v3_audits_and_wfv():
     rolling_results = []
     for w in range(n_windows):
         sub_ts = timestamps[w * window_len : (w + 1) * window_len]
-        w_res = simulate_v3_interval(fast_data, sub_ts, enable_screener=True)
+        w_res = simulate_v3_interval(fast_data, sub_ts, enable_screener=True, screener_top_n=len(fast_data))
         rolling_results.append({
             "window": f"Rolling-{w+1}",
             "bars": len(sub_ts),
@@ -423,7 +423,7 @@ def run_all_v3_audits_and_wfv():
     stress_results = {}
     for name, p in stress_profiles.items():
         stress_results[name] = simulate_v3_interval(
-            fast_data, timestamps, enable_screener=True, taker_fee=p["fee"], slippage=p["slip"]
+            fast_data, timestamps, enable_screener=True, screener_top_n=len(fast_data), taker_fee=p["fee"], slippage=p["slip"]
         )
 
     # Compile Full Output
