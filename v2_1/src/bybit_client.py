@@ -121,11 +121,20 @@ class BybitClient:
         return int(res["result"]["timeNano"]) // 1_000_000
 
     def get_instruments_info(self, category: str = "linear", symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-        params = {"category": category}
+        params = {"category": category, "limit": 1000}
         if symbol:
             params["symbol"] = symbol
-        res = self.request("GET", "/v5/market/instruments-info", params=params)
-        return res.get("result", {}).get("list", [])
+        items, seen = [], set()
+        while True:
+            result = self.request("GET", "/v5/market/instruments-info", params=params).get("result", {})
+            items.extend(result.get("list", []))
+            cursor = result.get("nextPageCursor")
+            if not cursor:
+                return items
+            if cursor in seen:
+                raise RuntimeError("Repeated instrument pagination cursor")
+            seen.add(cursor)
+            params["cursor"] = cursor
 
     def get_kline(
         self,

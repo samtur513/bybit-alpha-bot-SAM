@@ -1,6 +1,6 @@
 """
 Configuration parameters for Multi-Alpha Growth Engine v2.1.
-Includes Bybit MNT fee discount (0.09%), BTC Delta Filter, and Re-entry Cooldown.
+Includes Bybit MNT fee discount (0.09%), BTC Delta Filter, Re-entry Cooldown, and Audited Risk Caps.
 """
 
 from decimal import Decimal
@@ -18,18 +18,26 @@ LIVE_MD_FILE = REPORTS_DIR / "PAPER_TRADING_LIVE_V21.md"
 # Server Port
 PORT = 8081
 
+# Data Dirs & Timestamps for Backtests
+PARQUET_DATA_DIR = BASE_DIR.parent / "data" / "parquet"
+DEV_START_TS = 1704067200000
+FINAL_END_TS = 1735689600000
+
 # Universe: 18 high-volume liquid Bybit Linear Perpetuals
 DEFAULT_SYMBOLS = [
     "BTCUSDT", "ETHUSDT", "SOLUSDT", "SUIUSDT", "DOGEUSDT", "AVAXUSDT",
     "NEARUSDT", "LINKUSDT", "APTUSDT", "ADAUSDT", "XRPUSDT", "BNBUSDT",
     "TIAUSDT", "INJUSDT", "ARBUSDT", "OPUSDT", "1000PEPEUSDT", "RENDERUSDT"
 ]
+SYMBOLS = DEFAULT_SYMBOLS
 
 # Core Risk & Sizing (Half-Kelly)
 INITIAL_CAPITAL = Decimal("300.0")
 BASE_RISK_PCT = Decimal("0.025")       # 2.5% Half-Kelly
 CHOPPY_RISK_PCT = Decimal("0.0075")    # 0.75% during Regime Kill-Switch
-MAX_LEVERAGE_CAP = Decimal("3.5")      # Hard 3.5x notional leverage cap
+MAX_LEVERAGE_CAP = Decimal("3.5")      # Hard 3.5x position leverage cap
+PORTFOLIO_LEVERAGE = Decimal("3.5")    # Hard 3.5x aggregate portfolio cap
+DRAWDOWN_LIMIT_PCT = Decimal("18.0")   # Automated trading halt at 18% drawdown
 ATR_STOP_MULT = Decimal("2.5")         # 2.5x ATR initial stop-loss
 LOSS_STREAK_THRESHOLD = 3              # Reduce risk after 3 consecutive losses
 WIN_STREAK_RECOVERY = 2                # Recover risk after 2 consecutive wins

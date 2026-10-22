@@ -241,9 +241,9 @@ def calculate_adx(
 
     # Smoothing recursion: smoothed[i] = smoothed[i-1] - smoothed[i-1]/period + current[i]
     for i in range(period + 1, n):
-        smoothed_tr[i] = smoothed_tr[i - 1] - (smoothed_tr[i - 1] / period) + tr[i]
-        smoothed_plus_dm[i] = smoothed_plus_dm[i - 1] - (smoothed_plus_dm[i - 1] / period) + plus_dm[i]
-        smoothed_minus_dm[i] = smoothed_minus_dm[i - 1] - (smoothed_minus_dm[i - 1] / period) + minus_dm[i]
+        smoothed_tr[i] = smoothed_tr[i - 1] - (smoothed_tr[i - 1] / period) + tr[i] / period
+        smoothed_plus_dm[i] = smoothed_plus_dm[i - 1] - (smoothed_plus_dm[i - 1] / period) + plus_dm[i] / period
+        smoothed_minus_dm[i] = smoothed_minus_dm[i - 1] - (smoothed_minus_dm[i - 1] / period) + minus_dm[i] / period
 
     # Calculate +DI, -DI, and DX
     dx = np.full(n, np.nan, dtype=np.float64)

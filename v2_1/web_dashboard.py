@@ -435,6 +435,9 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
+    def do_POST(self):
+        self.send_error(403, "Mutation endpoints disabled on public dashboard")
+
     def log_message(self, format, *args):
         return
 
@@ -442,22 +445,26 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 def start_server_and_bot():
     global GLOBAL_TRADER
     logger.info("Initializing PaperTraderV21 daemon...")
-    GLOBAL_TRADER = PaperTraderV21(poll_interval=5)
+    GLOBAL_TRADER = PaperTraderV21(poll_interval_seconds=5)
 
     bot_thread = threading.Thread(target=GLOBAL_TRADER.run_daemon, daemon=True)
     bot_thread.start()
     logger.info("Background PaperTraderV21 thread launched.")
 
-    class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
-        daemon_threads = True
+    class SupervisedServer(socketserver.ThreadingTCPServer):
         allow_reuse_address = True
+        daemon_threads = True
 
-    server = ThreadedHTTPServer(("0.0.0.0", PORT), DashboardHTTPRequestHandler)
-    logger.info(f"Serving v2.1 web dashboard at http://0.0.0.0:{PORT}")
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
+        def service_actions(self):
+            if not bot_thread.is_alive():
+                raise SystemExit("Trading worker stopped; restarting service")
+
+    with SupervisedServer(("0.0.0.0", PORT), DashboardHTTPRequestHandler) as server:
+        logger.info(f"Serving v2.1 web dashboard at http://0.0.0.0:{PORT}")
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
 
 
 if __name__ == "__main__":

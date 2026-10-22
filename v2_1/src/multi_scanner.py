@@ -1,90 +1,133 @@
 """
-Multi-Coin Universe Scanner and Ranker v2.1.
+Multi-Coin Universe Scanner and Momentum Ranking Module v2.1.
 Enhanced with:
-1. BTC Delta Filter: altcoin longs require BTC bullish; altcoin shorts require BTC bearish.
-2. Re-entry Cooldown: blocks re-entry for N bars after a trade closure.
+1. Strict audited breakout and TMS formulas
+2. Optional ADX filter
+3. BTC Delta Trend Filter (altcoin longs require BTC bullish; shorts require BTC bearish)
+4. Re-entry Cooldown (blocks re-entry for N bars after a position closes)
 """
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import List, Dict, Tuple, Optional
+from typing import Dict, List, Optional, Tuple
+import numpy as np
 
 
 @dataclass
 class CoinCandidate:
     symbol: str
-    direction: int  # 1 for Long, -1 for Short
-    tms_score: Decimal
+    direction: int  # +1 Long, -1 Short
+    close_price: Decimal
+    breakout_boundary: Decimal
     atr: Decimal
-    breakout_price: Decimal
+    trend_momentum_score: float
+    volume_ratio: float
+    normalized_breakout_dist: float
+
+    # Backward compatibility aliases
+    @property
+    def breakout_price(self) -> Decimal:
+        return self.close_price
+
+    @property
+    def tms_score(self) -> Decimal:
+        return Decimal(str(self.trend_momentum_score))
 
 
 class MultiCoinScanner:
+    """
+    Scans a multi-asset universe and selects top opportunities by Trend Momentum Score.
+    """
+
     def __init__(
         self,
-        max_long_positions: int = 2,
-        max_short_positions: int = 2,
-        volume_filter_multiplier: Decimal = Decimal("1.2"),
+        max_concurrent_positions: int = 2,
+        min_volume_ratio: float = 1.2,
+        min_atr_distance: float = 0.0,
+        min_adx: float = 0.0,
         enable_btc_delta_filter: bool = True,
     ):
-        self.max_long_positions = max_long_positions
-        self.max_short_positions = max_short_positions
-        self.volume_filter_multiplier = volume_filter_multiplier
+        self.max_concurrent_positions = max_concurrent_positions
+        self.min_volume_ratio = min_volume_ratio
+        self.min_atr_distance = min_atr_distance
+        self.min_adx = min_adx
         self.enable_btc_delta_filter = enable_btc_delta_filter
 
-    def evaluate_symbol(
+    def evaluate_symbol_bar(
         self,
         symbol: str,
-        close: Decimal,
-        high: Decimal,
-        low: Decimal,
-        upper_channel: Decimal,
-        lower_channel: Decimal,
-        ema_fast: Decimal,
-        ema_slow: Decimal,
-        atr: Decimal,
-        volume: Decimal,
-        volume_sma: Decimal,
+        close: float,
+        upper_channel: float,
+        lower_channel: float,
+        ema_fast: float,
+        ema_slow: float,
+        atr: float,
+        volume: float,
+        volume_sma: float,
+        adx: float = float("nan"),
     ) -> Optional[CoinCandidate]:
-        """Evaluates single coin for Donchian breakout and Volume TMS confirmation."""
-        # Check volume confirmation
-        if volume_sma <= Decimal("0"):
+        """
+        Evaluates a single instrument's bar for breakout signals and calculates TMS.
+        """
+        if not all(
+            np.isfinite(v)
+            for v in (close, upper_channel, lower_channel, ema_fast, ema_slow, atr, volume, volume_sma)
+        ):
             return None
-        volume_ratio = volume / volume_sma
-        if volume_ratio < self.volume_filter_multiplier:
+        if min(close, atr, volume_sma) <= 0 or volume < 0:
+            return None
+        if self.min_adx and (not np.isfinite(adx) or adx < self.min_adx):
             return None
 
-        # Long breakout
+        vol_ratio = volume / volume_sma
+        if vol_ratio < self.min_volume_ratio:
+            return None
+
+        # Long breakout: close > upper and EMA50 > EMA200 (or fast > slow)
         if close > upper_channel and ema_fast > ema_slow:
-            # Trend Momentum Score (TMS)
-            atr_safe = atr if atr > Decimal("0") else Decimal("0.0001")
-            tms = ((close - ema_fast).copy_abs() / atr_safe) * volume_ratio
+            breakout_dist = (close - upper_channel) / atr
+            if breakout_dist < self.min_atr_distance:
+                return None
+
+            tms = (abs(close - ema_fast) / atr) * vol_ratio
             return CoinCandidate(
                 symbol=symbol,
                 direction=1,
-                tms_score=tms,
-                atr=atr,
-                breakout_price=close,
+                close_price=Decimal(str(close)),
+                breakout_boundary=Decimal(str(upper_channel)),
+                atr=Decimal(str(atr)),
+                trend_momentum_score=float(tms),
+                volume_ratio=float(vol_ratio),
+                normalized_breakout_dist=float(breakout_dist),
             )
 
-        # Short breakout
-        elif close < lower_channel and ema_fast < ema_slow:
-            atr_safe = atr if atr > Decimal("0") else Decimal("0.0001")
-            tms = ((close - ema_fast).copy_abs() / atr_safe) * volume_ratio
+        # Short breakdown: close < lower and EMA50 < EMA200
+        if close < lower_channel and ema_fast < ema_slow:
+            breakout_dist = (lower_channel - close) / atr
+            if breakout_dist < self.min_atr_distance:
+                return None
+
+            tms = (abs(ema_fast - close) / atr) * vol_ratio
             return CoinCandidate(
                 symbol=symbol,
                 direction=-1,
-                tms_score=tms,
-                atr=atr,
-                breakout_price=close,
+                close_price=Decimal(str(close)),
+                breakout_boundary=Decimal(str(lower_channel)),
+                atr=Decimal(str(atr)),
+                trend_momentum_score=float(tms),
+                volume_ratio=float(vol_ratio),
+                normalized_breakout_dist=float(breakout_dist),
             )
 
         return None
 
+    # Alias for legacy calls
+    evaluate_symbol = evaluate_symbol_bar
+
     def rank_candidates(
         self,
-        long_candidates: List[CoinCandidate],
-        short_candidates: List[CoinCandidate],
+        candidates: List[CoinCandidate],
+        currently_held_symbols: List[str],
         current_long_count: int,
         current_short_count: int,
         btc_bullish: bool = True,
@@ -93,48 +136,36 @@ class MultiCoinScanner:
         current_bar_idx: int = 0,
     ) -> List[CoinCandidate]:
         """
-        Ranks candidates by TMS, filtering by:
-        1. BTC Delta filter (for altcoins).
-        2. Cooldown tracker (preventing re-entries on exhausted waves).
-        3. Portfolio directional caps.
+        Filters out held symbols, enforces portfolio direction limits,
+        applies BTC Delta Filter and Cooldown, then sorts by TMS descending.
         """
-        filtered_longs = []
-        if current_long_count < self.max_long_positions:
-            for c in long_candidates:
-                # Cooldown check
-                if cooldown_tracker and (c.symbol, 1) in cooldown_tracker:
-                    if current_bar_idx < cooldown_tracker[(c.symbol, 1)]:
-                        continue
+        valid_candidates = []
 
-                # BTC Delta Filter: altcoins require BTC to be bullish
-                if self.enable_btc_delta_filter and c.symbol != "BTCUSDT":
-                    if not btc_bullish:
-                        continue
+        for cand in candidates:
+            # Skip if already in position
+            if cand.symbol in currently_held_symbols:
+                continue
 
-                filtered_longs.append(c)
+            # Check portfolio directional limit
+            if cand.direction == 1 and current_long_count >= self.max_concurrent_positions:
+                continue
+            if cand.direction == -1 and current_short_count >= self.max_concurrent_positions:
+                continue
 
-        filtered_shorts = []
-        if current_short_count < self.max_short_positions:
-            for c in short_candidates:
-                if cooldown_tracker and (c.symbol, -1) in cooldown_tracker:
-                    if current_bar_idx < cooldown_tracker[(c.symbol, -1)]:
-                        continue
+            # Cooldown check
+            if cooldown_tracker and (cand.symbol, cand.direction) in cooldown_tracker:
+                if current_bar_idx < cooldown_tracker[(cand.symbol, cand.direction)]:
+                    continue
 
-                # BTC Delta Filter: altcoins require BTC to be bearish
-                if self.enable_btc_delta_filter and c.symbol != "BTCUSDT":
-                    if not btc_bearish:
-                        continue
+            # BTC Delta Filter: altcoins require BTC trend confirmation
+            if self.enable_btc_delta_filter and cand.symbol != "BTCUSDT":
+                if cand.direction == 1 and not btc_bullish:
+                    continue
+                if cand.direction == -1 and not btc_bearish:
+                    continue
 
-                filtered_shorts.append(c)
+            valid_candidates.append(cand)
 
-        # Sort each group by TMS score descending
-        filtered_longs.sort(key=lambda x: x.tms_score, reverse=True)
-        filtered_shorts.sort(key=lambda x: x.tms_score, reverse=True)
-
-        available_long_slots = max(0, self.max_long_positions - current_long_count)
-        available_short_slots = max(0, self.max_short_positions - current_short_count)
-
-        selected = filtered_longs[:available_long_slots] + filtered_shorts[:available_short_slots]
-        # Return sorted by overall highest TMS
-        selected.sort(key=lambda x: x.tms_score, reverse=True)
-        return selected
+        # Sort by Trend Momentum Score descending
+        valid_candidates.sort(key=lambda c: c.trend_momentum_score, reverse=True)
+        return valid_candidates

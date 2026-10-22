@@ -93,6 +93,9 @@ class KellyRiskManager:
         """
         Calculates position size using fractional Kelly and current regime risk.
         """
+        values = (equity, entry_price, stop_price, min_order_qty, qty_step, min_notional)
+        if not all(v.is_finite() for v in values) or min(qty_step, min_order_qty, stop_price) <= 0 or min_notional < 0:
+            return KellySizingResult(False, Decimal(0), Decimal(0), Decimal(0), Decimal(0), "Invalid instrument or non-finite value")
         if equity <= Decimal("0") or entry_price <= Decimal("0"):
             return KellySizingResult(
                 allowed=False,

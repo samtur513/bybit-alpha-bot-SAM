@@ -38,6 +38,7 @@ v2_1/reports/PAPER_TRADING_LIVE_V21.md
 v2_1/reports/*.tmp
 v2_1/reports/*.log
 scratch/
+.test_tmp/
 bundle.b64
 deploy_bundle.b64
 make_installer.py
