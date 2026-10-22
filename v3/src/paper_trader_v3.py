@@ -137,8 +137,8 @@ class PaperTraderV3:
         self.screened_universe: List[ScreenedAsset] = []
 
         # Determine initial symbols
-        initial_syms = list(symbols or DEFAULT_SYMBOLS)
-        if ENABLE_DYNAMIC_UNIVERSE and client is not None:
+        initial_syms = list(symbols) if symbols is not None else []
+        if not initial_syms and ENABLE_DYNAMIC_UNIVERSE and self.client is not None:
             try:
                 top_syms = self.screener.get_top_universe(client=self.client)
                 if top_syms:
@@ -148,6 +148,9 @@ class PaperTraderV3:
                     logger.info(f"Initialized dynamic universe with {len(initial_syms)} coins from Bybit screener.")
             except Exception as e:
                 logger.warning(f"Initial universe screening fallback to default: {e}")
+
+        if not initial_syms:
+            initial_syms = list(DEFAULT_SYMBOLS)
 
         # Ensure anchor coins BTCUSDT and USDCUSDT (for depeg guard) are always monitored
         for anchor in ["BTCUSDT", "USDCUSDT"]:

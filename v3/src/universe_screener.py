@@ -258,15 +258,106 @@ class UniverseScreener:
         candidates.sort(key=lambda c: (c.passed_filters, c.composite_score), reverse=True)
         return candidates
 
+    def screen_universe(
+        self,
+        client: Optional[Any] = None,
+        tickers_list: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[CoinCandidateMetric]:
+        """
+        Fetches live 24h market tickers from Bybit REST API, applies 4-pillar gates,
+        and returns ranked candidate metrics.
+        """
+        if tickers_list is None:
+            if client is not None and hasattr(client, "request"):
+                try:
+                    res = client.request("GET", "/v5/market/tickers", params={"category": "linear"})
+                    tickers_list = res.get("result", {}).get("list", [])
+                except Exception as e:
+                    logger.error(f"Failed to fetch tickers for universe screening: {e}")
+                    tickers_list = []
+            else:
+                tickers_list = []
+
+        if not tickers_list:
+            return []
+
+        # Find BTC return benchmark
+        btc_ret = 0.0
+        for item in tickers_list:
+            if item.get("symbol") == self.config.benchmark_symbol:
+                try:
+                    btc_ret = float(item.get("price24hPcnt", 0.0))
+                except Exception:
+                    btc_ret = 0.0
+                break
+
+        candidates = []
+        for item in tickers_list:
+            sym = item.get("symbol", "")
+            # Only trade USDT linear perpetuals; exclude USDC-settled or TradFi pre-IPO
+            if not sym.endswith("USDT") or sym.startswith("USDC") or "STOCK" in sym:
+                continue
+
+            try:
+                price = float(item.get("lastPrice", 0.0))
+                if price <= 0:
+                    continue
+                turnover = float(item.get("turnover24h", 0.0))
+                oi = float(item.get("openInterestValue", item.get("openInterest", 0.0)))
+                funding = float(item.get("fundingRate", 0.0))
+                ret_24h = float(item.get("price24hPcnt", 0.0))
+                high_24h = float(item.get("highPrice24h", price))
+                low_24h = float(item.get("lowPrice24h", price))
+
+                # Normalized ATR proxy from 24h high/low range
+                norm_atr = ((high_24h - low_24h) / price) if price > 0 else 0.0
+                atr = high_24h - low_24h
+
+                # Efficiency proxy: directional move vs total range
+                ker = min(1.0, max(0.0, abs(ret_24h) / (norm_atr + 1e-6)))
+
+                # Trend strength proxy
+                adx = 20.0 + (abs(ret_24h) * 100.0)
+
+                cand = self.evaluate_symbol(
+                    symbol=sym,
+                    price=price,
+                    turnover_24h=turnover,
+                    open_interest=oi,
+                    funding_rate=funding,
+                    atr=atr,
+                    adx=adx,
+                    recent_closes=[low_24h, (high_24h + low_24h) / 2.0, price],
+                    btc_return_24h=btc_ret,
+                    coin_return_24h=ret_24h,
+                    volume_24h=float(item.get("volume24h", 0.0)),
+                    volume_sma_20d=float(item.get("volume24h", 1.0)),
+                )
+                candidates.append(cand)
+            except Exception:
+                continue
+
+        candidates.sort(key=lambda c: (c.passed_filters, c.composite_score), reverse=True)
+        return candidates
+
     def get_top_universe(
         self,
-        candidates: List[CoinCandidateMetric],
+        candidates: Optional[List[CoinCandidateMetric]] = None,
         top_n: Optional[int] = None,
-        keep_active_symbols: Optional[Set[str]] = None,
+        keep_active_symbols: Optional[Any] = None,
+        client: Optional[Any] = None,
     ) -> List[str]:
         """
-        Extracts Top-N symbol strings, always preserving any symbol currently held in an open position.
+        Extracts Top-N symbol strings.
+        Can be called with precomputed candidates OR with client to fetch and screen live!
+        Always preserves any symbol currently held in an open position.
         """
+        if candidates is None:
+            if client is not None:
+                candidates = self.screen_universe(client=client)
+            else:
+                candidates = []
+
         n = top_n or self.config.top_n
         passed = [c.symbol for c in candidates if c.passed_filters]
         top_symbols = passed[:n]
