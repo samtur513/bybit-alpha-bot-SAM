@@ -1,0 +1,246 @@
+{
+  "timestamp_utc": "2026-10-22T14:50:07.342868+00:00",
+  "accounting_invariants": {
+    "inv1_weighted_average_entry": {
+      "pass": true,
+      "initial_entry": 150.03,
+      "add_fill": 155.061006,
+      "actual_new_entry": 151.707002,
+      "expected_new_entry": 151.707002,
+      "detail": "Mathematically weighted average entry price verified. Bug-free."
+    },
+    "inv2_basket_cash_breakeven": {
+      "pass": true,
+      "breakeven_stop": 152.01072273487827,
+      "net_pnl": 5.29e-26,
+      "detail": "Basket cash breakeven covers entry fees, add fees, and exit fees."
+    },
+    "inv3_pnl_conservation": {
+      "pass": true,
+      "realized_equity": 300.0,
+      "calculated_from_trades": 300.0,
+      "detail": "Exact penny-perfect conservation between closed trades net PnL and realized equity."
+    },
+    "inv4_portfolio_leverage_cap": {
+      "pass": true,
+      "cap": 3.5,
+      "allowed_notional_750": true,
+      "blocked_notional_1200": true,
+      "detail": "Strict gross portfolio capacity cap (3.5x) rejects excessive leverage."
+    },
+    "inv5_drawdown_hard_halt": {
+      "pass": true,
+      "drawdown_limit_pct": 30.0,
+      "actual_drawdown_pct": 33.333333333333336,
+      "trading_halted": true,
+      "detail": "Automated drawdown hard-halt triggers and blocks all new trades."
+    },
+    "inv6_streak_kill_switch": {
+      "pass": true,
+      "throttled_after_3_losses": true,
+      "recovered_after_2_wins": true,
+      "detail": "Consecutive streak kill-switch throttles risk to 0.6% and recovers after 2 wins."
+    }
+  },
+  "walk_forward_validation": {
+    "yearly": {
+      "2024_IS": {
+        "initial_capital": 300.0,
+        "final_equity": 256.50044301690286,
+        "net_profit": -43.499556983097136,
+        "net_return_pct": -14.499852327699045,
+        "max_drawdown": 22.745461579269698,
+        "sharpe_ratio": -0.6315539106037777,
+        "win_rate": 41.964285714285715,
+        "profit_factor": 0.7577625875681847,
+        "total_trades": 112,
+        "pyramided_trades": 47,
+        "pyramided_win_rate": 76.59574468085107,
+        "trading_halted": false
+      },
+      "2025_OOS1": {
+        "initial_capital": 300.0,
+        "final_equity": 386.93199641519107,
+        "net_profit": 86.93199641519107,
+        "net_return_pct": 28.97733213839702,
+        "max_drawdown": 20.89992703389687,
+        "sharpe_ratio": 1.2325012926463135,
+        "win_rate": 55.294117647058826,
+        "profit_factor": 1.5332549875117543,
+        "total_trades": 85,
+        "pyramided_trades": 35,
+        "pyramided_win_rate": 94.28571428571428,
+        "trading_halted": false
+      },
+      "2026_OOS2": {
+        "initial_capital": 300.0,
+        "final_equity": 353.1655388269405,
+        "net_profit": 53.16553882694052,
+        "net_return_pct": 17.72184627564684,
+        "max_drawdown": 17.432941984868624,
+        "sharpe_ratio": 0.7625362600022907,
+        "win_rate": 48.05194805194805,
+        "profit_factor": 1.2353482475997273,
+        "total_trades": 77,
+        "pyramided_trades": 29,
+        "pyramided_win_rate": 93.10344827586206,
+        "trading_halted": false
+      }
+    },
+    "continuous_full": {
+      "initial_capital": 300.0,
+      "final_equity": 359.54512636899744,
+      "net_profit": 59.545126368997444,
+      "net_return_pct": 19.84837545633248,
+      "max_drawdown": 22.745461579269698,
+      "sharpe_ratio": 0.3750064021699285,
+      "win_rate": 48.72727272727273,
+      "profit_factor": 1.110488109775588,
+      "total_trades": 275,
+      "pyramided_trades": 109,
+      "pyramided_win_rate": 88.9908256880734,
+      "trading_halted": false
+    },
+    "rolling_windows": [
+      {
+        "window": "W1 (2024-H1 -> 2024-H2)",
+        "train_return_pct": -13.389508950737744,
+        "train_sharpe": -1.0968864328142847,
+        "train_dd": 18.321634722679104,
+        "test_return_pct": 0.8527662145174872,
+        "test_sharpe": 0.1894465906367365,
+        "test_dd": 19.630724315817584,
+        "test_trades": 58,
+        "test_pf": 1.0231641375960934
+      },
+      {
+        "window": "W2 (2024-H2 -> 2025-H1)",
+        "train_return_pct": 0.8527662145174872,
+        "train_sharpe": 0.1894465906367365,
+        "train_dd": 19.630724315817584,
+        "test_return_pct": 13.005677365042667,
+        "test_sharpe": 1.0783497368447577,
+        "test_dd": 16.311811509291566,
+        "test_trades": 41,
+        "test_pf": 1.498735199081059
+      },
+      {
+        "window": "W3 (2025-H1 -> 2025-H2)",
+        "train_return_pct": 13.005677365042667,
+        "train_sharpe": 1.0783497368447577,
+        "train_dd": 16.311811509291566,
+        "test_return_pct": 14.136175762997672,
+        "test_sharpe": 1.0142322306719447,
+        "test_dd": 12.7381602559488,
+        "test_trades": 45,
+        "test_pf": 1.4073193123343315
+      },
+      {
+        "window": "W4 (2025-H2 -> 2026-H1)",
+        "train_return_pct": 14.136175762997672,
+        "train_sharpe": 1.0142322306719447,
+        "train_dd": 12.7381602559488,
+        "test_return_pct": 17.184238779014834,
+        "test_sharpe": 1.2077534510873633,
+        "test_dd": 16.756246022150325,
+        "test_trades": 46,
+        "test_pf": 1.4557801038363287
+      },
+      {
+        "window": "W5 (2026-H1 -> 2026-H2)",
+        "train_return_pct": 17.184238779014834,
+        "train_sharpe": 1.2077534510873633,
+        "train_dd": 16.756246022150325,
+        "test_return_pct": 1.7941154678163687,
+        "test_sharpe": 0.34172119197744677,
+        "test_dd": 17.430934799485946,
+        "test_trades": 29,
+        "test_pf": 1.0582432438078169
+      }
+    ],
+    "walk_forward_efficiency": 0.831769115775145,
+    "mean_is_return": 11.294714530393165,
+    "mean_oos_return": 9.394594717877805
+  },
+  "stress_matrix": [
+    {
+      "initial_capital": 300.0,
+      "final_equity": 415.28788271679025,
+      "net_profit": 115.28788271679025,
+      "net_return_pct": 38.42929423893008,
+      "max_drawdown": 21.393024624677086,
+      "sharpe_ratio": 0.5604526672908875,
+      "win_rate": 49.458483754512635,
+      "profit_factor": 1.1838571411040273,
+      "total_trades": 277,
+      "pyramided_trades": 111,
+      "pyramided_win_rate": 91.8918918918919,
+      "trading_halted": false,
+      "model_name": "Tier 1: Bybit VIP0 Real",
+      "description": "VIP0: 0.055% taker, 2bp slip"
+    },
+    {
+      "initial_capital": 300.0,
+      "final_equity": 359.54512636899744,
+      "net_profit": 59.545126368997444,
+      "net_return_pct": 19.84837545633248,
+      "max_drawdown": 22.745461579269698,
+      "sharpe_ratio": 0.3750064021699285,
+      "win_rate": 48.72727272727273,
+      "profit_factor": 1.110488109775588,
+      "total_trades": 275,
+      "pyramided_trades": 109,
+      "pyramided_win_rate": 88.9908256880734,
+      "trading_halted": false,
+      "model_name": "Tier 2: Base MNT Config",
+      "description": "MNT Discount: 0.09% taker, 2bp slip"
+    },
+    {
+      "initial_capital": 300.0,
+      "final_equity": 327.95086571976015,
+      "net_profit": 27.950865719760145,
+      "net_return_pct": 9.316955239920048,
+      "max_drawdown": 22.235938395813804,
+      "sharpe_ratio": 0.2443049635867564,
+      "win_rate": 49.642857142857146,
+      "profit_factor": 1.0542424186288955,
+      "total_trades": 280,
+      "pyramided_trades": 109,
+      "pyramided_win_rate": 91.74311926605505,
+      "trading_halted": false,
+      "model_name": "Tier 3: Stress Friction",
+      "description": "STRESS: 0.085% taker, 5bp slip"
+    },
+    {
+      "initial_capital": 300.0,
+      "final_equity": 253.87453977376362,
+      "net_profit": -46.125460226236385,
+      "net_return_pct": -15.375153408745462,
+      "max_drawdown": 23.605731477635413,
+      "sharpe_ratio": -0.25150371566391433,
+      "win_rate": 49.09747292418773,
+      "profit_factor": 0.8769885602219499,
+      "total_trades": 277,
+      "pyramided_trades": 113,
+      "pyramided_win_rate": 89.38053097345133,
+      "trading_halted": false,
+      "model_name": "Tier 4: Extreme Stress",
+      "description": "ULTRA: 0.12% taker, 8bp slip"
+    }
+  ],
+  "news_shield_result": {
+    "initial_capital": 300.0,
+    "final_equity": 359.54512636899744,
+    "net_profit": 59.545126368997444,
+    "net_return_pct": 19.84837545633248,
+    "max_drawdown": 22.745461579269698,
+    "sharpe_ratio": 0.3750064021699285,
+    "win_rate": 48.72727272727273,
+    "profit_factor": 1.110488109775588,
+    "total_trades": 275,
+    "pyramided_trades": 109,
+    "pyramided_win_rate": 88.9908256880734,
+    "trading_halted": false
+  },
+  "elapsed_seconds": 49.06679844856262
+}

@@ -226,11 +226,12 @@ HTML_PAGE = """<!DOCTYPE html>
         <header>
             <div class="title-block">
                 <h1>Bybit Multi-Alpha v2.1 <span class="tag-ab">A/B Эксперимент</span></h1>
-                <p style="color: var(--text-muted); font-size: 13px; margin-top: 4px;">Фильтр дельты BTC • 3h Cooldown • Комиссия MNT 0.09% • Порт 8081</p>
+                <p style="color: var(--text-muted); font-size: 13px; margin-top: 4px;">Фильтр дельты BTC • Новостной щит v1.1 • 4h Таймфрейм • Комиссия MNT 0.09% • Порт 8081</p>
             </div>
             <div class="header-meta">
+                <div class="market-filter-badge" id="news-shield-status" style="background: rgba(0, 229, 255, 0.12); color: var(--accent-cyan); border-color: rgba(0, 229, 255, 0.3);">🛡️ Новостной Щит: Активен</div>
                 <div class="market-filter-badge" id="btc-filter-status">Загрузка тренда BTC...</div>
-                <div class="countdown-box">До 1h свечи: <span id="candle-timer">--:--</span></div>
+                <div class="countdown-box">До 4h свечи: <span id="candle-timer">--:--</span></div>
             </div>
         </header>
 
@@ -326,7 +327,15 @@ HTML_PAGE = """<!DOCTYPE html>
                 document.getElementById('metric-open-count').innerText = data.open_positions_count + ' / 4';
                 document.getElementById('metric-trades-count').innerText = data.closed_trades_count;
 
-                if (data.btc_market_filter) {
+                if (data.news_defense_active) {
+                    document.getElementById('news-shield-status').innerText = '🛡️ Новостной Щит: ' + (data.news_profile === 'defensive_only' ? 'Защитный Профиль' : 'Активен');
+                } else {
+                    document.getElementById('news-shield-status').innerText = '⚪ Новостной Щит: Отключен';
+                }
+
+                if (data.btc_trend_status) {
+                    document.getElementById('btc-filter-status').innerText = 'BTC Тренд: ' + data.btc_trend_status;
+                } else if (data.btc_market_filter) {
                     document.getElementById('btc-filter-status').innerText = data.btc_market_filter;
                 }
 
@@ -436,7 +445,54 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_POST(self):
-        self.send_error(403, "Mutation endpoints disabled on public dashboard")
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/api/news_event":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode("utf-8")
+            try:
+                data = json.loads(body)
+                headline = data.get("headline", "")
+                sym = data.get("symbol")
+                tier = int(data.get("source_tier", 3))
+                ret_1m = float(data.get("ret_1m", 0.0))
+                vol_1m = float(data.get("vol_1m", 0.0))
+                vol_med = float(data.get("vol_median_60m", 1.0))
+
+                actions = []
+                if GLOBAL_TRADER:
+                    actions = GLOBAL_TRADER.handle_news_event(
+                        headline=headline,
+                        symbol=sym,
+                        source_tier=tier,
+                        ret_1m=ret_1m,
+                        vol_1m=vol_1m,
+                        vol_median_60m=vol_med,
+                    )
+                resp = json.dumps({
+                    "status": "ok",
+                    "actions_count": len(actions),
+                    "actions": [
+                        {
+                            "action_type": a.action_type.value,
+                            "symbol": a.symbol,
+                            "side": a.side.value,
+                            "reason": a.reason,
+                            "stop_price": a.stop_price,
+                        }
+                        for a in actions
+                    ]
+                }).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            except Exception as e:
+                logger.error(f"Failed to process /api/news_event: {e}")
+                self.send_error(400, f"Error processing news event: {e}")
+        else:
+            self.send_error(403, "Mutation endpoints disabled on public dashboard")
 
     def log_message(self, format, *args):
         return

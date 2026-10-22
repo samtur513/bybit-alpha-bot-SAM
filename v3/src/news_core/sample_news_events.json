@@ -1,0 +1,82 @@
+[
+  {
+    "id": "EVT-001",
+    "source": "Binance_CMS",
+    "headline": "Binance Will List Dogwifhat (WIF) with Seed Tag Applied",
+    "symbol": "WIFUSDT",
+    "published_at": "2024-03-05T10:01:37Z",
+    "expected_type": "MAJOR_CATALYST",
+    "expected_score": 3,
+    "description": "Verified Binance listing releaseDate (MS precision). Preceded X tweet by 2.5 minutes."
+  },
+  {
+    "id": "EVT-002",
+    "source": "Binance_CMS",
+    "headline": "Binance Futures Will Launch USDⓈ-M GLM Perpetual Contract With Up to 50x Leverage",
+    "symbol": "GLMUSDT",
+    "published_at": "2024-02-22T04:05:41Z",
+    "expected_type": "MAJOR_CATALYST",
+    "expected_score": 3,
+    "description": "Perpetual contract listing on Binance Futures."
+  },
+  {
+    "id": "EVT-003",
+    "source": "DefiLlama_Hacks",
+    "headline": "Radiant Capital Hacked for $4.5M via Flash Loan Vulnerability",
+    "symbol": "RDNTUSDT",
+    "published_at": "2024-01-02T18:30:00Z",
+    "expected_type": "CRASH_SHOCK",
+    "expected_score": -3,
+    "description": "Exploit of lending pool on Arbitrum/BSC."
+  },
+  {
+    "id": "EVT-004",
+    "source": "Binance_CMS",
+    "headline": "Binance Will Delist OMG, WAVES, WNXM, XEM on 2024-06-17",
+    "symbol": "WAVESUSDT",
+    "published_at": "2024-06-03T03:00:00Z",
+    "expected_type": "CRASH_SHOCK",
+    "expected_score": -3,
+    "description": "Delisting announcement causing sudden price collapse."
+  },
+  {
+    "id": "EVT-005",
+    "source": "SEC_EDGAR",
+    "headline": "SEC Approves 11 Spot Bitcoin ETFs in Landmark Regulatory Decision",
+    "symbol": "BTCUSDT",
+    "published_at": "2024-01-10T21:00:00Z",
+    "expected_type": "MAJOR_CATALYST",
+    "expected_score": 3,
+    "description": "Historical spot ETF approval announcement."
+  },
+  {
+    "id": "EVT-006",
+    "source": "Newswire",
+    "headline": "Dozens of Missiles and Drone Strikes Launched in Middle East Conflict Escalation",
+    "symbol": "BTCUSDT",
+    "published_at": "2024-04-13T20:00:00Z",
+    "expected_type": "GEOPOLITICAL_SHOCK",
+    "expected_score": -2,
+    "description": "Geopolitical risk-off shock causing weekend crypto flash crash."
+  },
+  {
+    "id": "EVT-007",
+    "source": "BLS_Schedule",
+    "headline": "US Consumer Price Index (CPI) Inflation Release for December 2023",
+    "symbol": "BTCUSDT",
+    "published_at": "2024-01-11T13:30:00Z",
+    "expected_type": "NEUTRAL",
+    "expected_score": 0,
+    "description": "Macro headline handled by Regime Guard blackout window."
+  },
+  {
+    "id": "EVT-008",
+    "source": "Media_Blog",
+    "headline": "Weekly Crypto Market Commentary: Altcoins Consolidate in Sideways Range",
+    "symbol": "ETHUSDT",
+    "published_at": "2024-01-15T12:00:00Z",
+    "expected_type": "NEUTRAL",
+    "expected_score": 0,
+    "description": "Neutral filler headline to verify zero false positives."
+  }
+]

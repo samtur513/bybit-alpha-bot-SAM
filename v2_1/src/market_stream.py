@@ -9,8 +9,9 @@ log = logging.getLogger(__name__)
 
 
 class MarketStream:
-    def __init__(self, symbols, capacity=20000):
+    def __init__(self, symbols, capacity=20000, interval="240"):
         self.symbols = set(symbols)
+        self.interval = str(interval)
         self.events = queue.Queue(capacity)
         self.stop = threading.Event()
         self.overflow = threading.Event()
@@ -41,7 +42,7 @@ class MarketStream:
             # Delta fields absent => unchanged. Never replay a cached price as a new tick.
             if data.get('lastPrice'):
                 self._put(('price', symbol, int(obj.get('ts', 0)), data['lastPrice'], time.monotonic()))
-        elif topic.startswith('kline.60.'):
+        elif topic.startswith('kline.'):
             for bar in obj.get('data', []):
                 if bar.get('confirm') is True:
                     self._put(('bar', symbol, int(obj.get('ts', 0)), bar, time.monotonic()))
@@ -57,7 +58,7 @@ class MarketStream:
             def opened(ws):
                 self._put(('reset', '', 0, None, time.monotonic()))
                 topics = [f'{kind}.{s}' for s in sorted(self.symbols)
-                          for kind in ('tickers', 'kline.60')]
+                          for kind in ('tickers', f'kline.{self.interval}')]
                 for i in range(0, len(topics), 10):
                     ws.send(json.dumps({'op': 'subscribe', 'args': topics[i:i+10]}))
             self.socket = websocket.WebSocketApp(

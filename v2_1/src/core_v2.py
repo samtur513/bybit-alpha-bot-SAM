@@ -327,6 +327,7 @@ class CoreV2Engine:
         manage_positions: bool = True,
         btc_bullish: bool = True,
         btc_bearish: bool = True,
+        blocked_symbols: Optional[Any] = None,
     ) -> None:
         """Closed bar t -> explicit available open t+1."""
         if timestamp <= self.last_bar_timestamp:
@@ -409,6 +410,8 @@ class CoreV2Engine:
         )
 
         for cand in ranked:
+            if blocked_symbols and cand.symbol in blocked_symbols:
+                continue
             rules = self.instrument_rules.get(cand.symbol)
             if not rules or cand.symbol not in next_open_prices:
                 continue
@@ -460,6 +463,34 @@ class CoreV2Engine:
         eq = self._observe({**current, **next_open_prices})
         self.equity_history.append((timestamp + 3600000, eq))
         self.equity_history = self.equity_history[-10000:]
+
+    def update_position_stop(self, symbol: str, new_stop: Decimal, reason: str = "") -> bool:
+        """Update stop loss price for an open position (e.g. runner protection, breakeven)."""
+        if symbol in self.open_positions:
+            pos = self.open_positions[symbol]
+            old_stop = pos.current_stop
+            pos.current_stop = new_stop
+            self.events.append(
+                dict(
+                    kind="STOP_UPDATE",
+                    symbol=symbol,
+                    old_stop=str(old_stop),
+                    new_stop=str(new_stop),
+                    reason=reason,
+                )
+            )
+            return True
+        return False
+
+    def emergency_close_position(
+        self, symbol: str, current_price: Decimal, timestamp: int, reason: str = "EMERGENCY_EJECT"
+    ) -> bool:
+        """Emergency market close of an active position (e.g. news crash shield)."""
+        if symbol in self.open_positions:
+            pos = self.open_positions[symbol]
+            self._reduce(symbol, pos.current_qty, current_price, timestamp, reason)
+            return True
+        return False
 
     def get_portfolio_snapshot(self, current_prices: Dict[str, Decimal]) -> PortfolioSnapshot:
         """Returns complete portfolio metrics and state."""

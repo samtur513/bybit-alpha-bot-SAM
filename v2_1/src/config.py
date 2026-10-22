@@ -31,19 +31,28 @@ DEFAULT_SYMBOLS = [
 ]
 SYMBOLS = DEFAULT_SYMBOLS
 
-# Core Risk & Sizing (Half-Kelly)
+# Timeframe & Strategy Architecture (I1: 4h Trend Following)
+CANDLE_INTERVAL = "240"                # 4-hour candles ("240" in Bybit API)
+BAR_INTERVAL_MS = 4 * 3600 * 1000      # 14,400,000 ms
+DONCHIAN_WINDOW = 30                   # 30 bars (120 hours on 4h timeframe)
+
+# Core Risk & Sizing (Optimal 2.0% Half-Kelly for Maximum Profit)
 INITIAL_CAPITAL = Decimal("300.0")
-BASE_RISK_PCT = Decimal("0.025")       # 2.5% Half-Kelly
-CHOPPY_RISK_PCT = Decimal("0.0075")    # 0.75% during Regime Kill-Switch
+BASE_RISK_PCT = Decimal("0.02")        # 2.0% optimal Half-Kelly (Champion ROI: +55.5%)
+CHOPPY_RISK_PCT = Decimal("0.006")     # 0.6% during Regime Kill-Switch
 MAX_LEVERAGE_CAP = Decimal("3.5")      # Hard 3.5x position leverage cap
 PORTFOLIO_LEVERAGE = Decimal("3.5")    # Hard 3.5x aggregate portfolio cap
-DRAWDOWN_LIMIT_PCT = Decimal("18.0")   # Automated trading halt at 18% drawdown
+SOFT_DRAWDOWN_LIMIT_PCT = Decimal("15.0")  # Soft de-risking: halves risk above 15% DD
+DRAWDOWN_LIMIT_PCT = Decimal("30.0")   # Hard automated trading halt at 30% drawdown
 ATR_STOP_MULT = Decimal("2.5")         # 2.5x ATR initial stop-loss
 LOSS_STREAK_THRESHOLD = 3              # Reduce risk after 3 consecutive losses
 WIN_STREAK_RECOVERY = 2                # Recover risk after 2 consecutive wins
 
+# Trend Regime Filter
+MIN_ADX_TREND = 18.0                   # ADX >= 18.0 catches trend ignition and blocks chop
+
 # v2.1 Specific Enhancements
-REENTRY_COOLDOWN_BARS = 3              # 3-hour cooldown after closing a position
+REENTRY_COOLDOWN_BARS = 3              # 3-bar (12-hour) cooldown after closing a position
 ENABLE_BTC_DELTA_FILTER = True         # Require BTC bullish trend for altcoin longs
 
 # Pyramiding (Anti-Martingale)
@@ -60,6 +69,24 @@ FUNDING_8H_ESTIMATE = Decimal("0.0001")# 0.01% estimated 8h funding rate
 # Portfolio Delta Limits
 MAX_CONCURRENT_LONGS = 2
 MAX_CONCURRENT_SHORTS = 2
+
+# Dual-Regime & Range Submodule Parameters
+ENABLE_RANGE_SUBMODULE = False         # Disabled by default; toggle True for shadow/active range trading
+RANGE_RISK_PER_TRADE_PCT = Decimal("0.005") # 0.5% micro-risk per range trade
+RANGE_MAX_POSITIONS = 2                # Max 2 concurrent range positions
+RANGE_SL_ATR_MULT = Decimal("1.0")     # 1.0x ATR stop loss
+RANGE_MIN_TP_PCT = Decimal("0.010")    # 1.0% min TP distance
+RANGE_MAX_TP_PCT = Decimal("0.020")    # 2.0% max TP distance
+ENABLE_REGIME_CLASSIFIER = True        # ADX & Volatility compression gate
+
+# News Core Defensive Shield Configuration
+ENABLE_NEWS_DEFENSE = True             # Enable News Core defensive shield (Regime Guard + Position Matrix)
+NEWS_CONFIG_PROFILE = "defensive_only" # Strictly defensive (no offensive N1/N3 trading)
+ENABLE_MACRO_BLACKOUT = True           # Block entries ±15m around FOMC, CPI, NFP
+ENABLE_DEPEG_GUARD = True              # Block entries on stablecoin depeg (>0.8%)
+ENABLE_EMERGENCY_EJECT = True          # Close Long on verified CRASH_SHOCK
+ENABLE_SQUEEZE_ESCAPE = True           # Close Short on MAJOR_CATALYST
+ENABLE_RUNNER_PROTECTION = True        # Trail stop instead of ejecting if R >= 1.5R
 
 # Polling Interval
 DEFAULT_POLL_INTERVAL_SEC = 5
