@@ -32,6 +32,12 @@ reports/PAPER_TRADING_LIVE.json
 reports/PAPER_TRADING_LIVE.md
 reports/*.tmp
 reports/*.log
+v2_1/reports/*.csv
+v2_1/reports/PAPER_TRADING_LIVE_V21.json
+v2_1/reports/PAPER_TRADING_LIVE_V21.md
+v2_1/reports/*.tmp
+v2_1/reports/*.log
+scratch/
 bundle.b64
 deploy_bundle.b64
 make_installer.py
