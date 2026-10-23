@@ -27,6 +27,8 @@ wheels/
 data/
 *.parquet
 *.csv
+# Runtime state files (Paper Trader live state)
+*BOT_STATE_PERSISTENT*.json
 reports/*.csv
 reports/PAPER_TRADING_LIVE.json
 reports/PAPER_TRADING_LIVE.md
