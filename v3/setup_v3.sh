@@ -2,7 +2,7 @@
 set -e
 
 echo "=================================================="
-echo "   Установка Bybit Multi-Alpha Bot v3.0 на VPS    "
+echo "   Установка Bybit Multi-Alpha Bot v3.1 на VPS    "
 echo "   (Dynamic Universe + 4h Trend + News Shield)    "
 echo "   (Порт 8082 для параллельного A/B/C теста)     "
 echo "=================================================="

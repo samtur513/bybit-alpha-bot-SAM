@@ -85,12 +85,12 @@ CASCADE_TP2_R_MULT = Decimal("5.5")        # TP2: +5.5R (+5.5 ATR) -> Stop to +2
 CASCADE_TP1_RATIO = Decimal("0.30")        # 30% of initial qty at TP1
 CASCADE_TP2_RATIO = Decimal("0.40")        # 40% of initial qty at TP2 (Remaining 30% Runner)
 
-# RVOL & Delta OI Quantitative Filters (v3.1)
-ENABLE_RVOL_FILTER = True
-MIN_RVOL = 1.2                             # RVOL >= 1.2 volume surge
-ENABLE_DELTA_OI_FILTER = True              # Positive Delta OI confirms new money accumulation
-ENABLE_ATR_EXHAUSTION_GUARD = True
-MAX_DAILY_ATR_EXHAUSTION = 0.80            # Reject if candle has traversed >= 80% daily ATR
+# RVOL & Delta OI Quantitative Filters (v3.1 - Modular)
+ENABLE_RVOL_FILTER = False                     # Requires multi-day candle volume history
+MIN_RVOL = 1.2                                 # RVOL >= 1.2 volume surge
+ENABLE_DELTA_OI_FILTER = False                 # Requires multi-period OI history
+ENABLE_ATR_EXHAUSTION_GUARD = False
+MAX_DAILY_ATR_EXHAUSTION = 0.80                # Reject if candle has traversed >= 80% daily ATR
 
 # Pyramiding (Anti-Martingale)
 PYRAMID_TRIGGER_ATR = Decimal("2.0")   # Add +50% at +2.0 ATR profit

@@ -143,8 +143,9 @@ class UniverseScreener:
         norm_atr = (atr / price) if price > 0 else 0.0
         ker = self.calculate_efficiency_ratio(recent_closes) if recent_closes else 0.5
         rs = coin_return_24h - btc_return_24h
-        vol_ratio = (volume_24h / volume_sma_20d) if volume_sma_20d > 0 else 1.0
-        calc_rvol = rvol if rvol is not None else vol_ratio
+        vol_ratio = (volume_24h / volume_sma_20d) if (volume_sma_20d and volume_sma_20d > 0) else 1.0
+        calc_rvol = rvol if rvol is not None else ((volume_24h / volume_sma_20d) if (volume_sma_20d and volume_sma_20d > 0) else None)
+        disp_rvol = calc_rvol if calc_rvol is not None else 1.0
         atr_exhaustion = (current_candle_range / atr) if atr > 0 else 0.0
 
         # Filter 1: Liquidity & Execution
@@ -154,7 +155,7 @@ class UniverseScreener:
                 funding_rate=funding_rate, norm_atr=norm_atr, adx=adx, efficiency_ratio=ker,
                 relative_strength=rs, volume_ratio=vol_ratio, composite_score=0.0,
                 passed_filters=False, rejection_reason=f"Turnover ${turnover_24h/1e6:.1f}M < ${self.config.min_turnover_24h/1e6:.1f}M",
-                rvol=calc_rvol, delta_oi_pct=delta_oi_pct, atr_exhaustion_pct=atr_exhaustion
+                rvol=disp_rvol, delta_oi_pct=delta_oi_pct, atr_exhaustion_pct=atr_exhaustion
             )
 
         if open_interest > 0 and open_interest < self.config.min_open_interest:
@@ -163,7 +164,7 @@ class UniverseScreener:
                 funding_rate=funding_rate, norm_atr=norm_atr, adx=adx, efficiency_ratio=ker,
                 relative_strength=rs, volume_ratio=vol_ratio, composite_score=0.0,
                 passed_filters=False, rejection_reason=f"OI ${open_interest/1e6:.1f}M < ${self.config.min_open_interest/1e6:.1f}M",
-                rvol=calc_rvol, delta_oi_pct=delta_oi_pct, atr_exhaustion_pct=atr_exhaustion
+                rvol=disp_rvol, delta_oi_pct=delta_oi_pct, atr_exhaustion_pct=atr_exhaustion
             )
 
         # Filter 2: Funding Rate Sanitization
@@ -173,7 +174,7 @@ class UniverseScreener:
                 funding_rate=funding_rate, norm_atr=norm_atr, adx=adx, efficiency_ratio=ker,
                 relative_strength=rs, volume_ratio=vol_ratio, composite_score=0.0,
                 passed_filters=False, rejection_reason=f"Funding {funding_rate*100:.3f}% > {self.config.max_funding_abs*100:.3f}%",
-                rvol=calc_rvol, delta_oi_pct=delta_oi_pct, atr_exhaustion_pct=atr_exhaustion
+                rvol=disp_rvol, delta_oi_pct=delta_oi_pct, atr_exhaustion_pct=atr_exhaustion
             )
 
         # Filter 3: Minimum Volatility
@@ -183,7 +184,7 @@ class UniverseScreener:
                 funding_rate=funding_rate, norm_atr=norm_atr, adx=adx, efficiency_ratio=ker,
                 relative_strength=rs, volume_ratio=vol_ratio, composite_score=0.0,
                 passed_filters=False, rejection_reason=f"NormATR {norm_atr*100:.2f}% < {self.config.min_norm_atr*100:.2f}%",
-                rvol=calc_rvol, delta_oi_pct=delta_oi_pct, atr_exhaustion_pct=atr_exhaustion
+                rvol=disp_rvol, delta_oi_pct=delta_oi_pct, atr_exhaustion_pct=atr_exhaustion
             )
 
         # Filter 4: Trend Quality Gate
@@ -193,17 +194,17 @@ class UniverseScreener:
                 funding_rate=funding_rate, norm_atr=norm_atr, adx=adx, efficiency_ratio=ker,
                 relative_strength=rs, volume_ratio=vol_ratio, composite_score=0.0,
                 passed_filters=False, rejection_reason=f"Low trend strength (ADX={adx:.1f}, ER={ker:.2f})",
-                rvol=calc_rvol, delta_oi_pct=delta_oi_pct, atr_exhaustion_pct=atr_exhaustion
+                rvol=disp_rvol, delta_oi_pct=delta_oi_pct, atr_exhaustion_pct=atr_exhaustion
             )
 
-        # Filter 5: RVOL Filter (v3.1)
-        if self.config.enable_rvol_filter and calc_rvol < self.config.min_rvol:
+        # Filter 5: RVOL Filter (v3.1) - applied when historical volume metrics are available
+        if self.config.enable_rvol_filter and calc_rvol is not None and calc_rvol < self.config.min_rvol:
             return CoinCandidateMetric(
                 symbol=symbol, price=price, turnover_24h=turnover_24h, open_interest=open_interest,
                 funding_rate=funding_rate, norm_atr=norm_atr, adx=adx, efficiency_ratio=ker,
                 relative_strength=rs, volume_ratio=vol_ratio, composite_score=0.0,
                 passed_filters=False, rejection_reason=f"RVOL {calc_rvol:.2f} < {self.config.min_rvol:.2f}",
-                rvol=calc_rvol, delta_oi_pct=delta_oi_pct, atr_exhaustion_pct=atr_exhaustion
+                rvol=disp_rvol, delta_oi_pct=delta_oi_pct, atr_exhaustion_pct=atr_exhaustion
             )
 
         # Filter 6: Delta OI Filter (v3.1)
@@ -213,7 +214,7 @@ class UniverseScreener:
                 funding_rate=funding_rate, norm_atr=norm_atr, adx=adx, efficiency_ratio=ker,
                 relative_strength=rs, volume_ratio=vol_ratio, composite_score=0.0,
                 passed_filters=False, rejection_reason=f"Delta OI {delta_oi_pct*100:.1f}% < {self.config.min_delta_oi_pct*100:.1f}%",
-                rvol=calc_rvol, delta_oi_pct=delta_oi_pct, atr_exhaustion_pct=atr_exhaustion
+                rvol=disp_rvol, delta_oi_pct=delta_oi_pct, atr_exhaustion_pct=atr_exhaustion
             )
 
         # Filter 7: ATR Exhaustion Guard (v3.1)
@@ -223,14 +224,14 @@ class UniverseScreener:
                 funding_rate=funding_rate, norm_atr=norm_atr, adx=adx, efficiency_ratio=ker,
                 relative_strength=rs, volume_ratio=vol_ratio, composite_score=0.0,
                 passed_filters=False, rejection_reason=f"ATR Exhaustion: {atr_exhaustion*100:.1f}% >= {self.config.max_daily_atr_exhaustion*100:.1f}% daily ATR",
-                rvol=calc_rvol, delta_oi_pct=delta_oi_pct, atr_exhaustion_pct=atr_exhaustion
+                rvol=disp_rvol, delta_oi_pct=delta_oi_pct, atr_exhaustion_pct=atr_exhaustion
             )
 
         # Composite Scoring
         # Normalized score components [0.0 to 1.0 approx]
         score_trend = min(1.0, max(0.0, adx / 50.0))
         score_rs = min(1.0, max(0.0, (rs + 0.15) / 0.30))  # maps -15% to +15% RS into 0..1
-        score_vol = min(1.0, max(0.0, calc_rvol / 3.0))     # maps 0..3x RVOL
+        score_vol = min(1.0, max(0.0, disp_rvol / 3.0))     # maps 0..3x RVOL
         score_atr = min(1.0, max(0.0, norm_atr / 0.08))     # maps 0..8% normalized ATR
 
         composite = (
@@ -254,7 +255,7 @@ class UniverseScreener:
             composite_score=composite,
             passed_filters=True,
             rejection_reason=None,
-            rvol=calc_rvol,
+            rvol=disp_rvol,
             delta_oi_pct=delta_oi_pct,
             atr_exhaustion_pct=atr_exhaustion,
         )
@@ -388,7 +389,7 @@ class UniverseScreener:
                     btc_return_24h=btc_ret,
                     coin_return_24h=ret_24h,
                     volume_24h=float(item.get("volume24h", 0.0)),
-                    volume_sma_20d=float(item.get("volume24h", 1.0)),
+                    volume_sma_20d=0.0,
                 )
                 candidates.append(cand)
             except Exception:
