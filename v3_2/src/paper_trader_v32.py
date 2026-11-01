@@ -640,7 +640,7 @@ class PaperTraderV32:
                     "symbol": a.symbol,
                     "composite_score": round(a.composite_score, 2),
                     "relative_strength": round(a.relative_strength, 2),
-                    "normalized_atr": round(a.normalized_atr, 4),
+                    "normalized_atr": round(getattr(a, "norm_atr", getattr(a, "normalized_atr", 0.0)), 4),
                     "funding_rate": round(a.funding_rate, 6),
                 }
                 for a in self.screened_universe[:25]
