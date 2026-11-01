@@ -189,6 +189,7 @@ class PaperTraderV3:
             enable_auto_gearbox=ENABLE_AUTO_GEARBOX,
             enable_fast_scratch=ENABLE_FAST_SCRATCH_EXIT,
             enable_cascade_tp=ENABLE_CASCADE_TP,
+            bar_interval_ms=self.bar_interval_ms,
         )
 
         self.state_file = PERSISTENT_STATE_FILE
@@ -362,7 +363,7 @@ class PaperTraderV3:
                     .drop_duplicates("timestamp")
                     .reset_index(drop=True)
                 )
-                if len(df) >= 30:
+                if len(df) >= min(DONCHIAN_WINDOW, 50):
                     buffers[sym] = prepare_symbol_indicators(df, lookback=DONCHIAN_WINDOW)
             except Exception as e:
                 logger.warning(f"Failed to fetch history for {sym}: {e}")

@@ -302,7 +302,7 @@ HTML_PAGE = """<!DOCTYPE html>
                 <div class="badge" id="news-shield-status">🛡️ Новостной Щит: Defensive Only</div>
                 <div class="badge" id="btc-filter-status">BTC Тренд: --</div>
                 <div class="badge" id="universe-badge">🌐 Dynamic Universe: 25 монет</div>
-                <div class="countdown-box">4H Бар: <span id="candle-timer">--</span></div>
+                <div class="countdown-box">1H Бар: <span id="candle-timer">--</span></div>
             </div>
         </header>
 
@@ -335,7 +335,7 @@ HTML_PAGE = """<!DOCTYPE html>
 
         <!-- Open Positions -->
         <div class="section-header">
-            <span>Открытые позиции (4h Trend Breakout + Cascade TP & Fast-Scratch)</span>
+            <span>Открытые позиции (1h Trend Breakout + Cascade TP & Fast-Scratch)</span>
         </div>
         <table>
             <thead>
@@ -409,9 +409,9 @@ HTML_PAGE = """<!DOCTYPE html>
                 <tr>
                     <th>Монета</th>
                     <th>Текущая цена</th>
-                    <th>До Long (+30b)</th>
-                    <th>До Short (-30b)</th>
-                    <th>ATR (4h)</th>
+                    <th>До Long (Breakout)</th>
+                    <th>До Short (Breakdown)</th>
+                    <th>ATR (1h)</th>
                     <th>Объём к SMA</th>
                     <th>Тренд EMA</th>
                     <th>Статус</th>

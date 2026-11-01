@@ -22,6 +22,7 @@ import numpy as np
 from .kelly_sizing import KellyRiskManager, KellySizingResult
 from .multi_scanner import MultiCoinScanner, CoinCandidate
 from .pyramiding_engine import PyramidingEngine, ActivePosition, PyramidingAction
+from .config import BAR_INTERVAL_MS
 
 logger = logging.getLogger("CoreV3Engine")
 
@@ -85,6 +86,7 @@ class CoreV3Engine:
         tp2_r_mult: Decimal = Decimal("3.0"),
         tp1_ratio: Decimal = Decimal("0.30"),
         tp2_ratio: Decimal = Decimal("0.40"),
+        bar_interval_ms: int = BAR_INTERVAL_MS,
     ):
         self.initial_capital = initial_capital
         self.realized_equity = initial_capital
@@ -93,6 +95,7 @@ class CoreV3Engine:
         self.trading_halted = False
         self.bar_counter = 0
         self.last_bar_timestamp = 0
+        self.bar_interval_ms = bar_interval_ms
         self.events: List[Dict[str, Any]] = []
 
         self.instrument_rules = instrument_rules or {}
@@ -418,7 +421,7 @@ class CoreV3Engine:
                 ):
                     self._manage(
                         sym,
-                        timestamp + 14400000,
+                        timestamp + self.bar_interval_ms,
                         Decimal(str(b["high"])),
                         Decimal(str(b["low"])),
                         current[sym],
@@ -432,7 +435,7 @@ class CoreV3Engine:
         if self.trading_halted:
             for sym in list(self.open_positions):
                 if sym in next_open_prices:
-                    self._reduce(sym, self.open_positions[sym].current_qty, next_open_prices[sym], timestamp + 14400000, "DRAWDOWN_HALT")
+                    self._reduce(sym, self.open_positions[sym].current_qty, next_open_prices[sym], timestamp + self.bar_interval_ms, "DRAWDOWN_HALT")
             return
 
         # Scanner breakout evaluation
@@ -515,7 +518,7 @@ class CoreV3Engine:
                     initial_atr=cand.atr,
                     highest_price=price,
                     lowest_price=price,
-                    entry_time=timestamp + 14400000,
+                    entry_time=timestamp + self.bar_interval_ms,
                     original_entry=price,
                     entry_fees=fee,
                     bars_held=0,
@@ -525,7 +528,7 @@ class CoreV3Engine:
                 break
 
         eq = self._observe({**current, **next_open_prices})
-        self.equity_history.append((timestamp + 14400000, eq))
+        self.equity_history.append((timestamp + self.bar_interval_ms, eq))
         self.equity_history = self.equity_history[-10000:]
 
     def update_position_stop(self, symbol: str, new_stop: Decimal, reason: str = "") -> bool:

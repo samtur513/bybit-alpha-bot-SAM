@@ -3,7 +3,7 @@ set -e
 
 echo "=================================================="
 echo "   Установка Bybit Multi-Alpha Bot v3.1 на VPS    "
-echo "   (Dynamic Universe + 4h Trend + News Shield)    "
+echo "   (Dynamic Universe + 1h Trend + News Shield)    "
 echo "   (Порт 8082 для параллельного A/B/C теста)     "
 echo "=================================================="
 
@@ -56,7 +56,7 @@ fi
 echo "[4/5] Регистрация автозапуска systemd (bybit-bot-v3.service)..."
 cat << EOF_SERVICE > /etc/systemd/system/bybit-bot-v3.service
 [Unit]
-Description=Bybit Multi-Alpha Dynamic Universe Engine v3.0 (Port 8082)
+Description=Bybit Multi-Alpha Dynamic Universe Engine v3.1 1h (Port 8082)
 After=network.target
 
 [Service]

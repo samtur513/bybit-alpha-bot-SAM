@@ -39,16 +39,16 @@ SYMBOLS = DEFAULT_SYMBOLS
 # Dynamic Universe Screener Configuration (v3 Feature)
 ENABLE_DYNAMIC_UNIVERSE = True
 UNIVERSE_TOP_N = 25                    # Keep active top 25 high-momentum coins
-SCREENER_INTERVAL_HOURS = 4            # Re-rank universe every 4 hours (aligned with 4h candle close)
+SCREENER_INTERVAL_HOURS = 2            # Re-rank universe every 2 hours (aligned with 1h structure)
 MIN_24H_TURNOVER = 25_000_000.0        # $25M USDT min 24h turnover
 MIN_OPEN_INTEREST = 5_000_000.0        # $5M USDT min open interest
 MAX_FUNDING_RATE_ABS = 0.0005          # Max |funding| 0.05% / 8h
 MIN_NORM_ATR = 0.020                   # 2.0% minimum normalized ATR
 
-# Timeframe & Strategy Architecture (I1: 4h Trend Following)
-CANDLE_INTERVAL = "240"                # 4-hour candles ("240" in Bybit API)
-BAR_INTERVAL_MS = 4 * 3600 * 1000      # 14,400,000 ms
-DONCHIAN_WINDOW = 30                   # 30 bars (120 hours on 4h timeframe)
+# Timeframe & Strategy Architecture (I1: 1h Trend Breakout)
+CANDLE_INTERVAL = "60"                 # 1-hour candles ("60" in Bybit API)
+BAR_INTERVAL_MS = 1 * 3600 * 1000      # 3,600,000 ms
+DONCHIAN_WINDOW = 120                  # 120 bars (120 hours / 5 days Donchian channel on 1h)
 
 # Core Risk & Sizing (Champion 2.0% Half-Kelly)
 INITIAL_CAPITAL = Decimal("300.0")
