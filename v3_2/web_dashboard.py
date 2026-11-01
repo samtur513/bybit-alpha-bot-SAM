@@ -75,6 +75,9 @@ HTML_PAGE = """<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bybit Multi-Alpha v3.2 (Dual-Regime) | Port 8083</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -516,43 +519,50 @@ HTML_PAGE = """<!DOCTYPE html>
 
 
 class DashboardHandler(http.server.BaseHTTPRequestHandler):
+    def _send_payload(self, payload: bytes, content_type: str = "text/html; charset=utf-8", status: int = 200):
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(payload)
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
 
-        if path == "/":
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(HTML_PAGE.encode("utf-8"))
+        if path in ("/", "/index.html"):
+            self._send_payload(HTML_PAGE.encode("utf-8"), "text/html; charset=utf-8")
+
+        elif path == "/favicon.ico":
+            self._send_payload(b"", "image/x-icon", 204)
 
         elif path == "/api/status":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            if GLOBAL_TRADER and GLOBAL_TRADER.last_status_cache:
-                self.wfile.write(json.dumps(GLOBAL_TRADER.last_status_cache, default=str).encode("utf-8"))
+            if GLOBAL_TRADER and getattr(GLOBAL_TRADER, "last_status_cache", None):
+                payload = json.dumps(GLOBAL_TRADER.last_status_cache, default=str).encode("utf-8")
+            elif LIVE_STATUS_FILE.exists():
+                try:
+                    payload = LIVE_STATUS_FILE.read_bytes()
+                except Exception:
+                    payload = b"{}"
             else:
-                self.wfile.write(json.dumps({"status": "starting", "capital": 300.0, "portfolio_equity": 300.0}).encode("utf-8"))
+                payload = json.dumps({"status": "starting", "capital": 300.0, "portfolio_equity": 300.0}).encode("utf-8")
+            self._send_payload(payload, "application/json; charset=utf-8")
 
         elif path == "/api/state":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
             if PERSISTENT_STATE_FILE.exists():
-                self.wfile.write(PERSISTENT_STATE_FILE.read_bytes())
+                payload = PERSISTENT_STATE_FILE.read_bytes()
             else:
-                self.wfile.write(b"{}")
+                payload = b"{}"
+            self._send_payload(payload, "application/json; charset=utf-8")
 
         elif path == "/api/logs":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps(list(LOG_BUFFER)).encode("utf-8"))
+            payload = json.dumps(list(LOG_BUFFER)).encode("utf-8")
+            self._send_payload(payload, "application/json; charset=utf-8")
 
         else:
-            self.send_response(404)
-            self.end_headers()
+            self._send_payload(b"Not Found", "text/plain; charset=utf-8", 404)
 
     def log_message(self, format, *args):
         pass
