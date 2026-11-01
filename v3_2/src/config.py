@@ -78,7 +78,7 @@ RANGE_COOLDOWN_BARS = 3
 
 # Regime Classifier Thresholds
 ADX_REGIME_THRESHOLD = 20.0
-BB_WIDTH_PERCENTILE_THRESHOLD = 0.40        # <= 40th percentile = compression
+BB_WIDTH_PERCENTILE_THRESHOLD = 40.0        # <= 40th percentile = compression
 
 # News Core Defense: DISABLED for Pure Dual-Regime test
 ENABLE_NEWS_DEFENSE = False

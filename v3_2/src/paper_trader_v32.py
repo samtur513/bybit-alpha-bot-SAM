@@ -204,8 +204,8 @@ class PaperTraderV32:
 
         # 3. Regime Classifier
         self.regime_classifier = MarketRegimeClassifier(
-            adx_threshold=ADX_REGIME_THRESHOLD,
-            bb_width_percentile_threshold=BB_WIDTH_PERCENTILE_THRESHOLD,
+            adx_trend_threshold=ADX_REGIME_THRESHOLD,
+            bbw_compression_percentile=BB_WIDTH_PERCENTILE_THRESHOLD,
         )
 
         self.candle_buffers: Dict[str, pd.DataFrame] = {}
@@ -252,9 +252,9 @@ class PaperTraderV32:
             # Restore Trend Engine
             trend_data = data.get("trend_engine", {})
             if trend_data:
-                self.trend_engine.from_dict(trend_data)
+                self.trend_engine.load_from_dict(trend_data)
             elif "realized_equity" in data:
-                self.trend_engine.from_dict(data)
+                self.trend_engine.load_from_dict(data)
 
             # Restore Range Engine
             range_data = data.get("range_engine", {})
