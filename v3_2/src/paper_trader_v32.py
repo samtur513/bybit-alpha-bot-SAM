@@ -10,12 +10,14 @@ Combines:
 """
 
 import collections
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_FLOOR
 import json
 import logging
 import os
 from pathlib import Path
+import queue
 import threading
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -662,62 +664,89 @@ class PaperTraderV32:
 
     def run_daemon(self, max_iterations: Optional[int] = None) -> None:
         logger.info("Connecting to Bybit WebSocket stream for Dual-Regime v3.2...")
-        self.stream.connect()
-
-        logger.info("Fetching historical 1h klines...")
-        self.candle_buffers = self._fetch_history()
-        for sym, df in self.candle_buffers.items():
-            if len(df) > 0:
-                self.last_processed_bar_ts[sym] = int(df.iloc[-1]["timestamp"])
-
-        self.ready = len(self.candle_buffers) >= len(self.symbols) * 0.7
-        logger.info(f"Dual-Regime v3.2 Daemon ready ({len(self.candle_buffers)}/{len(self.symbols)} assets).")
-
+        self.stream.start()
         iterations = 0
-        last_export = time.time()
+        last_export = 0.0
 
-        try:
-            while max_iterations is None or iterations < max_iterations:
-                time.sleep(self.poll_interval)
-                now = time.time()
+        with ThreadPoolExecutor(max_workers=1) as worker:
+            history = worker.submit(self._fetch_history)
+            try:
+                while max_iterations is None or iterations < max_iterations:
+                    if self.stream.overflow.is_set():
+                        raise RuntimeError("WebSocket queue overflow or rejected subscription")
+                    if history is not None and history.done():
+                        with self.lock:
+                            self.candle_buffers = history.result()
+                            for sym, df in self.candle_buffers.items():
+                                if len(df) > 0:
+                                    self.last_processed_bar_ts[sym] = int(df.iloc[-1]["timestamp"])
+                            self.batches.clear()
+                            self.ready = len(self.candle_buffers) >= len(self.symbols) * 0.7
+                            btc_df = self.candle_buffers.get("BTCUSDT")
+                            if btc_df is not None and len(btc_df) > 0:
+                                last = btc_df.iloc[-1]
+                                c = float(last["close"])
+                                ef = float(last.get("ema_fast", 0))
+                                es = float(last.get("ema_slow", 0))
+                                if ef > es and c > ef:
+                                    self.btc_trend_status = "BULLISH"
+                                elif ef < es and c < ef:
+                                    self.btc_trend_status = "BEARISH"
+                                else:
+                                    self.btc_trend_status = "NEUTRAL"
+                            logger.info(f"Dual-Regime v3.2 ready with {len(self.candle_buffers)}/{len(self.symbols)} assets.")
+                        history = None
 
-                # Process queue
-                while True:
-                    event = self.stream.get_event()
-                    if not event:
-                        break
-                    topic = event.get("topic", "")
-                    data = event.get("data", [])
-                    if "kline" in topic:
-                        parts = topic.split(".")
-                        sym = parts[-1]
-                        for kline in data:
-                            if kline.get("confirm", False):
-                                self._on_bar(sym, kline)
-                            else:
-                                with self.lock:
-                                    self.prices[sym] = Decimal(str(kline["close"]))
-                                    self.price_times[sym] = time.monotonic()
-                                    self.price_server_times[sym] = int(kline.get("timestamp", event.get("ts", 0)))
-                    elif "tickers" in topic:
-                        sym = topic.split(".")[-1]
-                        last_p = data.get("lastPrice")
-                        if last_p:
-                            with self.lock:
-                                self.prices[sym] = Decimal(str(last_p))
-                                self.price_times[sym] = time.monotonic()
-                                self.price_server_times[sym] = int(event.get("ts", 0))
+                    try:
+                        kind, sym, ts, data, received = self.stream.events.get(timeout=0.2)
+                    except queue.Empty:
+                        kind = None
 
-                self._signals()
+                    with self.lock:
+                        if kind == "reset":
+                            self.ready = False
+                            self.prices.clear()
+                            self.price_times.clear()
+                            self.price_server_times.clear()
+                            if history is None:
+                                history = worker.submit(self._fetch_history)
+                        elif (
+                            kind == "price"
+                            and time.monotonic() - received < 5
+                            and abs(time.time() * 1000 - ts) < 15000
+                        ):
+                            price = Decimal(str(data))
+                            if price.is_finite() and price > 0:
+                                self.prices[sym] = price
+                                self.price_times[sym] = received
+                                self.price_server_times[sym] = ts
+                                self.trend_engine.process_price_event(ts, self.get_live_prices())
+                        elif kind == "bar" and self.ready:
+                            self._on_bar(sym, data)
 
-                if now - last_export >= self.poll_interval:
-                    self.poll_cycle()
-                    last_export = now
+                        if not self.ready and history is None:
+                            history = worker.submit(self._fetch_history)
 
-                iterations += 1
-        finally:
-            self.stream.close()
-            self.save_persistent_state()
+                        self._signals()
+
+                        if self.trend_engine.events:
+                            self.save_persistent_state()
+                            for event in self.trend_engine.events:
+                                self.notifier.notify(event)
+                            self.trend_engine.events.clear()
+
+                        now = time.monotonic()
+                        if now - last_export >= self.poll_interval:
+                            try:
+                                self.poll_cycle()
+                            except Exception as e:
+                                logger.error(f"PaperTraderV32: Error during poll_cycle: {e}", exc_info=True)
+                            last_export = now
+
+                    iterations += 1
+            finally:
+                self.stream.close()
+                self.save_persistent_state()
 
     def stop(self) -> None:
         self.stream.close()
