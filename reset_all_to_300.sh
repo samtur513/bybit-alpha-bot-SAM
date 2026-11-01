@@ -94,6 +94,9 @@ rm -f "$APP_DIR/v3/reports/PAPER_TRADING_LIVE_V3.json" "$APP_DIR/v3/reports/PAPE
 
 # 5. Проверка systemd служб и зависимостей
 echo "[5/6] Регистрация и проверка systemd служб..."
+if [ ! -f "/etc/systemd/system/bybit-bot.service" ] && [ -f "$APP_DIR/setup.sh" ]; then
+    bash "$APP_DIR/setup.sh" > /dev/null 2>&1 || true
+fi
 if [ -f "$APP_DIR/v2_1/setup_v21.sh" ]; then
     bash "$APP_DIR/v2_1/setup_v21.sh" > /dev/null 2>&1 || true
 fi
