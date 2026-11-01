@@ -127,11 +127,19 @@ class PaperTraderV3:
         poll_interval_seconds: int = 5,
         client: Optional[BybitClient] = None,
         bar_interval_ms: int = BAR_INTERVAL_MS,
+        enable_news_defense: Optional[bool] = None,
+        state_file: Optional[Path] = None,
+        live_status_file: Optional[Path] = None,
+        live_md_file: Optional[Path] = None,
     ):
         self.initial_capital = initial_capital
         self.poll_interval = poll_interval_seconds
         self.client = client or BybitClient(timeout=10, max_retries=3)
         self.bar_interval_ms = bar_interval_ms
+        self.state_file = state_file or PERSISTENT_STATE_FILE
+        self.live_status_file = live_status_file or LIVE_STATUS_FILE
+        self.live_md_file = live_md_file or LIVE_MD_FILE
+        self.enable_news_defense = ENABLE_NEWS_DEFENSE if enable_news_defense is None else enable_news_defense
         self.lock = threading.RLock()
         self.instrument_rules: Dict[str, Dict[str, Decimal]] = {}
         self.screener_config = ScreenerConfig(
@@ -193,7 +201,6 @@ class PaperTraderV3:
             bar_interval_ms=self.bar_interval_ms,
         )
 
-        self.state_file = PERSISTENT_STATE_FILE
         self.candle_buffers: Dict[str, pd.DataFrame] = {}
         self.last_processed_bar_ts: Dict[str, int] = {s: 0 for s in self.symbols}
         self.prices: Dict[str, Decimal] = {}
@@ -210,7 +217,7 @@ class PaperTraderV3:
         self.notifier = TelegramNotifier()
 
         # News Core Defensive Shield
-        if ENABLE_NEWS_DEFENSE:
+        if self.enable_news_defense:
             cfg = NewsConfig.defensive_only()
             cfg.enable_emergency_eject = ENABLE_EMERGENCY_EJECT
             cfg.enable_squeeze_escape = ENABLE_SQUEEZE_ESCAPE
@@ -229,6 +236,7 @@ class PaperTraderV3:
         else:
             self.news_core = None
             self.news_streamer = None
+            logger.info("News Core Defensive Shield disabled for this instance.")
 
         self.recent_news_events = deque(maxlen=25)
         self.recent_news_events.append({
@@ -804,11 +812,11 @@ class PaperTraderV3:
 
         self.last_status_cache = status_data
 
-        REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+        self.live_status_file.parent.mkdir(parents=True, exist_ok=True)
         try:
-            atomic_json(LIVE_STATUS_FILE, status_data)
+            atomic_json(self.live_status_file, status_data)
         except Exception as e:
-            logger.warning(f"PaperTraderV3: Failed to write {LIVE_STATUS_FILE}: {e}")
+            logger.warning(f"PaperTraderV3: Failed to write {self.live_status_file}: {e}")
 
         # Markdown status file
         news_shield_str = "🛡️ **АКТИВЕН** (Defensive Only: Eject, Squeeze, Runner, Regime Guard)" if getattr(self, "news_core", None) else "⚪ Отключен"
@@ -846,9 +854,9 @@ class PaperTraderV3:
             md += "*Нет открытых позиций. Сканер активен на базе Top Bybit Universe с фильтром тренда BTC и кулдауном 3 бара.*\n"
 
         try:
-            LIVE_MD_FILE.write_text(md, encoding="utf-8")
+            self.live_md_file.write_text(md, encoding="utf-8")
         except Exception as e:
-            logger.warning(f"PaperTraderV3: Failed to write {LIVE_MD_FILE}: {e}")
+            logger.warning(f"PaperTraderV3: Failed to write {self.live_md_file}: {e}")
 
         try:
             self.save_persistent_state()

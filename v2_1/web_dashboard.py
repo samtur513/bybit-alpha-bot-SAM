@@ -1,13 +1,18 @@
 """
-Live Web Dashboard & Paper Trading Server v2.1 (Port 8081).
-Features:
-- Port 8081 for parallel side-by-side A/B testing with v2.0
-- Live BTC Delta Market Status badge
-- Cooldown indicators in radar table
-- REST API: /api/status, /api/state, /api/logs
+Live Web Dashboard & Paper Trading Server v3.1 Pure Quant (Port 8081).
+A/B Test Configuration:
+- Exact same quantitative alpha engine as v3.1:
+  * Dynamic Universe Selection (400+ Bybit Linear Perpetuals ranked by Composite Momentum Score)
+  * 1-Hour Donchian Breakout (120-bar lookback / 5-day channel)
+  * Auto-Gearbox Drawdown Risk Stepping (Gear 3, Gear 2, Gear 1)
+  * Half-Kelly dynamic position sizing
+  * Cascade Partial TP (TP1 +3.5 ATR, TP2 +5.5 ATR, Runner trailing) & Fast-Scratch exit
+- NEWS CORE DEFENSIVE SHIELD: DISABLED (Pure Quantitative Benchmark)
+- Dedicated Web Monitor on Port 8081
 """
 
 import collections
+from datetime import datetime, timezone
 from decimal import Decimal
 import http.server
 import json
@@ -28,16 +33,21 @@ if sys.platform == "win32":
         pass
 
 BASE_DIR = Path(__file__).resolve().parent
-PARENT_DIR = BASE_DIR.parent
-if str(PARENT_DIR) not in sys.path:
-    sys.path.insert(0, str(PARENT_DIR))
-if str(BASE_DIR) not in sys.path:
-    sys.path.insert(0, str(BASE_DIR))
+REPO_ROOT = BASE_DIR.parent
+for p in [str(REPO_ROOT), str(BASE_DIR)]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
-from v2_1.src.paper_trader_v2 import PaperTraderV21
-from v2_1.src.config import LIVE_STATUS_FILE, PERSISTENT_STATE_FILE, PORT
+from v3.src.paper_trader_v3 import PaperTraderV3
 
-LOG_BUFFER = collections.deque(maxlen=250)
+PORT = 8081
+REPORTS_DIR = BASE_DIR / "reports"
+PERSISTENT_STATE_FILE = REPORTS_DIR / "BOT_STATE_PERSISTENT_V21.json"
+LIVE_STATUS_FILE = REPORTS_DIR / "PAPER_TRADING_LIVE_V21.json"
+LIVE_MD_FILE = REPORTS_DIR / "PAPER_TRADING_LIVE_V21.md"
+
+LOG_BUFFER = collections.deque(maxlen=300)
+
 
 class BufferHandler(logging.Handler):
     def emit(self, record):
@@ -46,6 +56,7 @@ class BufferHandler(logging.Handler):
             LOG_BUFFER.append(msg)
         except Exception:
             pass
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -56,30 +67,30 @@ buf_handler = BufferHandler()
 buf_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
 root_logger.addHandler(buf_handler)
 
-logger = logging.getLogger("WebDashboardV21")
-GLOBAL_TRADER: PaperTraderV21 = None
+logger = logging.getLogger("WebDashboardV3PureQuant")
+GLOBAL_TRADER: PaperTraderV3 = None
 
 HTML_PAGE = """<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bybit Multi-Alpha v2.1 | A/B Testing Dashboard</title>
+    <title>Bybit Multi-Alpha v3.1 (Pure Quant) | Port 8081</title>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg-dark: #0a0e17;
-            --bg-card: #121826;
-            --bg-card-hover: #1a2235;
+            --bg-dark: #080c14;
+            --bg-card: #0f172a;
+            --bg-card-hover: #1e293b;
             --accent-cyan: #00f2fe;
-            --accent-blue: #4facfe;
-            --accent-green: #00e676;
-            --accent-red: #ff3366;
-            --accent-yellow: #ffd600;
-            --accent-purple: #b388ff;
-            --text-main: #f0f4fc;
-            --text-muted: #8b9bb4;
-            --border: #1f293d;
+            --accent-blue: #38bdf8;
+            --accent-green: #10b981;
+            --accent-red: #f43f5e;
+            --accent-yellow: #f59e0b;
+            --accent-purple: #a855f7;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --border: #1e293b;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -88,7 +99,7 @@ HTML_PAGE = """<!DOCTYPE html>
             font-family: 'Inter', sans-serif;
             padding: 24px;
         }
-        .container { max-width: 1400px; margin: 0 auto; }
+        .container { max-width: 1480px; margin: 0 auto; }
         header {
             display: flex;
             justify-content: space-between;
@@ -97,52 +108,51 @@ HTML_PAGE = """<!DOCTYPE html>
             border-bottom: 1px solid var(--border);
             margin-bottom: 24px;
         }
-        .title-block h1 {
-            font-size: 26px;
+        .header-title h1 {
+            font-size: 24px;
             font-weight: 800;
-            background: linear-gradient(135deg, var(--accent-purple), var(--accent-cyan));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
             display: flex;
             align-items: center;
             gap: 12px;
         }
-        .tag-ab {
-            background: rgba(179, 136, 255, 0.15);
-            border: 1px solid var(--accent-purple);
-            color: var(--accent-purple);
+        .header-title .tag {
             font-size: 11px;
-            font-weight: 700;
+            background: linear-gradient(135deg, #475569, #334155);
             padding: 4px 10px;
             border-radius: 6px;
+            letter-spacing: 0.5px;
             text-transform: uppercase;
+        }
+        .header-title p {
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-top: 4px;
         }
         .header-meta {
             display: flex;
-            gap: 16px;
+            gap: 10px;
             align-items: center;
         }
-        .market-filter-badge {
-            background: #151d2f;
-            border: 1px solid var(--border);
-            padding: 8px 16px;
+        .badge {
+            padding: 6px 12px;
             border-radius: 8px;
-            font-size: 13px;
+            font-size: 12px;
             font-weight: 600;
-            color: var(--text-main);
-        }
-        .countdown-box {
             background: var(--bg-card);
             border: 1px solid var(--border);
-            padding: 8px 16px;
-            border-radius: 8px;
+        }
+        .countdown-box {
             font-family: 'JetBrains Mono', monospace;
-            font-size: 14px;
-            color: var(--accent-yellow);
+            font-size: 13px;
+            color: var(--accent-cyan);
+            background: rgba(0, 242, 254, 0.08);
+            border: 1px solid rgba(0, 242, 254, 0.2);
+            padding: 6px 12px;
+            border-radius: 8px;
         }
         .metrics-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 16px;
             margin-bottom: 24px;
         }
@@ -151,205 +161,288 @@ HTML_PAGE = """<!DOCTYPE html>
             border: 1px solid var(--border);
             border-radius: 12px;
             padding: 16px 20px;
-            transition: transform 0.2s;
         }
-        .metric-card:hover { transform: translateY(-2px); border-color: var(--border-hover); }
-        .metric-label {
+        .metric-title {
             font-size: 12px;
             color: var(--text-muted);
-            text-transform: uppercase;
             font-weight: 600;
-            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
         .metric-value {
-            font-family: 'JetBrains Mono', monospace;
             font-size: 24px;
-            font-weight: 700;
+            font-weight: 800;
+            font-family: 'JetBrains Mono', monospace;
+            margin-top: 6px;
         }
         .val-green { color: var(--accent-green); }
         .val-red { color: var(--accent-red); }
         .val-cyan { color: var(--accent-cyan); }
         .val-yellow { color: var(--accent-yellow); }
-        
-        .section-title {
-            font-size: 18px;
+
+        .two-col-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 24px;
+        }
+        @media (max-width: 1024px) {
+            .two-col-grid { grid-template-columns: 1fr; }
+        }
+        .card-box {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+        }
+        .section-header {
+            font-size: 15px;
             font-weight: 700;
-            margin-bottom: 16px;
+            margin-bottom: 14px;
             display: flex;
+            justify-content: space-between;
             align-items: center;
-            gap: 8px;
+        }
+        .section-header .sub-header {
+            font-size: 12px;
+            color: var(--text-muted);
+            font-weight: normal;
         }
         table {
             width: 100%;
             border-collapse: collapse;
-            background: var(--bg-card);
-            border-radius: 12px;
-            overflow: hidden;
-            border: 1px solid var(--border);
+            font-size: 13px;
             margin-bottom: 24px;
         }
-        th, td {
-            padding: 12px 16px;
-            text-align: left;
-            border-bottom: 1px solid var(--border);
-            font-size: 13px;
-        }
         th {
-            background: #161e31;
+            text-align: left;
+            padding: 10px 14px;
+            background: rgba(15, 23, 42, 0.6);
             color: var(--text-muted);
-            font-weight: 600;
-            text-transform: uppercase;
             font-size: 11px;
-            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            border-bottom: 1px solid var(--border);
+        }
+        td {
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--border);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
         }
         tr:hover { background: var(--bg-card-hover); }
         .pos-badge {
-            display: inline-block;
-            padding: 3px 8px;
+            padding: 4px 8px;
             border-radius: 4px;
-            font-weight: 700;
             font-size: 11px;
+            font-weight: 700;
         }
-        .badge-long { background: rgba(0, 230, 118, 0.15); color: var(--accent-green); }
-        .badge-short { background: rgba(255, 51, 102, 0.15); color: var(--accent-red); }
-        .badge-cooldown { background: rgba(255, 214, 0, 0.15); color: var(--accent-yellow); font-size: 10px; padding: 2px 6px; border-radius: 4px; }
+        .badge-long { background: rgba(16, 185, 129, 0.15); color: var(--accent-green); border: 1px solid rgba(16, 185, 129, 0.3); }
+        .badge-short { background: rgba(244, 63, 94, 0.15); color: var(--accent-red); border: 1px solid rgba(244, 63, 94, 0.3); }
+        .badge-cooldown { background: rgba(245, 158, 11, 0.15); color: var(--accent-yellow); font-size: 10px; padding: 2px 6px; border-radius: 4px; }
+        .badge-pass { background: rgba(16, 185, 129, 0.2); color: var(--accent-green); padding: 2px 6px; border-radius: 4px; font-weight: 700; }
+        .badge-rej { background: rgba(244, 63, 94, 0.2); color: var(--accent-red); padding: 2px 6px; border-radius: 4px; font-weight: 700; }
+
         .footer-note {
-            text-align: center;
-            color: var(--text-muted);
-            font-size: 12px;
             margin-top: 30px;
+            text-align: center;
+            font-size: 12px;
+            color: var(--text-muted);
         }
     </style>
 </head>
 <body>
     <div class="container">
         <header>
-            <div class="title-block">
-                <h1>Bybit Multi-Alpha v2.1 <span class="tag-ab">A/B Эксперимент</span></h1>
-                <p style="color: var(--text-muted); font-size: 13px; margin-top: 4px;">Фильтр дельты BTC • Новостной щит v1.1 • 4h Таймфрейм • Комиссия MNT 0.09% • Порт 8081</p>
+            <div class="header-title">
+                <h1>Bybit Multi-Alpha v3.1 (Pure Quant) <span class="tag">Порт 8081</span></h1>
+                <p>Параллельный A/B тест: 1h Dynamic Universe 400+ • Auto-Gearbox • Без Новостного Щита</p>
             </div>
             <div class="header-meta">
-                <div class="market-filter-badge" id="news-shield-status" style="background: rgba(0, 229, 255, 0.12); color: var(--accent-cyan); border-color: rgba(0, 229, 255, 0.3);">🛡️ Новостной Щит: Активен</div>
-                <div class="market-filter-badge" id="btc-filter-status">Загрузка тренда BTC...</div>
-                <div class="countdown-box">До 4h свечи: <span id="candle-timer">--:--</span></div>
+                <div class="badge" id="gearbox-badge">⚙️ Риск: Gear 3 (2.0%)</div>
+                <div class="badge" style="background:#1e1e2d; border-color:#3b3b54; color:#94a3b8;">⚪ Новостной Щит: Отключён (Pure Quant)</div>
+                <div class="badge" id="btc-filter-status">BTC Тренд: --</div>
+                <div class="badge" id="universe-badge">🌐 Dynamic Universe: 25 монет</div>
+                <div class="countdown-box">1H Бар: <span id="candle-timer">--</span></div>
             </div>
         </header>
 
         <div class="metrics-grid">
             <div class="metric-card">
-                <div class="metric-label">Текущий Капитал</div>
-                <div class="metric-value val-cyan" id="metric-capital">$300.00</div>
+                <div class="metric-title">Капитал (USDT)</div>
+                <div class="metric-value" id="metric-capital">$300.00</div>
             </div>
             <div class="metric-card">
-                <div class="metric-label">Чистый PnL</div>
-                <div class="metric-value val-green" id="metric-pnl">+$0.00</div>
+                <div class="metric-title">Чистый PnL</div>
+                <div class="metric-value" id="metric-pnl">$0.00</div>
             </div>
             <div class="metric-card">
-                <div class="metric-label">Макс. Просадка</div>
-                <div class="metric-value val-yellow" id="metric-dd">0.00%</div>
+                <div class="metric-title">Просадка (Max DD)</div>
+                <div class="metric-value" id="metric-dd">0.00%</div>
             </div>
             <div class="metric-card">
-                <div class="metric-label">Винрейт</div>
+                <div class="metric-title">Винрейт</div>
                 <div class="metric-value" id="metric-wr">0.0%</div>
             </div>
             <div class="metric-card">
-                <div class="metric-label">Открытых Позиций</div>
-                <div class="metric-value val-yellow" id="metric-open-count">0 / 4</div>
+                <div class="metric-title">Открытых позиций</div>
+                <div class="metric-value" id="metric-open-count">0 / 4</div>
             </div>
             <div class="metric-card">
-                <div class="metric-label">Закрытых Сделок</div>
+                <div class="metric-title">Сделок завершено</div>
                 <div class="metric-value" id="metric-trades-count">0</div>
             </div>
         </div>
 
-        <div class="section-title">📊 Открытые позиции (v2.1)</div>
-        <table id="positions-table">
+        <!-- Open Positions -->
+        <div class="section-header">
+            <span>Открытые позиции (1h Trend Breakout + Cascade TP & Fast-Scratch)</span>
+        </div>
+        <table>
             <thead>
                 <tr>
                     <th>Монета</th>
-                    <th>Сторона</th>
+                    <th>Направление</th>
                     <th>Объём</th>
                     <th>Вход ($)</th>
                     <th>Текущая ($)</th>
                     <th>Стоп ($)</th>
                     <th>Unr. PnL ($)</th>
-                    <th>Статус</th>
+                    <th>Статус / TP</th>
                 </tr>
             </thead>
             <tbody id="positions-body">
-                <tr><td colspan="8" style="text-align:center; color: var(--text-muted);">Нет открытых позиций. Сканер активен.</td></tr>
+                <tr><td colspan="8" style="text-align:center; color: var(--text-muted);">Загрузка открытых позиций...</td></tr>
             </tbody>
         </table>
 
-        <div class="section-title">🎯 Радар рынка (18 монет Bybit)</div>
-        <table id="radar-table">
+        <!-- Two Column: A/B Mode Info & Dynamic Screener -->
+        <div class="two-col-grid">
+            <div class="card-box">
+                <div class="section-header">
+                    <span>⚙️ Профиль A/B Тестирования (Порт 8081 vs 8082)</span>
+                    <span class="sub-header">Чистый количественный режим</span>
+                </div>
+                <div style="background: rgba(15, 23, 42, 0.8); border: 1px solid var(--border); border-radius: 8px; padding: 16px; font-size: 13px; line-height: 1.6; color: var(--text-muted);">
+                    <div style="color: var(--accent-cyan); font-weight: 700; margin-bottom: 8px;">🔬 Цель эксперимента:</div>
+                    В данной версии отключён блок новостного защитного щита (News Core Shield) для прямого изолированного сравнения:
+                    <ul style="margin: 10px 0 10px 20px;">
+                        <li><b style="color:var(--text-main);">Порт 8081 (Здесь)</b>: Чистый 1h Donchian + Динамический Скринер (400+ монет) + Auto-Gearbox + Half-Kelly.</li>
+                        <li><b style="color:var(--text-main);">Порт 8082</b>: Идентичная стратегия + Новостной Щит (Emergency Eject, Squeeze Escape, LiveNewsStreamer).</li>
+                    </ul>
+                    Позволяет точно измерить, сколько прибыли и просадки сохраняет Новостной Щит в реальном рынке.
+                </div>
+            </div>
+
+            <div class="card-box">
+                <div class="section-header">
+                    <span>🌐 Динамический Скринер (RVOL & Delta OI)</span>
+                    <span class="sub-header" id="screener-countdown">Переоценка: --</span>
+                </div>
+                <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 10px;">
+                    Оценка 400+ контрактов Bybit: Ликвидность, Волатильность, KER, RVOL, ΔOI.
+                </div>
+                <div id="screener-stats-body" style="max-height: 310px; overflow-y: auto;">
+                    <table style="margin-bottom: 0;">
+                        <thead>
+                            <tr>
+                                <th>Монета</th>
+                                <th>Score</th>
+                                <th>RVOL</th>
+                                <th>ΔOI (%)</th>
+                                <th>Оборот 24h</th>
+                                <th>Статус</th>
+                            </tr>
+                        </thead>
+                        <tbody id="screener-table-body">
+                            <tr><td colspan="6" style="text-align:center; color: var(--text-muted);">Загрузка данных скринера...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Universe Radar -->
+        <div class="section-header">
+            <span>Радар рынка активных монет (Top Bybit Linear Perpetuals)</span>
+        </div>
+        <table>
             <thead>
                 <tr>
-                    <th>Символ</th>
-                    <th>Цена ($)</th>
-                    <th>До Лонга (%)</th>
-                    <th>До Шорта (%)</th>
-                    <th>ATR</th>
-                    <th>Объём к SMA20</th>
-                    <th>Тренд</th>
-                    <th>Фильтр</th>
+                    <th>Монета</th>
+                    <th>Текущая цена</th>
+                    <th>До Long (Breakout)</th>
+                    <th>До Short (Breakdown)</th>
+                    <th>ATR (1h)</th>
+                    <th>Объём к SMA</th>
+                    <th>Тренд EMA</th>
+                    <th>Статус</th>
                 </tr>
             </thead>
             <tbody id="radar-body">
-                <tr><td colspan="8" style="text-align:center; color: var(--text-muted);">Загрузка рыночных котировок...</td></tr>
+                <tr><td colspan="8" style="text-align:center; color: var(--text-muted);">Загрузка радара рынка...</td></tr>
             </tbody>
         </table>
 
         <div class="footer-note">
-            Multi-Alpha Growth Engine v2.1 • Запущено параллельно с базовой версией v2.0 (порт 8080) для сравнительного теста.
+            Multi-Alpha Growth Engine v3.1 Pure Quant (Port 8081) • Auto-Gearbox • Cascade Take-Profit • Fast-Scratch • Dynamic Universe
         </div>
     </div>
 
     <script>
-        function formatMoney(num) {
-            return '$' + Number(num).toFixed(2);
-        }
-
-        async function updateDashboard() {
+        async function fetchStatus() {
             try {
                 const res = await fetch('/api/status');
+                if (!res.ok) return;
                 const data = await res.json();
 
                 // Metrics
-                document.getElementById('metric-capital').innerText = formatMoney(data.capital);
-                const pnlEl = document.getElementById('metric-pnl');
-                const pnl = Number(data.total_net_pnl);
-                pnlEl.innerText = (pnl >= 0 ? '+' : '') + formatMoney(pnl);
-                pnlEl.className = 'metric-value ' + (pnl >= 0 ? 'val-green' : 'val-red');
+                const cap = Number(data.capital) || 300.0;
+                document.getElementById('metric-capital').innerText = '$' + cap.toFixed(2);
+                
+                const pnl = Number(data.total_net_pnl) || 0.0;
+                const pnlElem = document.getElementById('metric-pnl');
+                pnlElem.innerText = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2);
+                pnlElem.className = 'metric-value ' + (pnl >= 0 ? 'val-green' : 'val-red');
 
-                document.getElementById('metric-dd').innerText = Number(data.drawdown_pct).toFixed(2) + '%';
-                document.getElementById('metric-wr').innerText = Number(data.win_rate_pct).toFixed(1) + '%';
-                document.getElementById('metric-open-count').innerText = data.open_positions_count + ' / 4';
-                document.getElementById('metric-trades-count').innerText = data.closed_trades_count;
+                document.getElementById('metric-dd').innerText = (Number(data.drawdown_pct) || 0.0).toFixed(2) + '%';
+                document.getElementById('metric-wr').innerText = (Number(data.win_rate_pct) || 0.0).toFixed(1) + '%';
+                document.getElementById('metric-open-count').innerText = (data.open_positions_count || 0) + ' / 4';
+                document.getElementById('metric-trades-count').innerText = data.closed_trades_count || 0;
 
-                if (data.news_defense_active) {
-                    document.getElementById('news-shield-status').innerText = '🛡️ Новостной Щит: ' + (data.news_profile === 'defensive_only' ? 'Защитный Профиль' : 'Активен');
-                } else {
-                    document.getElementById('news-shield-status').innerText = '⚪ Новостной Щит: Отключен';
+                // Meta Badges
+                const gear = data.gearbox_gear || 3;
+                const riskPct = data.gearbox_risk_pct || 2.0;
+                document.getElementById('gearbox-badge').innerText = `⚙️ Риск: Gear ${gear} (${riskPct.toFixed(1)}%)`;
+
+                const btcStatus = data.btc_trend_status || 'NEUTRAL';
+                const btcBadge = document.getElementById('btc-filter-status');
+                btcBadge.innerText = 'BTC Тренд: ' + btcStatus;
+                if (btcStatus === 'BULLISH') btcBadge.style.color = 'var(--accent-green)';
+                else if (btcStatus === 'BEARISH') btcBadge.style.color = 'var(--accent-red)';
+                else btcBadge.style.color = 'var(--accent-yellow)';
+
+                if (data.monitored_symbols_count) {
+                    document.getElementById('universe-badge').innerText = '🌐 Dynamic Universe: ' + data.monitored_symbols_count + ' монет';
                 }
 
-                if (data.btc_trend_status) {
-                    document.getElementById('btc-filter-status').innerText = 'BTC Тренд: ' + data.btc_trend_status;
-                } else if (data.btc_market_filter) {
-                    document.getElementById('btc-filter-status').innerText = data.btc_market_filter;
-                }
-
-                // Timer
                 const sec = data.next_candle_seconds || 0;
-                const m = Math.floor(sec / 60);
+                const h = Math.floor(sec / 3600);
+                const m = Math.floor((sec % 3600) / 60);
                 const s = sec % 60;
-                document.getElementById('candle-timer').innerText = `${m}м ${s < 10 ? '0' : ''}${s}с`;
+                document.getElementById('candle-timer').innerText = `${h}ч ${m}м ${s < 10 ? '0' : ''}${s}с`;
 
-                // Positions
+                if (data.screener_next_run_seconds !== undefined) {
+                    const scSec = data.screener_next_run_seconds;
+                    const scH = Math.floor(scSec / 3600);
+                    const scM = Math.floor((scSec % 3600) / 60);
+                    document.getElementById('screener-countdown').innerText = `Следующая переоценка: ${scH}ч ${scM}м`;
+                }
+
+                // Open Positions
                 const pBody = document.getElementById('positions-body');
                 const posKeys = Object.keys(data.open_positions || {});
                 if (posKeys.length === 0) {
-                    pBody.innerHTML = '<tr><td colspan="8" style="text-align:center; color: var(--text-muted);">Нет открытых позиций. Сканер активен.</td></tr>';
+                    pBody.innerHTML = '<tr><td colspan="8" style="text-align:center; color: var(--text-muted);">Нет открытых позиций. Динамический сканер активен.</td></tr>';
                 } else {
                     let html = '';
                     for (const sym of posKeys) {
@@ -365,20 +458,41 @@ HTML_PAGE = """<!DOCTYPE html>
                             <td>$${Number(p.current_price).toFixed(4)}</td>
                             <td>$${Number(p.current_stop).toFixed(4)}</td>
                             <td class="${unrClass}" style="font-weight:700;">${unr >= 0 ? '+' : ''}$${unr.toFixed(2)}</td>
-                            <td>${p.is_pyramided ? '🚀 Доливка +50%' : 'Ожидание +2 ATR'}</td>
+                            <td>${p.is_pyramided ? '🚀 Пирамидинг (+50%)' : (p.is_breakeven_set ? '🛡️ Безубыток установлен' : 'Ожидание импульса')}</td>
                         </tr>`;
                     }
                     pBody.innerHTML = html;
                 }
 
-                // Radar
+                // Screener Top Candidates Table
+                const scBody = document.getElementById('screener-table-body');
+                const candList = data.screened_candidates || [];
+                if (candList.length > 0) {
+                    let scHtml = '';
+                    for (const c of candList.slice(0, 10)) {
+                        const passBadge = c.passed_filters 
+                            ? '<span class="badge-pass">PASS</span>' 
+                            : `<span class="badge-rej" title="${c.rejection_reason || ''}">REJ</span>`;
+                        scHtml += `<tr>
+                            <td style="font-weight:700;">${c.symbol}</td>
+                            <td style="font-family:'JetBrains Mono';">${c.composite_score}</td>
+                            <td style="color:${c.rvol >= 1.2 ? 'var(--accent-cyan)' : 'inherit'}">${c.rvol || 1.0}x</td>
+                            <td style="color:${c.delta_oi_pct > 0 ? 'var(--accent-green)' : 'inherit'}">${c.delta_oi_pct > 0 ? '+' : ''}${c.delta_oi_pct || 0}%</td>
+                            <td>$${(c.turnover_24h / 1e6).toFixed(1)}M</td>
+                            <td>${passBadge}</td>
+                        </tr>`;
+                    }
+                    scBody.innerHTML = scHtml;
+                }
+
+                // Market Radar
                 const rBody = document.getElementById('radar-body');
                 const rKeys = Object.keys(data.radar || {});
                 if (rKeys.length > 0) {
                     let html = '';
                     for (const sym of rKeys) {
                         const r = data.radar[sym];
-                        const coolBadge = r.in_cooldown ? ' <span class="badge-cooldown">Cooldown 3h</span>' : '';
+                        const coolBadge = r.is_cooldown ? ' <span class="badge-cooldown">Cooldown 3b</span>' : '';
                         html += `<tr>
                             <td style="font-weight:700;">${sym}</td>
                             <td>$${Number(r.current_price).toFixed(4)}</td>
@@ -387,19 +501,18 @@ HTML_PAGE = """<!DOCTYPE html>
                             <td>${r.atr}</td>
                             <td style="color:${r.volume_ratio >= 1.2 ? 'var(--accent-cyan)' : 'inherit'}">${r.volume_ratio}x</td>
                             <td style="font-size:11px; color:var(--text-muted);">${r.trend}</td>
-                            <td>${coolBadge || '<span style="color:var(--text-muted);">Готов</span>'}</td>
+                            <td>${r.is_in_position ? '<span class="pos-badge badge-long">В позиции</span>' : (coolBadge || '<span style="color:var(--text-muted);">Готов</span>')}</td>
                         </tr>`;
                     }
                     rBody.innerHTML = html;
                 }
-
-            } catch (e) {
-                console.error("Dashboard update failed:", e);
+            } catch (err) {
+                console.error("Failed to fetch status:", err);
             }
         }
 
-        setInterval(updateDashboard, 3000);
-        updateDashboard();
+        setInterval(fetchStatus, 2000);
+        fetchStatus();
     </script>
 </body>
 </html>
@@ -417,7 +530,15 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(payload)
         elif parsed.path == "/api/status":
-            payload = LIVE_STATUS_FILE.read_bytes() if LIVE_STATUS_FILE.exists() else b"{}"
+            if GLOBAL_TRADER and getattr(GLOBAL_TRADER, "last_status_cache", None):
+                payload = json.dumps(GLOBAL_TRADER.last_status_cache, indent=2).encode("utf-8")
+            elif LIVE_STATUS_FILE.exists():
+                try:
+                    payload = LIVE_STATUS_FILE.read_bytes()
+                except Exception:
+                    payload = b"{}"
+            else:
+                payload = b"{}"
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Access-Control-Allow-Origin", "*")
@@ -426,6 +547,34 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(payload)
         elif parsed.path == "/api/state":
             payload = PERSISTENT_STATE_FILE.read_bytes() if PERSISTENT_STATE_FILE.exists() else b"{}"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+        elif parsed.path == "/api/universe":
+            universe_data = []
+            if GLOBAL_TRADER and getattr(GLOBAL_TRADER, "screened_universe", None):
+                universe_data = [
+                    {
+                        "rank": idx,
+                        "symbol": a.symbol,
+                        "score": round(a.composite_score, 4),
+                        "passed": a.passed_filters,
+                        "rejection_reason": a.rejection_reason,
+                        "turnover_24h": round(a.turnover_24h, 2),
+                        "open_interest": round(a.open_interest, 2),
+                        "norm_atr": round(a.norm_atr, 4),
+                        "rvol": round(getattr(a, "rvol", 1.0), 2),
+                        "delta_oi_pct": round(getattr(a, "delta_oi_pct", 0.0) * 100, 2),
+                        "adx": round(a.adx, 2),
+                        "rel_strength": round(a.relative_strength, 4),
+                        "funding_rate": round(a.funding_rate, 6),
+                    }
+                    for idx, a in enumerate(GLOBAL_TRADER.screened_universe, 1)
+                ]
+            payload = json.dumps(universe_data, indent=2).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Access-Control-Allow-Origin", "*")
@@ -444,83 +593,35 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-    def do_POST(self):
-        parsed = urllib.parse.urlparse(self.path)
-        if parsed.path == "/api/news_event":
-            content_length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_length).decode("utf-8")
-            try:
-                data = json.loads(body)
-                headline = data.get("headline", "")
-                sym = data.get("symbol")
-                tier = int(data.get("source_tier", 3))
-                ret_1m = float(data.get("ret_1m", 0.0))
-                vol_1m = float(data.get("vol_1m", 0.0))
-                vol_med = float(data.get("vol_median_60m", 1.0))
-
-                actions = []
-                if GLOBAL_TRADER:
-                    actions = GLOBAL_TRADER.handle_news_event(
-                        headline=headline,
-                        symbol=sym,
-                        source_tier=tier,
-                        ret_1m=ret_1m,
-                        vol_1m=vol_1m,
-                        vol_median_60m=vol_med,
-                    )
-                resp = json.dumps({
-                    "status": "ok",
-                    "actions_count": len(actions),
-                    "actions": [
-                        {
-                            "action_type": a.action_type.value,
-                            "symbol": a.symbol,
-                            "side": a.side.value,
-                            "reason": a.reason,
-                            "stop_price": a.stop_price,
-                        }
-                        for a in actions
-                    ]
-                }).encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Content-Length", str(len(resp)))
-                self.end_headers()
-                self.wfile.write(resp)
-            except Exception as e:
-                logger.error(f"Failed to process /api/news_event: {e}")
-                self.send_error(400, f"Error processing news event: {e}")
-        else:
-            self.send_error(403, "Mutation endpoints disabled on public dashboard")
-
     def log_message(self, format, *args):
         return
 
 
 def start_server_and_bot():
     global GLOBAL_TRADER
-    logger.info("Initializing PaperTraderV21 daemon...")
-    GLOBAL_TRADER = PaperTraderV21(poll_interval_seconds=5)
+    logger.info("Initializing PaperTraderV3 (Pure Quant Mode - No News Defense) on Port 8081...")
+    GLOBAL_TRADER = PaperTraderV3(
+        enable_news_defense=False,
+        state_file=PERSISTENT_STATE_FILE,
+        live_status_file=LIVE_STATUS_FILE,
+        live_md_file=LIVE_MD_FILE,
+        poll_interval_seconds=5,
+    )
 
     bot_thread = threading.Thread(target=GLOBAL_TRADER.run_daemon, daemon=True)
     bot_thread.start()
-    logger.info("Background PaperTraderV21 thread launched.")
+    logger.info("Background PaperTraderV3 thread launched.")
 
-    class SupervisedServer(socketserver.ThreadingTCPServer):
-        allow_reuse_address = True
-        daemon_threads = True
-
-        def service_actions(self):
-            if not bot_thread.is_alive():
-                raise SystemExit("Trading worker stopped; restarting service")
-
-    with SupervisedServer(("0.0.0.0", PORT), DashboardHTTPRequestHandler) as server:
-        logger.info(f"Serving v2.1 web dashboard at http://0.0.0.0:{PORT}")
+    server_address = ("0.0.0.0", PORT)
+    with socketserver.ThreadingTCPServer(server_address, DashboardHTTPRequestHandler) as httpd:
+        httpd.allow_reuse_address = True
+        logger.info(f"Multi-Alpha v3.1 Pure Quant Dashboard live on http://127.0.0.1:{PORT}")
         try:
-            server.serve_forever()
+            httpd.serve_forever()
         except KeyboardInterrupt:
-            pass
+            logger.info("Server interrupted. Shutting down...")
+            GLOBAL_TRADER.stop()
+            httpd.server_close()
 
 
 if __name__ == "__main__":

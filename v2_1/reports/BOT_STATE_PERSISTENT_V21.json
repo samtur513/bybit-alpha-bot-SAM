@@ -1,16 +1,23 @@
 {
-  "version": "2.1",
+  "version": "3.1",
+  "schema_version": 4,
+  "trading_halted": false,
+  "last_bar_timestamp": 0,
+  "bar_counter": 0,
+  "cooldown_tracker": {},
+  "funding_receipts": {},
   "initial_capital": "300.0",
   "realized_equity": "300.0",
   "peak_equity": "300.0",
   "max_drawdown_pct": "0.0",
-  "bar_counter": 0,
-  "cooldown_tracker": {},
   "open_positions": {},
   "closed_trades": [],
   "risk_manager": {
     "consecutive_losses": 0,
     "consecutive_wins": 0,
     "is_kill_switch_active": false
+  },
+  "runtime": {
+    "last_processed_bar_ts": {}
   }
 }

@@ -2,8 +2,8 @@
 set -e
 
 echo "=================================================="
-echo "   Установка Bybit Multi-Alpha Bot v2.1 на VPS    "
-echo "   (Параллельный A/B тест на порту 8081)          "
+echo "   Установка Bybit Multi-Alpha v3.1 Pure Quant    "
+echo "   (Параллельный A/B тест на порту 8081: Без News)"
 echo "=================================================="
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -55,7 +55,7 @@ fi
 echo "[4/5] Регистрация автозапуска systemd (bybit-bot-v21.service)..."
 cat << EOF_SERVICE > /etc/systemd/system/bybit-bot-v21.service
 [Unit]
-Description=Bybit Multi-Alpha Quantitative Engine v2.1 (Port 8081)
+Description=Bybit Multi-Alpha Quantitative Engine v3.1 Pure Quant (Port 8081)
 After=network.target
 
 [Service]
@@ -82,30 +82,30 @@ if command -v ufw &> /dev/null; then
 fi
 
 # 5. Проверка запуска
-echo "[5/5] Проверка запуска демона v2.1..."
+echo "[5/5] Проверка запуска демона v3.1 Pure Quant (Port 8081)..."
 sleep 3
 
 if systemctl is-active --quiet bybit-bot-v21; then
     SERVER_IP=$(curl -s -4 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
     echo ""
     echo "=================================================="
-    echo "✅ ВЕРСИЯ v2.1 УСПЕШНО ЗАПУЩЕНА ПАРАЛЛЕЛЬНО С v2.0!"
+    echo "✅ ВЕРСИЯ v3.1 PURE QUANT УСПЕШНО ЗАПУЩЕНА (ПОРТ 8081)!"
     echo "=================================================="
     echo ""
-    echo "🌐 Панели мониторинга A/B теста:"
-    echo "   • v2.0 (Базовая версия):    http://${SERVER_IP}:8080"
-    echo "   • v2.1 (BTC Filter + MNT):  http://${SERVER_IP}:8081"
+    echo "🌐 Панели мониторинга A/B/C теста:"
+    echo "   • v2.0 (Базовая версия):             http://${SERVER_IP}:8080"
+    echo "   • v3.1 (Pure Quant - Без News):      http://${SERVER_IP}:8081"
+    echo "   • v3.1 (Full Quant + News Shield):   http://${SERVER_IP}:8082"
     echo ""
-    echo "📊 Телеметрия v2.1:"
+    echo "📊 Телеметрия v3.1 Pure Quant:"
     echo "   • Статус JSON: http://${SERVER_IP}:8081/api/status"
     echo "   • Состояние:   http://${SERVER_IP}:8081/api/state"
     echo "   • Живые логи:  http://${SERVER_IP}:8081/api/logs"
     echo ""
-    echo "Управление v2.1:"
+    echo "Управление:"
     echo "   • Статус службы: systemctl status bybit-bot-v21"
     echo "   • Логи сервера:  journalctl -u bybit-bot-v21 -f"
     echo "   • Перезапуск:    systemctl restart bybit-bot-v21"
-    echo "   • Сброс теста:   bash v2_1/reset_test.sh"
     echo "=================================================="
 else
     echo "❌ Ошибка запуска v2.1. Проверьте логи: journalctl -u bybit-bot-v21 -n 50"
