@@ -365,6 +365,17 @@ HTML_PAGE = """<!DOCTYPE html>
         <div class="section-header">
             <span>Радар рынка активных монет (Top Bybit Linear Perpetuals)</span>
         </div>
+        <div class="macro-banner" id="macro-banner" style="background: rgba(15,23,42,0.6); padding: 10px 16px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; font-size: 12px;">
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <span style="color: var(--text-muted);">🛡️ Фильтр рынка BTC:</span>
+                <span id="banner-btc-status" style="font-weight: 700; color: var(--accent-red);">🔴 BEARISH (Защита: Long-пробои альтов заморожены)</span>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <span style="color: var(--text-muted);">⏱️ До закрытия 1h свечи:</span>
+                <span id="banner-candle-timer" style="font-family: 'JetBrains Mono', monospace; font-weight: 700; color: var(--accent-cyan);">--:--</span>
+                <span style="color: var(--text-muted); font-size: 11px;">(входы строго на закрытии 1h бара)</span>
+            </div>
+        </div>
         <table>
             <thead>
                 <tr>
@@ -485,6 +496,25 @@ HTML_PAGE = """<!DOCTYPE html>
                     scBody.innerHTML = scHtml;
                 }
 
+                // Macro BTC Banner & Countdown
+                const btcStatusEl = document.getElementById('banner-btc-status');
+                const btcTrend = data.btc_trend_status || 'NEUTRAL';
+                if (btcStatusEl) {
+                    if (btcTrend === 'BEARISH') {
+                        btcStatusEl.innerHTML = '<span style="color:var(--accent-red);">🔴 BEARISH (Защита: Long-пробои альтов заморожены)</span>';
+                    } else if (btcTrend === 'BULLISH') {
+                        btcStatusEl.innerHTML = '<span style="color:var(--accent-green);">🟢 BULLISH (Рынок разрешает пробойные покупки)</span>';
+                    } else {
+                        btcStatusEl.innerHTML = '<span style="color:var(--accent-yellow);">🟡 NEUTRAL (Переходная фаза)</span>';
+                    }
+                }
+                const candleTimerEl = document.getElementById('banner-candle-timer');
+                if (candleTimerEl && data.next_candle_seconds !== undefined) {
+                    const mins = Math.floor(data.next_candle_seconds / 60);
+                    const secs = data.next_candle_seconds % 60;
+                    candleTimerEl.innerText = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+                }
+
                 // Market Radar
                 const rBody = document.getElementById('radar-body');
                 const rKeys = Object.keys(data.radar || {});
@@ -493,15 +523,36 @@ HTML_PAGE = """<!DOCTYPE html>
                     for (const sym of rKeys) {
                         const r = data.radar[sym];
                         const coolBadge = r.is_cooldown ? ' <span class="badge-cooldown">Cooldown 3b</span>' : '';
+                        
+                        let stBadge;
+                        if (r.is_in_position) {
+                            stBadge = '<span class="pos-badge badge-long">В позиции</span>';
+                        } else if (r.is_cooldown) {
+                            stBadge = coolBadge;
+                        } else if (r.dist_to_long_pct === 0) {
+                            if (btcTrend === 'BEARISH' && sym !== 'BTCUSDT') {
+                                stBadge = '<span style="background:rgba(244,63,94,0.15); color:var(--accent-red); border:1px solid rgba(244,63,94,0.3); padding:3px 8px; border-radius:4px; font-size:11px; font-weight:700;" title="BTC падает (медвежий тренд). Защитный фильтр блокирует покупки альткоинов, защищая от ловушек">🛑 БЛОК: BTC BEAR</span>';
+                            } else {
+                                const mins = Math.floor((data.next_candle_seconds || 0) / 60);
+                                stBadge = `<span style="background:rgba(245,158,11,0.15); color:var(--accent-yellow); border:1px solid rgba(245,158,11,0.3); padding:3px 8px; border-radius:4px; font-size:11px; font-weight:700;" title="Уровень Дончяна пробит внутри часа. Ожидание закрытия 1h свечи через ${mins} мин">⏳ ЖДЁТ ЗАКРЫТИЯ 1H (${mins}м)</span>`;
+                            }
+                        } else if (r.dist_to_long_pct <= 1.0) {
+                            stBadge = '<span style="background:rgba(56,189,248,0.15); color:var(--accent-blue); border:1px solid rgba(56,189,248,0.3); padding:3px 8px; border-radius:4px; font-size:11px; font-weight:700;">🔥 ИМПУЛЬС (≤1%)</span>';
+                        } else {
+                            stBadge = '<span style="color:var(--text-muted);">Сканирование</span>';
+                        }
+
+                        const longTitle = r.dist_to_long_pct === 0 ? 'title="Уровень Дончяна коснулся/пробит внутри часа. Решения принимаются строго по закрытию 1h бара!"' : '';
+
                         html += `<tr>
                             <td style="font-weight:700;">${sym}</td>
                             <td>$${Number(r.current_price).toFixed(4)}</td>
-                            <td style="color:${r.dist_to_long_pct < 2 ? 'var(--accent-green)' : 'inherit'}; font-weight:${r.dist_to_long_pct < 2 ? '700' : 'normal'}">${r.dist_to_long_pct}%</td>
+                            <td style="color:${r.dist_to_long_pct < 2 ? 'var(--accent-green)' : 'inherit'}; font-weight:${r.dist_to_long_pct < 2 ? '700' : 'normal'}" ${longTitle}>${r.dist_to_long_pct}% ${r.dist_to_long_pct===0?'⏳':''}</td>
                             <td style="color:${r.dist_to_short_pct < 2 ? 'var(--accent-red)' : 'inherit'}; font-weight:${r.dist_to_short_pct < 2 ? '700' : 'normal'}">${r.dist_to_short_pct}%</td>
                             <td>${r.atr}</td>
                             <td style="color:${r.volume_ratio >= 1.2 ? 'var(--accent-cyan)' : 'inherit'}">${r.volume_ratio}x</td>
                             <td style="font-size:11px; color:var(--text-muted);">${r.trend}</td>
-                            <td>${r.is_in_position ? '<span class="pos-badge badge-long">В позиции</span>' : (coolBadge || '<span style="color:var(--text-muted);">Готов</span>')}</td>
+                            <td>${stBadge}</td>
                         </tr>`;
                     }
                     rBody.innerHTML = html;

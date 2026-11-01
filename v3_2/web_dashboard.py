@@ -324,6 +324,17 @@ HTML_PAGE = """<!DOCTYPE html>
                 </div>
                 <div style="font-size: 12px; color: var(--text-muted);" id="radar-counter">Монет в мониторинге: 0</div>
             </div>
+            <div class="macro-banner" id="macro-banner" style="background: rgba(0,0,0,0.25); padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; font-size: 12px;">
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <span style="color: var(--text-muted);">🛡️ Фильтр рынка BTC:</span>
+                    <span id="banner-btc-status" style="font-weight: 700; color: var(--red);">🔴 BEARISH (Long-пробои альтов заморожены)</span>
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <span style="color: var(--text-muted);">⏱️ До закрытия 1h бара:</span>
+                    <span id="banner-candle-timer" style="font-family: 'JetBrains Mono', monospace; font-weight: 700; color: var(--accent);">--:--</span>
+                    <span style="color: var(--text-muted); font-size: 11px;">(решения строго на закрытии свечи)</span>
+                </div>
+            </div>
             <table>
                 <thead>
                     <tr>
@@ -450,6 +461,25 @@ HTML_PAGE = """<!DOCTYPE html>
                     `).join('');
                 }
 
+                // Macro BTC Banner & 1h Countdown
+                const btcStatusEl = document.getElementById('banner-btc-status');
+                const btcTrend = data.btc_trend_status || 'NEUTRAL';
+                if (btcStatusEl) {
+                    if (btcTrend === 'BEARISH') {
+                        btcStatusEl.innerHTML = '<span style="color:var(--red);">🔴 BEARISH (Защита: Long-пробои альтов заморожены)</span>';
+                    } else if (btcTrend === 'BULLISH') {
+                        btcStatusEl.innerHTML = '<span style="color:var(--green);">🟢 BULLISH (Рынок разрешает пробойные покупки)</span>';
+                    } else {
+                        btcStatusEl.innerHTML = '<span style="color:var(--gold);">🟡 NEUTRAL (Переходная фаза)</span>';
+                    }
+                }
+                const candleTimerEl = document.getElementById('banner-candle-timer');
+                if (candleTimerEl && data.next_candle_seconds !== undefined) {
+                    const mins = Math.floor(data.next_candle_seconds / 60);
+                    const secs = data.next_candle_seconds % 60;
+                    candleTimerEl.innerText = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+                }
+
                 // Market Radar
                 const radar = data.market_radar || {};
                 const rKeys = Object.keys(radar);
@@ -461,18 +491,35 @@ HTML_PAGE = """<!DOCTYPE html>
                     radBody.innerHTML = rKeys.map(sym => {
                         const it = radar[sym];
                         const regClass = it.regime === 'TREND' ? 'regime-trend' : (it.regime === 'RANGE' ? 'regime-range' : 'regime-neutral');
+                        
+                        let stBadge = it.status;
+                        if (it.status.includes('БЛОК: BTC BEAR')) {
+                            stBadge = `<span class="badge" style="background:rgba(244,63,94,0.15); color:var(--red); border-color:rgba(244,63,94,0.3); font-size:11px;" title="BTC падает. Защитный фильтр блокирует покупки альткоинов">${it.status}</span>`;
+                        } else if (it.status.includes('НЕ БОКОВИК')) {
+                            stBadge = `<span class="badge" style="background:rgba(255,255,255,0.05); color:var(--text-muted); border-color:var(--border); font-size:11px;" title="Maker-лимитки выставляются только в подтверждённом боковике RANGE">${it.status}</span>`;
+                        } else if (it.status.includes('ЖДЁТ ЗАКРЫТИЯ')) {
+                            stBadge = `<span class="badge" style="background:rgba(245,158,11,0.15); color:var(--gold); border-color:rgba(245,158,11,0.3); font-size:11px;" title="Свеча формируется. Вход строго по закрытию 1h бара">${it.status}</span>`;
+                        } else if (it.status.includes('ГОТОВ К ЛИМИТКЕ')) {
+                            stBadge = `<span class="badge" style="background:rgba(168,85,247,0.15); color:var(--purple); border-color:rgba(168,85,247,0.3); font-size:11px;">${it.status}</span>`;
+                        } else if (it.status.includes('ИМПУЛЬС')) {
+                            stBadge = `<span class="badge" style="background:rgba(56,189,248,0.15); color:var(--accent); border-color:rgba(56,189,248,0.3); font-size:11px;">${it.status}</span>`;
+                        }
+
+                        const longTitle = it.dist_to_long_pct === 0 ? 'title="Уровень Дончяна пробит внутри часа. Торговые решения принимаются строго на закрытии свечи!"' : '';
+                        const makerTitle = it.dist_to_maker_buy_pct === 0 ? 'title="Цена опустилась до нижней полосы Боллинджера. Лимитка ставится только в режиме RANGE и при RSI < 35"' : '';
+
                         return `
                             <tr>
                                 <td><strong>${sym}</strong></td>
                                 <td><span class="tag-regime ${regClass}">${it.regime}</span></td>
                                 <td>$${it.current_price.toFixed(4)}</td>
-                                <td class="${it.dist_to_long_pct===0?'positive':''}">${it.dist_to_long_pct}%</td>
+                                <td class="${it.dist_to_long_pct===0?'positive':''}" ${longTitle}>${it.dist_to_long_pct}% ${it.dist_to_long_pct===0?'⏳':''}</td>
                                 <td class="${it.dist_to_short_pct===0?'negative':''}">${it.dist_to_short_pct}%</td>
-                                <td style="color:var(--purple);">${it.dist_to_maker_buy_pct}%</td>
+                                <td style="color:var(--purple); font-weight:${it.dist_to_maker_buy_pct===0?'700':'normal'};" ${makerTitle}>${it.dist_to_maker_buy_pct}% ${it.dist_to_maker_buy_pct===0?'🎯':''}</td>
                                 <td style="color:var(--purple);">${it.dist_to_maker_sell_pct}%</td>
                                 <td>${it.rsi}</td>
                                 <td>${it.adx}</td>
-                                <td>${it.status}</td>
+                                <td>${stBadge}</td>
                             </tr>
                         `;
                     }).join('');

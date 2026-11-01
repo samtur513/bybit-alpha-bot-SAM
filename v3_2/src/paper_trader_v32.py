@@ -518,9 +518,27 @@ class PaperTraderV32:
                 elif in_range:
                     status_text = f"RANGE {'BUY' if self.range_engine.open_positions[sym].direction == 1 else 'SELL'}"
                 elif in_order:
-                    status_text = f"LIMIT ORDER PENDING"
+                    status_text = "LIMIT ORDER PENDING"
                 else:
-                    status_text = "SCANNING"
+                    # Умные информативные статусы для мониторинга причин отсутствия входа
+                    if dist_maker_buy_pct == 0.0:
+                        if reg_name == "NEUTRAL":
+                            status_text = "⚠️ НЕ БОКОВИК (NEUTRAL)"
+                        elif self.btc_trend_status == "BEARISH" and sym != "BTCUSDT":
+                            status_text = "🛑 БЛОК: BTC BEAR"
+                        elif rsi >= 35.0:
+                            status_text = f"⏳ RSI {rsi:.1f} (ждёт <35)"
+                        else:
+                            status_text = "🎯 ГОТОВ К ЛИМИТКЕ"
+                    elif dist_up_pct == 0.0:
+                        if self.btc_trend_status == "BEARISH" and sym != "BTCUSDT":
+                            status_text = "🛑 БЛОК: BTC BEAR (Trend)"
+                        else:
+                            status_text = "⏳ ЖДЁТ ЗАКРЫТИЯ 1H"
+                    elif dist_up_pct <= 1.0 or dist_maker_buy_pct <= 1.0:
+                        status_text = "🔥 ИМПУЛЬС (≤1%)"
+                    else:
+                        status_text = "СКАНИРОВАНИЕ"
 
                 radar[sym] = {
                     "current_price": curr_p,

@@ -360,6 +360,17 @@ HTML_PAGE = """<!DOCTYPE html>
                 <span class="badge badge-blue">АКТИВНЫЙ МОНИТОРИНГ</span>
             </div>
         </div>
+        <div class="macro-banner" id="macro-banner" style="background: rgba(15,23,42,0.6); padding: 10px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; font-size: 12px;">
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <span style="color: var(--text-muted);">🛡️ Фильтр рынка BTC:</span>
+                <span id="banner-btc-status" style="font-weight: 700; color: var(--accent-red);">🔴 BEARISH (Защита: Long-пробои альтов заморожены)</span>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <span style="color: var(--text-muted);">⏱️ До закрытия 1h свечи:</span>
+                <span id="banner-candle-timer" style="font-family: 'JetBrains Mono', monospace; font-weight: 700; color: var(--accent-cyan);">--:--</span>
+                <span style="color: var(--text-muted); font-size: 11px;">(входы строго на закрытии 1h бара)</span>
+            </div>
+        </div>
         <div id="radar-container">
             <div class="empty-state">Синхронизация котировок с Bybit V5...</div>
         </div>
@@ -459,6 +470,27 @@ HTML_PAGE = """<!DOCTYPE html>
                     return '$' + num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
                 }
 
+                // Macro BTC Banner & Countdown
+                const btcStatusEl = document.getElementById('banner-btc-status');
+                const btcData = radar['BTCUSDT'];
+                const btcIsBear = btcData && btcData.trend && btcData.trend.includes('BEAR');
+                const btcIsBull = btcData && btcData.trend && btcData.trend.includes('BULL');
+                if (btcStatusEl) {
+                    if (btcIsBear) {
+                        btcStatusEl.innerHTML = '<span style="color:var(--accent-red);">🔴 BEARISH (Защита: Long-пробои альтов заморожены)</span>';
+                    } else if (btcIsBull) {
+                        btcStatusEl.innerHTML = '<span style="color:var(--accent-green);">🟢 BULLISH (Рынок разрешает пробойные покупки)</span>';
+                    } else {
+                        btcStatusEl.innerHTML = '<span style="color:var(--accent-yellow);">🟡 NEUTRAL (Переходная фаза)</span>';
+                    }
+                }
+                const candleTimerEl = document.getElementById('banner-candle-timer');
+                if (candleTimerEl && data.next_candle_seconds !== undefined) {
+                    const mins = Math.floor(data.next_candle_seconds / 60);
+                    const secs = data.next_candle_seconds % 60;
+                    candleTimerEl.innerText = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+                }
+
                 if (rKeys.length > 0) {
                     // Sort by closest distance to breakout
                     rKeys.sort((a, b) => {
@@ -491,19 +523,28 @@ HTML_PAGE = """<!DOCTYPE html>
                         let statusBadge;
                         if (inPos) {
                             statusBadge = `<span class="badge badge-green">🚀 В ПОЗИЦИИ</span>`;
+                        } else if (r.dist_to_long_pct === 0) {
+                            if (btcIsBear && sym !== 'BTCUSDT') {
+                                statusBadge = `<span class="badge" style="background:rgba(244,63,94,0.15); color:var(--accent-red); border:1px solid rgba(244,63,94,0.3); font-weight:700;" title="BTC падает (медвежий тренд). Защитный фильтр блокирует покупки альткоинов, защищая от ловушек">🛑 БЛОК: BTC BEAR</span>`;
+                            } else {
+                                const mins = Math.floor((data.next_candle_seconds || 0) / 60);
+                                statusBadge = `<span class="badge badge-yellow" title="Уровень пробит внутри часа. Ожидание закрытия 1h свечи через ${mins} мин">⏳ ЖДЁТ ЗАКРЫТИЯ 1H (${mins}м)</span>`;
+                            }
                         } else if (minDistance <= 1.0) {
                             statusBadge = `<span class="badge badge-yellow">🔥 ИМПУЛЬС (&le;1%)</span>`;
                         } else {
                             statusBadge = `<span class="badge badge-blue">СКАНИРОВАНИЕ</span>`;
                         }
 
+                        const longTitle = r.dist_to_long_pct === 0 ? 'title="Уровень Дончяна коснулся/пробит внутри часа. Торговые решения принимаются строго по закрытию 1h бара!"' : '';
+
                         rHtml += `
                             <tr>
                                 <td><strong>${sym}</strong></td>
                                 <td style="color: var(--accent-cyan); font-weight: 600;">${formatPrice(r.current_price)}</td>
                                 <td>${formatPrice(r.upper_channel)}</td>
-                                <td>
-                                    <span style="color: var(--accent-green);">+${r.dist_to_long_pct}%</span>
+                                <td ${longTitle}>
+                                    <span style="color: var(--accent-green); font-weight:${r.dist_to_long_pct===0?'700':'normal'};">+${r.dist_to_long_pct}% ${r.dist_to_long_pct===0?'⏳':''}</span>
                                     <div class="bar-container"><div class="bar-fill" style="width: ${Math.max(5, 100 - r.dist_to_long_pct * 15)}%;"></div></div>
                                 </td>
                                 <td>${formatPrice(r.lower_channel)}</td>
