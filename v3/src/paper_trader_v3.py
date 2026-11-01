@@ -85,6 +85,7 @@ from v3.src.news_core import (
     ActionType,
     EventType,
 )
+from v3.src.news_streamer import LiveNewsStreamer, NewsItem
 from v3.src.persistence import atomic_json
 from v3.src.indicators import calculate_adx
 from v3.src.telegram_notifier import TelegramNotifier
@@ -218,8 +219,16 @@ class PaperTraderV3:
             cfg.enable_stablecoin_guard = ENABLE_DEPEG_GUARD
             self.news_core = NewsCore(cfg)
             logger.info("News Core Defensive Shield initialized (defensive_only profile).")
+
+            # Autonomous Live News Streamer (background Tier-1 RSS stream)
+            self.news_streamer = LiveNewsStreamer(
+                poll_interval_sec=45.0,
+                on_news_callback=self._on_live_news_item,
+            )
+            self.news_streamer.start()
         else:
             self.news_core = None
+            self.news_streamer = None
 
         self.recent_news_events = deque(maxlen=25)
         self.recent_news_events.append({
@@ -491,14 +500,6 @@ class PaperTraderV3:
             event_type, score = nc.classify(
                 headline, symbol=target_sym, timestamp=now_dt
             )
-            if score == 0:
-                logger.debug(f"News event ignored (neutral score 0): {headline}")
-                return []
-
-            logger.info(
-                f"News Core Headline received for {target_sym}: event={event_type.value}, "
-                f"score={score}, tier={source_tier} -> '{headline[:80]}...'"
-            )
 
             if not hasattr(self, "recent_news_events"):
                 self.recent_news_events = deque(maxlen=25)
@@ -513,6 +514,15 @@ class PaperTraderV3:
                 "impact": "MONITORED_NO_POSITION" if target_sym not in self.engine.open_positions else "EVALUATING",
             }
             self.recent_news_events.appendleft(event_record)
+
+            if score == 0:
+                logger.debug(f"News event neutral (score 0): {headline}")
+                return []
+
+            logger.info(
+                f"News Core Headline received for {target_sym}: event={event_type.value}, "
+                f"score={score}, tier={source_tier} -> '{headline[:80]}...'"
+            )
 
             if target_sym not in self.engine.open_positions:
                 return []
@@ -844,3 +854,22 @@ class PaperTraderV3:
             self.save_persistent_state()
         except Exception as e:
             logger.warning(f"PaperTraderV3: Failed to save persistent state: {e}")
+
+    def _on_live_news_item(self, item: NewsItem) -> None:
+        """Dispatches live headlines from LiveNewsStreamer to News Core Defensive Shield."""
+        try:
+            self.handle_news_event(
+                headline=item.headline,
+                symbol=item.symbol,
+                source_tier=3,
+                timestamp=item.published_at,
+            )
+        except Exception as e:
+            logger.error(f"PaperTraderV3: Error processing live news headline: {e}")
+
+    def stop(self) -> None:
+        """Gracefully stops background news streamer and WebSocket market stream."""
+        if getattr(self, "news_streamer", None):
+            self.news_streamer.stop()
+        if getattr(self, "stream", None):
+            self.stream.stop()

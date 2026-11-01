@@ -71,6 +71,24 @@ class NewsClassifier:
         "GLM", "WAVES", "OMG", "RDNT", "AXIS", "ZKF"
     }
 
+    _NAME_TO_TICKER = {
+        "BITCOIN": "BTCUSDT",
+        "ETHEREUM": "ETHUSDT",
+        "SOLANA": "SOLUSDT",
+        "BINANCE": "BNBUSDT",
+        "DOGECOIN": "DOGEUSDT",
+        "RIPPLE": "XRPUSDT",
+        "CARDANO": "ADAUSDT",
+        "AVALANCHE": "AVAXUSDT",
+        "CHAINLINK": "LINKUSDT",
+        "ARBITRUM": "ARBUSDT",
+        "OPTIMISM": "OPUSDT",
+        "APTOS": "APTUSDT",
+        "SUI": "SUIUSDT",
+        "NEAR": "NEARUSDT",
+        "PEPE": "1000PEPEUSDT",
+    }
+
     def __init__(self, config: Optional[NewsConfig] = None):
         self.config = config or NewsConfig()
         # Cooldown state: (symbol, event_type) -> datetime of last action
@@ -97,16 +115,19 @@ class NewsClassifier:
         if usdt_match:
             return usdt_match.group(1).upper() + "USDT"
 
-        # 3. Search for cashtags: e.g. "$SOL", "$WIF"
-        cashtag_match = re.search(r"\$([A-Z0-9]{2,10})\b", headline)
+        # 3. Search for cashtags: e.g. "$SOL", "$WIF", excluding numbers / fiat amounts like "$50M", "$6B"
+        cashtag_match = re.search(r"\$([A-Za-z]{2,10})\b", headline)
         if cashtag_match:
             sym = cashtag_match.group(1).upper()
-            return f"{sym}USDT"
+            if sym not in {"USD", "USDT", "USDC"}:
+                return f"{sym}USDT"
 
-        # 4. Search for known crypto tickers
+        # 4. Search for known crypto tickers and project names
         words = re.findall(r"\b[A-Za-z0-9]+\b", headline)
         for w in words:
             w_upper = w.upper()
+            if w_upper in self._NAME_TO_TICKER:
+                return self._NAME_TO_TICKER[w_upper]
             if w_upper in self._COMMON_TICKERS:
                 return f"{w_upper}USDT"
 
