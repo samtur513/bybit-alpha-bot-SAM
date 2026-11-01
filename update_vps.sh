@@ -2,7 +2,7 @@
 set -e
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-echo "=== Обновление Bybit Multi-Alpha Bot Suite (v2.0, v3.1 Pure, v3.1 News) на VPS ==="
+echo "=== Обновление Bybit Multi-Alpha Bot Suite (v2.0, v3.1 Pure, v3.1 News, v3.2 Dual) на VPS ==="
 echo "Рабочая директория: $APP_DIR"
 
 cd "$APP_DIR"
@@ -20,16 +20,17 @@ fi
 "$APP_DIR/venv/bin/pip" install --upgrade pip -q
 "$APP_DIR/venv/bin/pip" install -r "$APP_DIR/requirements.txt" -q
 
-# 3. Настройка и перезапуск всех трех служб systemd
+# 3. Настройка и перезапуск всех четырех служб systemd
 echo "[3/4] Регистрация/обновление служб systemd..."
 bash "$APP_DIR/v2_1/setup_v21.sh"
 bash "$APP_DIR/v3/setup_v3.sh"
+bash "$APP_DIR/v3_2/setup_v32.sh"
 
 systemctl daemon-reload
-systemctl restart bybit-bot bybit-bot-v21 bybit-bot-v3
+systemctl restart bybit-bot bybit-bot-v21 bybit-bot-v3 bybit-bot-v32
 
 # 4. Проверка статуса
-echo "[4/4] Проверка статуса всех 3 служб..."
+echo "[4/4] Проверка статуса всех 4 служб..."
 sleep 2
 echo "--- bybit-bot (Port 8080) ---"
 systemctl is-active bybit-bot || true
@@ -37,15 +38,18 @@ echo "--- bybit-bot-v21 (Port 8081) ---"
 systemctl is-active bybit-bot-v21 || true
 echo "--- bybit-bot-v3 (Port 8082) ---"
 systemctl is-active bybit-bot-v3 || true
+echo "--- bybit-bot-v32 (Port 8083) ---"
+systemctl is-active bybit-bot-v32 || true
 
 SERVER_IP=$(curl -s -4 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
 echo ""
 echo "================================================================="
-echo "✅ ВСЕ 3 ВЕРСИИ УСПЕШНО ОБНОВЛЕНЫ И ЗАПУЩЕНЫ!"
-echo "🌐 v2.0 Baseline (Port 8080):              http://${SERVER_IP}:8080"
-echo "🌐 v3.1 Pure Quant - No News (Port 8081):   http://${SERVER_IP}:8081"
-echo "🌐 v3.1 Full Quant + News Core (Port 8082): http://${SERVER_IP}:8082"
+echo "✅ ВСЕ 4 ВЕРСИИ УСПЕШНО ОБНОВЛЕНЫ И ЗАПУЩЕНЫ!"
+echo "🌐 v2.0 Baseline (Port 8080):                http://${SERVER_IP}:8080"
+echo "🌐 v3.1 Pure Quant - No News (Port 8081):     http://${SERVER_IP}:8081"
+echo "🌐 v3.1 Full Quant + News Core (Port 8082):   http://${SERVER_IP}:8082"
+echo "🌐 v3.2 Dual-Regime Hybrid (Port 8083):        http://${SERVER_IP}:8083"
 echo ""
-echo "💡 Для синхронного обнуления всех трех ботов до $300.00 запустите:"
+echo "💡 Для синхронного обнуления всех четырёх ботов до \$300.00 запустите:"
 echo "   bash reset_all_to_300.sh"
 echo "================================================================="
