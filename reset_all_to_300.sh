@@ -2,7 +2,7 @@
 set -e
 
 echo "================================================================="
-echo "   СИНХРОННЫЙ ПЕРЕЗАПУСК A/B/C ТЕСТА С $300.00 НА ВСЕХ БОТАХ    "
+echo "   СИНХРОННЫЙ ПЕРЕЗАПУСК A/B/C ТЕСТА С \$300.00 НА ВСЕХ БОТАХ    "
 echo "================================================================="
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,7 +13,7 @@ echo "[1/6] Остановка работающих служб ботов..."
 systemctl stop bybit-bot bybit-bot-v21 bybit-bot-v3 2>/dev/null || true
 
 # 2. Обнуление профиля v2.0 (Порт 8080: Baseline 1h, 18 монет)
-echo "[2/6] Сброс профиля v2.0 (Порт 8080) до $300.00..."
+echo "[2/6] Сброс профиля v2.0 (Порт 8080) до \$300.00..."
 mkdir -p "$APP_DIR/reports"
 cat << 'EOF_V20' > "$APP_DIR/reports/BOT_STATE_PERSISTENT.json"
 {
@@ -33,7 +33,7 @@ EOF_V20
 rm -f "$APP_DIR/reports/PAPER_TRADING_LIVE.json" "$APP_DIR/reports/PAPER_TRADING_LIVE.md"
 
 # 3. Сброс профиля v3.1 Pure Quant (Порт 8081: 1h Dynamic Screener, Без News Core)
-echo "[3/6] Сброс профиля v3.1 Pure Quant (Порт 8081) до $300.00..."
+echo "[3/6] Сброс профиля v3.1 Pure Quant (Порт 8081) до \$300.00..."
 mkdir -p "$APP_DIR/v2_1/reports"
 cat << 'EOF_V21' > "$APP_DIR/v2_1/reports/BOT_STATE_PERSISTENT_V21.json"
 {
@@ -63,7 +63,7 @@ EOF_V21
 rm -f "$APP_DIR/v2_1/reports/PAPER_TRADING_LIVE_V21.json" "$APP_DIR/v2_1/reports/PAPER_TRADING_LIVE_V21.md"
 
 # 4. Сброс профиля v3.1 Full Quant (Порт 8082: 1h Dynamic Screener + News Core Shield + Live Streamer)
-echo "[4/6] Сброс профиля v3.1 Full Quant (Порт 8082) до $300.00..."
+echo "[4/6] Сброс профиля v3.1 Full Quant (Порт 8082) до \$300.00..."
 mkdir -p "$APP_DIR/v3/reports"
 cat << 'EOF_V3' > "$APP_DIR/v3/reports/BOT_STATE_PERSISTENT_V3.json"
 {
@@ -122,18 +122,18 @@ sleep 3
 SERVER_IP=$(curl -s -4 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
 echo ""
 echo "================================================================="
-echo "✅ ВСЕ 3 ВЕРСИИ УСПЕШНО И СИНХРОННО ЗАПУЩЕНЫ С $300.00 USDT!"
+echo "✅ ВСЕ 3 ВЕРСИИ УСПЕШНО И СИНХРОННО ЗАПУЩЕНЫ С \$300.00 USDT!"
 echo "================================================================="
 echo ""
 echo "🌐 1. БАЗОВАЯ ВЕРСИЯ (v2.0, 1h, 18 фиксированных монет):"
 echo "   • Панель мониторинга: http://${SERVER_IP}:8080"
-echo "   • Баланс:             $300.00"
+echo "   • Баланс:             \$300.00"
 echo ""
 echo "🌐 2. QUANT ЧИСТЫЙ (v3.1, 1h, Dynamic Universe 400+, Без Новостей):"
 echo "   • Панель мониторинга: http://${SERVER_IP}:8081"
-echo "   • Баланс:             $300.00"
+echo "   • Баланс:             \$300.00"
 echo ""
 echo "🌐 3. QUANT + НОВОСТНОЙ ЩИТ (v3.1, 1h, Dynamic Universe + News Core Live Streamer):"
 echo "   • Панель мониторинга: http://${SERVER_IP}:8082"
-echo "   • Баланс:             $300.00"
+echo "   • Баланс:             \$300.00"
 echo "================================================================="
