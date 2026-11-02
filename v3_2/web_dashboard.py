@@ -356,6 +356,35 @@ HTML_PAGE = """<!DOCTYPE html>
             </table>
         </div>
 
+        <!-- IRAS Chop Screener Panel -->
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-title">
+                    <span>🔬 Скринер IRAS (Institutional Range Alpha Score) — Пул монет для боковика</span>
+                </div>
+                <div style="font-size: 12px; color: var(--text-muted);" id="chop-counter">Отобрано: 0</div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Монета</th>
+                        <th>Цена</th>
+                        <th>24h Оборот</th>
+                        <th>Ширина канала (BW)</th>
+                        <th>KER (Шум ≤ 0.15)</th>
+                        <th>ADX (< 18)</th>
+                        <th>Колебания (SMA20)</th>
+                        <th>Фандинг (8h)</th>
+                        <th>IRAS Score</th>
+                        <th>Статус отбора</th>
+                    </tr>
+                </thead>
+                <tbody id="chop-table-body">
+                    <tr><td colspan="10" style="text-align: center; color: var(--text-muted);">Загрузка пула IRAS...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
         <!-- Closed Trades -->
         <div class="panel">
             <div class="panel-header">
@@ -523,6 +552,32 @@ HTML_PAGE = """<!DOCTYPE html>
                             </tr>
                         `;
                     }).join('');
+                }
+
+                // IRAS Chop Screener Table
+                const chopPool = data.chop_screened_universe || [];
+                const chopCounter = document.getElementById('chop-counter');
+                if (chopCounter) chopCounter.innerText = `Отобрано: ${chopPool.length}`;
+                const chopBody = document.getElementById('chop-table-body');
+                if (chopBody) {
+                    if (chopPool.length === 0) {
+                        chopBody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted);">Поиск кандидатов с шириной ≥ 3.5% и KER ≤ 0.15...</td></tr>';
+                    } else {
+                        chopBody.innerHTML = chopPool.map(c => `
+                            <tr>
+                                <td><strong>${c.symbol}</strong></td>
+                                <td>$${Number(c.price).toFixed(4)}</td>
+                                <td>$${c.turnover_24h_m}M</td>
+                                <td style="color:var(--accent); font-weight:700;">${c.bandwidth_pct}%</td>
+                                <td style="color:${c.ker<=0.10?'var(--green)':'var(--gold)'};">${c.ker}</td>
+                                <td>${c.adx}</td>
+                                <td>${c.crossings || 5}x</td>
+                                <td style="color:${c.funding_rate_pct<0?'var(--green)':'var(--text-muted)'};">${c.funding_rate_pct>0?'+':''}${c.funding_rate_pct}%</td>
+                                <td style="color:var(--purple); font-weight:700; font-size:13px;">${c.chop_score}</td>
+                                <td><span class="badge" style="background:rgba(168,85,247,0.15); color:var(--purple); border-color:rgba(168,85,247,0.3); font-size:11px;">КАНДИДАТ MAKER</span></td>
+                            </tr>
+                        `).join('');
+                    }
                 }
 
                 // Closed trades

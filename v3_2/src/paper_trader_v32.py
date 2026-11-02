@@ -32,6 +32,7 @@ from v3.src.telegram_notifier import TelegramNotifier
 from v3.src.universe_screener import UniverseScreener, ScreenerConfig, ScreenedAsset
 from v3.src.core_v3 import CoreV3Engine, ActivePosition, ClosedTrade, PortfolioSnapshot
 
+from .chop_screener import ChopUniverseScreener, ChopScreenerConfig, ChopCandidateMetric
 from .config import (
     PORT,
     DEFAULT_SYMBOLS,
@@ -46,6 +47,7 @@ from .config import (
     MIN_ADX_TREND,
     ENABLE_DYNAMIC_UNIVERSE,
     UNIVERSE_TOP_N,
+    TREND_UNIVERSE_TOP_N,
     SCREENER_INTERVAL_HOURS,
     MIN_24H_TURNOVER,
     MIN_OPEN_INTEREST,
@@ -56,6 +58,15 @@ from .config import (
     ENABLE_DELTA_OI_FILTER,
     ENABLE_ATR_EXHAUSTION_GUARD,
     MAX_DAILY_ATR_EXHAUSTION,
+    ENABLE_CHOP_SCREENER,
+    CHOP_UNIVERSE_TOP_N,
+    CHOP_MIN_24H_TURNOVER,
+    CHOP_MIN_OPEN_INTEREST,
+    CHOP_MAX_KER,
+    CHOP_MIN_BANDWIDTH_PCT,
+    CHOP_MAX_ADX,
+    CHOP_RESCAN_INTERVAL_HOURS,
+    MIN_BANDWIDTH_CLEARANCE,
     RANGE_RISK_PER_TRADE_PCT,
     MAX_CONCURRENT_RANGE_POSITIONS,
     BASE_MAKER_FEE,
@@ -128,14 +139,14 @@ class PaperTraderV32:
         self.lock = threading.RLock()
         self.instrument_rules: Dict[str, Dict[str, Decimal]] = {}
 
-        # Screener
+        # Screener: Dual-Alpha Architecture (Trend Momentum + IRAS Chop)
         self.screener_config = ScreenerConfig(
             min_turnover_24h=MIN_24H_TURNOVER,
             min_open_interest=MIN_OPEN_INTEREST,
             max_funding_abs=MAX_FUNDING_RATE_ABS,
             min_norm_atr=MIN_NORM_ATR,
             min_adx=MIN_ADX_TREND,
-            top_n=UNIVERSE_TOP_N,
+            top_n=TREND_UNIVERSE_TOP_N,
             enable_rvol_filter=ENABLE_RVOL_FILTER,
             min_rvol=MIN_RVOL,
             enable_delta_oi_filter=ENABLE_DELTA_OI_FILTER,
@@ -143,19 +154,42 @@ class PaperTraderV32:
             max_daily_atr_exhaustion=MAX_DAILY_ATR_EXHAUSTION,
         )
         self.screener = UniverseScreener(self.screener_config)
+        self.trend_screener = self.screener
         self.last_screener_run_ts: float = 0.0
         self.screened_universe: List[ScreenedAsset] = []
+
+        # Chop Screener (IRAS Standard)
+        self.chop_screener_config = ChopScreenerConfig(
+            min_turnover_24h=CHOP_MIN_24H_TURNOVER,
+            min_open_interest=CHOP_MIN_OPEN_INTEREST,
+            max_ker=CHOP_MAX_KER,
+            min_bandwidth_pct=CHOP_MIN_BANDWIDTH_PCT,
+            max_adx=CHOP_MAX_ADX,
+            top_n=CHOP_UNIVERSE_TOP_N,
+            rescan_interval_hours=CHOP_RESCAN_INTERVAL_HOURS,
+        )
+        self.chop_screener = ChopUniverseScreener(self.chop_screener_config)
+        self.chop_screened_universe: List[ChopCandidateMetric] = []
 
         # Determine symbols
         initial_syms = list(symbols) if symbols is not None else []
         if not initial_syms and ENABLE_DYNAMIC_UNIVERSE and self.client is not None:
             try:
-                top_syms = self.screener.get_top_universe(client=self.client)
-                if top_syms:
-                    initial_syms = top_syms
-                    self.screened_universe = self.screener.screen_universe(client=self.client)
+                top_trend = self.trend_screener.get_top_universe(client=self.client)
+                if top_trend:
+                    self.screened_universe = self.trend_screener.screen_universe(client=self.client)
+                    exclude_for_chop = set(top_trend)
+                    self.chop_screened_universe = self.chop_screener.scan_chop_universe(
+                        client=self.client,
+                        exclude_symbols=exclude_for_chop,
+                    )
+                    top_chop = [m.symbol for m in self.chop_screened_universe]
+                    initial_syms = list(top_trend) + list(top_chop)
                     self.last_screener_run_ts = time.time()
-                    logger.info(f"Initialized dynamic universe with {len(initial_syms)} coins from Bybit screener.")
+                    logger.info(
+                        f"Initialized dual-alpha universe: {len(top_trend)} Trend coins + "
+                        f"{len(top_chop)} Chop (IRAS) coins."
+                    )
             except Exception as e:
                 logger.warning(f"Initial universe screening fallback: {e}")
 
@@ -199,6 +233,7 @@ class PaperTraderV32:
             taker_fee=BASE_TAKER_FEE,
             slippage=BASE_SLIPPAGE,
             sl_atr_mult=RANGE_SL_ATR_MULT,
+            min_bandwidth_clearance=MIN_BANDWIDTH_CLEARANCE,
             min_tp_dist_pct=MIN_TP_DIST_PCT,
             max_tp_dist_pct=MAX_TP_DIST_PCT,
             cooldown_bars=RANGE_COOLDOWN_BARS,
@@ -298,25 +333,67 @@ class PaperTraderV32:
         now = time.time()
         if now - self.last_screener_run_ts >= SCREENER_INTERVAL_HOURS * 3600:
             try:
-                top_syms = self.screener.get_top_universe(client=self.client)
-                if top_syms:
-                    for anchor in ["BTCUSDT", "USDCUSDT"]:
-                        if anchor not in top_syms:
-                            top_syms.append(anchor)
+                top_trend = self.trend_screener.get_top_universe(client=self.client)
+                if top_trend:
+                    self.screened_universe = self.trend_screener.screen_universe(client=self.client)
+                    exclude_for_chop = set(top_trend) | set(self.trend_engine.open_positions.keys())
 
-                    new_symbols = list(top_syms)
+                    if ENABLE_CHOP_SCREENER:
+                        self.chop_screened_universe = self.chop_screener.scan_chop_universe(
+                            client=self.client,
+                            exclude_symbols=exclude_for_chop,
+                        )
+                        top_chop = [m.symbol for m in self.chop_screened_universe]
+                    else:
+                        top_chop = []
+
+                    combined = list(top_trend) + list(top_chop)
+                    for anchor in ["BTCUSDT", "USDCUSDT"]:
+                        if anchor not in combined:
+                            combined.append(anchor)
+
+                    new_symbols = list(combined)
                     # Keep held symbols
                     for s in list(self.trend_engine.open_positions.keys()) + list(self.range_engine.open_positions.keys()):
                         if s not in new_symbols:
                             new_symbols.append(s)
+
+                    # Fetch history for newly added symbols so candle buffers are immediately populated
+                    if self.client is not None:
+                        now_srv = self.client.get_server_time()
+                        for s in new_symbols:
+                            if s not in self.candle_buffers:
+                                try:
+                                    raw = self.client.get_kline(s, interval=CANDLE_INTERVAL, limit=500)
+                                    records = [
+                                        dict(
+                                            timestamp=int(k[0]),
+                                            **{name: float(k[i]) for i, name in enumerate(("open", "high", "low", "close", "volume", "turnover"), 1)},
+                                        )
+                                        for k in raw
+                                        if int(k[0]) + self.bar_interval_ms <= now_srv
+                                    ]
+                                    df = (
+                                        pd.DataFrame(records)
+                                        .sort_values("timestamp")
+                                        .drop_duplicates("timestamp")
+                                        .reset_index(drop=True)
+                                    )
+                                    if len(df) >= min(DONCHIAN_WINDOW, 50):
+                                        self.candle_buffers[s] = prepare_dual_regime_indicators(df, self.regime_classifier, lookback=DONCHIAN_WINDOW)
+                                        self.last_processed_bar_ts[s] = int(df["timestamp"].iloc[-1])
+                                except Exception as e_hist:
+                                    logger.warning(f"History fetch for new symbol {s} failed: {e_hist}")
 
                     self.symbols = new_symbols
                     self._load_instrument_specs()
                     self.trend_engine.instrument_rules = self.instrument_rules
                     self.range_engine.instrument_rules = self.instrument_rules
                     self.stream.update_symbols(new_symbols)
-                    self.screened_universe = self.screener.screen_universe(client=self.client)
-                    logger.info(f"Dynamic Universe rotated. Now monitoring {len(new_symbols)} coins.")
+                    logger.info(
+                        f"Dynamic Dual-Alpha Universe rotated: {len(top_trend)} Trend + {len(top_chop)} Chop (IRAS) | "
+                        f"Total {len(new_symbols)} monitored coins."
+                    )
                 self.last_screener_run_ts = now
             except Exception as e:
                 logger.error(f"Error during dynamic universe rotation: {e}")
@@ -673,6 +750,9 @@ class PaperTraderV32:
                     "funding_rate": round(a.funding_rate, 6),
                 }
                 for a in self.screened_universe[:25]
+            ],
+            "chop_screened_universe": [
+                m.to_dict() for m in self.chop_screened_universe[:15]
             ],
         }
 

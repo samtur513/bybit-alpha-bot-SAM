@@ -45,6 +45,11 @@ v3/reports/PAPER_TRADING_LIVE_V3.md
 v3/reports/*.tmp
 v3/reports/*.log
 .pytest_temp/
+.pytest_tmp/
+v3_2/reports/*.json
+v3_2/reports/*.md
+v3_2/reports/*.tmp
+v3_2/reports/*.log
 scratch/
 .test_tmp/
 bundle.b64

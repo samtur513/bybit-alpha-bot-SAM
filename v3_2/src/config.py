@@ -33,9 +33,10 @@ DEFAULT_SYMBOLS = [
 ]
 SYMBOLS = DEFAULT_SYMBOLS
 
-# Dynamic Universe Screener Configuration
+# Dynamic Universe Screener Configuration (Trend Engine)
 ENABLE_DYNAMIC_UNIVERSE = True
 UNIVERSE_TOP_N = 25
+TREND_UNIVERSE_TOP_N = 15
 SCREENER_INTERVAL_HOURS = 2
 MIN_24H_TURNOVER = 25_000_000.0
 MIN_OPEN_INTEREST = 5_000_000.0
@@ -47,6 +48,16 @@ MIN_RVOL = 1.0
 ENABLE_DELTA_OI_FILTER = False
 ENABLE_ATR_EXHAUSTION_GUARD = True
 MAX_DAILY_ATR_EXHAUSTION = 2.5
+
+# Dynamic Chop Universe Screener Configuration (IRAS Standard for Range Engine)
+ENABLE_CHOP_SCREENER = True
+CHOP_UNIVERSE_TOP_N = 10
+CHOP_MIN_24H_TURNOVER = 10_000_000.0
+CHOP_MIN_OPEN_INTEREST = 2_000_000.0
+CHOP_MAX_KER = 0.15
+CHOP_MIN_BANDWIDTH_PCT = 0.035
+CHOP_MAX_ADX = 18.0
+CHOP_RESCAN_INTERVAL_HOURS = 2
 
 # Timeframe & Indicators
 CANDLE_INTERVAL = "60"
@@ -72,8 +83,9 @@ BASE_MAKER_FEE = Decimal("0.000324")        # 0.0324% Non-VIP Bybit + 10% MNT
 BASE_TAKER_FEE = Decimal("0.0009")          # 0.09% Taker fee
 BASE_SLIPPAGE = Decimal("0.0002")           # 0.02% slippage on stops
 RANGE_SL_ATR_MULT = Decimal("1.0")          # 1.0 ATR stop beyond boundary
-MIN_TP_DIST_PCT = Decimal("0.010")          # Minimum 1.0% distance to SMA20
-MAX_TP_DIST_PCT = Decimal("0.020")          # Maximum 2.0% target clamp
+MIN_BANDWIDTH_CLEARANCE = Decimal("0.035")  # Minimum 3.5% bandwidth clearance (IRAS standard)
+MIN_TP_DIST_PCT = Decimal("0.012")          # Minimum 1.2% distance to SMA20
+MAX_TP_DIST_PCT = Decimal("0.035")          # Maximum 3.5% target clamp
 RANGE_COOLDOWN_BARS = 3
 
 # Regime Classifier Thresholds

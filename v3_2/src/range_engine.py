@@ -22,6 +22,7 @@ from .config import (
     BASE_TAKER_FEE,
     BASE_SLIPPAGE,
     PORTFOLIO_LEVERAGE,
+    MIN_BANDWIDTH_CLEARANCE,
 )
 from .regime_classifier import MarketRegime, RegimeData
 
@@ -88,6 +89,7 @@ class RangeMeanReversionEngine:
         slippage: Decimal = BASE_SLIPPAGE,              # 0.02%
         funding_rate_8h: Decimal = Decimal("0.0001"),   # 0.01% / 8h
         sl_atr_mult: Decimal = Decimal("1.0"),          # 1.0 * ATR stop beyond boundary
+        min_bandwidth_clearance: Decimal = MIN_BANDWIDTH_CLEARANCE, # 3.5% bandwidth clearance
         min_tp_dist_pct: Decimal = Decimal("0.010"),    # Minimum 1.0% target to SMA20
         max_tp_dist_pct: Decimal = Decimal("0.020"),    # Target clamp up to 2.0%
         cooldown_bars: int = 3,                         # 3-bar re-entry cooldown
@@ -106,6 +108,7 @@ class RangeMeanReversionEngine:
         self.slippage = slippage
         self.funding_rate_8h = funding_rate_8h
         self.sl_atr_mult = sl_atr_mult
+        self.min_bandwidth_clearance = min_bandwidth_clearance
         self.min_tp_dist_pct = min_tp_dist_pct
         self.max_tp_dist_pct = max_tp_dist_pct
         self.cooldown_bars = cooldown_bars
@@ -439,20 +442,29 @@ class RangeMeanReversionEngine:
                 continue
 
             bw = (bb_up - bb_lo) / bb_mid
-            if bw < Decimal("0.015"):
+            if bw < self.min_bandwidth_clearance:
                 continue
 
             atr = Decimal(str(reg.atr))
             close = Decimal(str(b["close"]))
             rsi = reg.rsi
 
+            # IRAS Structural Scoring (Bandwidth * (1-KER)^2 * Velocity * CarryBoost)
+            ker_val = float(b.get("ker", 0.06)) if "ker" in b else 0.06
+            crossings_val = int(b.get("crossings", 5)) if "crossings" in b else 5
+            funding_val = float(b.get("funding_rate", 0.0001)) if "funding_rate" in b else 0.0001
+            velocity_mult = 0.5 + (min(crossings_val, 10) / 10.0)
+            carry_mult = 1.0 + (abs(funding_val) * 200.0)
+            iras_score = float(bw) * ((1.0 - min(ker_val, 0.99)) ** 2) * velocity_mult * carry_mult
+
             # LONG candidate:
             # RSI oversold (< 35), price inside range (close >= bb_lower)
-            # Altcoins filter against strong BTC bear trend
+            # Altcoins filter against strong BTC bear trend, with exception for wide-bandwidth high-IRAS assets
+            allow_alt_long = (sym == "BTCUSDT") or (not btc_bearish) or (float(bw) >= 0.040 and iras_score >= 0.035)
             if (
                 rsi < 35.0
                 and close >= bb_lo
-                and (sym == "BTCUSDT" or not btc_bearish)
+                and allow_alt_long
                 and (self.bar_counter >= self.cooldown_tracker.get((sym, 1), 0))
             ):
                 limit_p = bb_lo
@@ -461,7 +473,7 @@ class RangeMeanReversionEngine:
                 if (tp - limit_p) / limit_p >= self.min_tp_dist_pct:
                     qty = self.calculate_position_size(sym, limit_p, sl, current_equity)
                     if qty and self._capacity_check(sym, qty * limit_p, current_marks):
-                        tms = (35.0 - rsi) * float(bw)
+                        tms = iras_score * (1.0 + (35.0 - rsi) / 35.0)
                         candidates.append(
                             RangeLimitOrder(
                                 symbol=sym,
@@ -479,10 +491,11 @@ class RangeMeanReversionEngine:
 
             # SHORT candidate:
             # RSI overbought (> 65), price inside range (close <= bb_upper)
+            allow_alt_short = (sym == "BTCUSDT") or (not btc_bullish) or (float(bw) >= 0.040 and iras_score >= 0.035)
             if (
                 rsi > 65.0
                 and close <= bb_up
-                and (sym == "BTCUSDT" or not btc_bullish)
+                and allow_alt_short
                 and (self.bar_counter >= self.cooldown_tracker.get((sym, -1), 0))
             ):
                 limit_p = bb_up
@@ -491,7 +504,7 @@ class RangeMeanReversionEngine:
                 if (limit_p - tp) / limit_p >= self.min_tp_dist_pct:
                     qty = self.calculate_position_size(sym, limit_p, sl, current_equity)
                     if qty and self._capacity_check(sym, qty * limit_p, current_marks):
-                        tms = (rsi - 65.0) * float(bw)
+                        tms = iras_score * (1.0 + (rsi - 65.0) / 35.0)
                         candidates.append(
                             RangeLimitOrder(
                                 symbol=sym,
