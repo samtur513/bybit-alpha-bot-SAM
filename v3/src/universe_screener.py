@@ -349,11 +349,24 @@ class UniverseScreener:
                     btc_ret = 0.0
                 break
 
+        # Fetch non-crypto instruments to exclude TradFi stocks, ETFs, and commodities
+        non_crypto_symbols = set()
+        if client is not None and hasattr(client, "get_instruments_info"):
+            try:
+                inst_res = client.get_instruments_info("linear")
+                non_crypto_symbols = {
+                    it["symbol"]
+                    for it in inst_res
+                    if it.get("symbolType") in ("stock", "commodity", "ETF", "forex", "index")
+                }
+            except Exception as e:
+                logger.warning(f"Failed to fetch instruments info for crypto filtering: {e}")
+
         candidates = []
         for item in tickers_list:
             sym = item.get("symbol", "")
-            # Only trade USDT linear perpetuals; exclude USDC-settled or TradFi pre-IPO
-            if not sym.endswith("USDT") or sym.startswith("USDC") or "STOCK" in sym:
+            # Only trade USDT linear perpetuals; exclude USDC-settled, TradFi pre-IPO, and non-crypto
+            if not sym.endswith("USDT") or sym.startswith("USDC") or "STOCK" in sym or sym in non_crypto_symbols:
                 continue
 
             try:

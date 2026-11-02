@@ -380,15 +380,18 @@ class PaperTraderV32:
         prices = self.get_live_prices()
         now_ms = int(time.time() * 1000)
         for ts, bars in list(self.batches.items()):
-            if now_ms - (ts + self.bar_interval_ms) > 120000:
+            time_since_close = now_ms - (ts + self.bar_interval_ms)
+            if time_since_close > 180000:
                 del self.batches[ts]
                 continue
-            if (
-                set(bars) == set(self.symbols)
-                and set(prices) == set(self.symbols)
-                and self.ready
-                and all(self.price_server_times.get(s, 0) >= ts + self.bar_interval_ms for s in self.symbols)
-            ):
+
+            # Отказоустойчивый кворум: немедленный вход если все бары на месте,
+            # либо запуск по кворуму (≥70% монет включая BTCUSDT) после 30с ожидания
+            has_all_bars = set(bars) == set(self.symbols)
+            grace_period_expired = time_since_close >= 30000
+            has_quorum = ("BTCUSDT" in bars) and (len(bars) >= max(3, int(len(self.symbols) * 0.70)))
+
+            if self.ready and (has_all_bars or (grace_period_expired and has_quorum)):
                 # 1. Evaluate BTC trend
                 btc_bar = bars.get("BTCUSDT")
                 btc_bullish = True
@@ -426,14 +429,17 @@ class PaperTraderV32:
                     regimes_dict[s] = reg
                 self.latest_regimes = regimes_dict
 
-                # 3. Step Range Mean-Reversion Engine (Maker in Chop)
+                # 3. Resilient price map
+                open_prices = {s: prices.get(s, Decimal(str(b["close"]))) for s, b in bars.items()}
+
+                # 4. Step Range Mean-Reversion Engine (Maker in Chop)
                 active_trend_syms = list(self.trend_engine.open_positions.keys())
                 next_bars_mock = {
                     s: {
-                        "open": float(prices.get(s, Decimal(str(b["close"])))),
-                        "high": float(prices.get(s, Decimal(str(b["close"])))),
-                        "low": float(prices.get(s, Decimal(str(b["close"])))),
-                        "close": float(prices.get(s, Decimal(str(b["close"])))),
+                        "open": float(open_prices[s]),
+                        "high": float(open_prices[s]),
+                        "low": float(open_prices[s]),
+                        "close": float(open_prices[s]),
                     }
                     for s, b in bars.items()
                 }
@@ -441,14 +447,14 @@ class PaperTraderV32:
                     timestamp=ts,
                     bars=bars,
                     next_bars=next_bars_mock,
-                    next_open_prices=prices,
+                    next_open_prices=open_prices,
                     regimes=regimes_dict,
                     btc_bullish=btc_bullish,
                     btc_bearish=btc_bearish,
                     active_trend_symbols=active_trend_syms,
                 )
 
-                # 4. Step Trend Engine (only on symbols NOT held by Range)
+                # 5. Step Trend Engine (only on symbols NOT held by Range)
                 trend_bars = {
                     s: b for s, b in bars.items()
                     if s not in self.range_engine.open_positions and s not in self.range_engine.pending_orders
@@ -456,7 +462,7 @@ class PaperTraderV32:
                 self.trend_engine.process_bar_event(
                     timestamp=ts,
                     bars=trend_bars,
-                    next_open_prices=prices,
+                    next_open_prices=open_prices,
                     manage_positions=False,
                     btc_bullish=btc_bullish,
                     btc_bearish=btc_bearish,

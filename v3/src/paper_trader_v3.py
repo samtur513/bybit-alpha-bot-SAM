@@ -419,15 +419,18 @@ class PaperTraderV3:
         prices = self.get_live_prices()
         now_ms = int(time.time() * 1000)
         for ts, bars in list(self.batches.items()):
-            if now_ms - (ts + self.bar_interval_ms) > 120000:
+            time_since_close = now_ms - (ts + self.bar_interval_ms)
+            if time_since_close > 180000:
                 del self.batches[ts]
                 continue
-            if (
-                set(bars) == set(self.symbols)
-                and set(prices) == set(self.symbols)
-                and self.ready
-                and all(self.price_server_times.get(s, 0) >= ts + self.bar_interval_ms for s in self.symbols)
-            ):
+
+            # Отказоустойчивый кворум: немедленный вход если все бары на месте,
+            # либо запуск по кворуму (≥70% монет включая BTCUSDT) после 30с ожидания
+            has_all_bars = set(bars) == set(self.symbols)
+            grace_period_expired = time_since_close >= 30000
+            has_quorum = ("BTCUSDT" in bars) and (len(bars) >= max(3, int(len(self.symbols) * 0.70)))
+
+            if self.ready and (has_all_bars or (grace_period_expired and has_quorum)):
                 # Evaluate BTC trend
                 btc_bar = bars.get("BTCUSDT")
                 btc_bullish = True
@@ -458,10 +461,12 @@ class PaperTraderV3:
                                 f"🛡️ Regime Guard: Entry blocked for {s} at {bar_dt} ({st.get('reason')})"
                             )
 
+                open_prices = {s: prices.get(s, Decimal(str(b["close"]))) for s, b in bars.items()}
+
                 self.engine.process_bar_event(
                     timestamp=ts,
                     bars=bars,
-                    next_open_prices=prices,
+                    next_open_prices=open_prices,
                     manage_positions=False,
                     btc_bullish=btc_bullish,
                     btc_bearish=btc_bearish,
