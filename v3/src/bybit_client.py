@@ -70,14 +70,14 @@ class BybitClient:
                     headers["X-BAPI-API-KEY"] = self.api_key
                     headers["X-BAPI-TIMESTAMP"] = str(timestamp)
                     headers["X-BAPI-RECV-WINDOW"] = "5000"
-                    payload = json.dumps(data) if data else (requests.compat.urlencode(params) if params else "")
+                    payload = json.dumps(data, separators=(',', ':')) if data else (requests.compat.urlencode(params) if params else "")
                     headers["X-BAPI-SIGN"] = self._generate_signature(timestamp, payload)
 
                 response = self.session.request(
                     method=method,
                     url=url,
                     params=params,
-                    json=data if data else None,
+                    data=payload.encode('utf-8') if data else None,
                     headers=headers,
                     timeout=self.timeout,
                 )
