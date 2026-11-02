@@ -73,6 +73,16 @@ class NewsClassifier:
         re.IGNORECASE,
     )
 
+    # Standard Section 3 Safe Exclusions: eliminates false alarms on whitehats, patches, rumors denied, testnets
+    _SAFE_EXCLUSIONS = re.compile(
+        r"\b("
+        r"whitehat|white-hat|hackathon|patch(?:ed|es|ing)?|prevent(?:ed|s|ing)?|"
+        r"false alarm|fake rumor|rumors? denied|rumours? denied|denied|denies|"
+        r"recover(?:ed|s|ing)?|simulation|testnet|devnet|bounty program"
+        r")\b",
+        re.IGNORECASE,
+    )
+
     # Common coin tickers for symbol extraction
     _COMMON_TICKERS = {
         "BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "AVAX", "DOT", "MATIC", "POL",
@@ -149,6 +159,10 @@ class NewsClassifier:
 
         # Layer 1.0 Filter out retrospective analytical articles published days after the event
         if self._RETROSPECTIVE_PATTERNS.search(headline):
+            return EventType.NEUTRAL, 0
+
+        # Layer 1.0b Filter out safe exclusions (whitehat, hackathons, patches, denied rumors, testnet simulations)
+        if self._SAFE_EXCLUSIONS.search(headline):
             return EventType.NEUTRAL, 0
 
         # Layer 1.1 Regex Matching: Crash vs Major Catalyst vs Geopolitical
