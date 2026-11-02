@@ -65,19 +65,19 @@ class MarketStream:
                 'wss://stream.bybit.com/v5/public/linear',
                 on_open=opened,
                 on_message=lambda ws, msg: self.ingest(msg),
-                on_error=lambda ws, err: log.warning('WebSocket transport error')
+                on_error=lambda ws, err: log.info(f"Bybit WebSocket transport event: {err}. Auto-reconnecting in background...")
             )
-            # Bybit application heartbeat, in addition to transport ping/pong.
+            # Bybit application heartbeat (sent every 15s to guarantee sub-30s keep-alive)
             heartbeat_done = threading.Event()
             def heartbeat():
-                while not heartbeat_done.wait(20):
+                while not heartbeat_done.wait(15):
                     try:
                         self.socket.send('{"op":"ping"}')
                     except Exception:
                         return
             threading.Thread(target=heartbeat, daemon=True).start()
             try:
-                self.socket.run_forever(ping_interval=20, ping_timeout=10)
+                self.socket.run_forever(ping_interval=20, ping_timeout=15)
             finally:
                 heartbeat_done.set()
             if time.monotonic() - started > 60:
