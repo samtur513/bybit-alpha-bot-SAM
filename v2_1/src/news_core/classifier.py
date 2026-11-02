@@ -61,6 +61,18 @@ class NewsClassifier:
         re.IGNORECASE,
     )
 
+    # Retrospective analysis & post-mortem filters (avoids false alerts on articles published days after an event)
+    _RETROSPECTIVE_PATTERNS = re.compile(
+        r"\b("
+        r"after (?:[A-Za-z0-9_\-]+\s+){0,3}(?:hack|exploit|crash|drain|attack)|"
+        r"following (?:[A-Za-z0-9_\-]+\s+){0,3}(?:hack|exploit|crash|drain|attack)|"
+        r"days after|weeks after|months after|in the wake of|"
+        r"post-mortem|monthly recap|weekly recap|october recap|outflows resume|"
+        r"as withdrawals resume|withdrawals resume|withdrawals reopen"
+        r")\b",
+        re.IGNORECASE,
+    )
+
     # Common coin tickers for symbol extraction
     _COMMON_TICKERS = {
         "BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "AVAX", "DOT", "MATIC", "POL",
@@ -135,7 +147,11 @@ class NewsClassifier:
         event_type = EventType.NEUTRAL
         score = 0
 
-        # Layer 1 Regex Matching: Crash vs Major Catalyst vs Geopolitical
+        # Layer 1.0 Filter out retrospective analytical articles published days after the event
+        if self._RETROSPECTIVE_PATTERNS.search(headline):
+            return EventType.NEUTRAL, 0
+
+        # Layer 1.1 Regex Matching: Crash vs Major Catalyst vs Geopolitical
         if self._CRASH_PATTERNS.search(headline):
             event_type = EventType.CRASH_SHOCK
             score = -3
