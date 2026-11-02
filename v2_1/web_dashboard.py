@@ -534,9 +534,16 @@ HTML_PAGE = """<!DOCTYPE html>
                                 stBadge = '<span style="background:rgba(244,63,94,0.15); color:var(--accent-red); border:1px solid rgba(244,63,94,0.3); padding:3px 8px; border-radius:4px; font-size:11px; font-weight:700;" title="BTC падает (медвежий тренд). Защитный фильтр блокирует покупки альткоинов, защищая от ловушек">🛑 БЛОК: BTC BEAR</span>';
                             } else {
                                 const mins = Math.floor((data.next_candle_seconds || 0) / 60);
-                                stBadge = `<span style="background:rgba(245,158,11,0.15); color:var(--accent-yellow); border:1px solid rgba(245,158,11,0.3); padding:3px 8px; border-radius:4px; font-size:11px; font-weight:700;" title="Уровень Дончяна пробит внутри часа. Ожидание закрытия 1h свечи через ${mins} мин">⏳ ЖДЁТ ЗАКРЫТИЯ 1H (${mins}м)</span>`;
+                                stBadge = `<span style="background:rgba(245,158,11,0.15); color:var(--accent-yellow); border:1px solid rgba(245,158,11,0.3); padding:3px 8px; border-radius:4px; font-size:11px; font-weight:700;" title="Верхний уровень пробит внутри часа. Ожидание закрытия 1h свечи для входа в LONG через ${mins} мин">⏳ ЖДЁТ ЗАКРЫТИЯ 1H (${mins}м)</span>`;
                             }
-                        } else if (r.dist_to_long_pct <= 1.0) {
+                        } else if (r.dist_to_short_pct === 0) {
+                            if (btcTrend === 'BULLISH' && sym !== 'BTCUSDT') {
+                                stBadge = '<span style="background:rgba(244,63,94,0.15); color:var(--accent-red); border:1px solid rgba(244,63,94,0.3); padding:3px 8px; border-radius:4px; font-size:11px; font-weight:700;" title="BTC растет (бычий тренд). Защитный фильтр блокирует шорты альткоинов">🛑 БЛОК: BTC BULL</span>';
+                            } else {
+                                const mins = Math.floor((data.next_candle_seconds || 0) / 60);
+                                stBadge = `<span style="background:rgba(245,158,11,0.15); color:var(--accent-yellow); border:1px solid rgba(245,158,11,0.3); padding:3px 8px; border-radius:4px; font-size:11px; font-weight:700;" title="Нижняя граница Дончяна пробита внутри часа. Ожидание закрытия 1h свечи для входа в SHORT через ${mins} мин">⏳ ЖДЁТ ЗАКРЫТИЯ 1H (SHORT, ${mins}м)</span>`;
+                            }
+                        } else if (r.dist_to_long_pct <= 1.0 || r.dist_to_short_pct <= 1.0) {
                             stBadge = '<span style="background:rgba(56,189,248,0.15); color:var(--accent-blue); border:1px solid rgba(56,189,248,0.3); padding:3px 8px; border-radius:4px; font-size:11px; font-weight:700;">🔥 ИМПУЛЬС (≤1%)</span>';
                         } else {
                             stBadge = '<span style="color:var(--text-muted);">Сканирование</span>';

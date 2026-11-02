@@ -528,8 +528,11 @@ HTML_PAGE = """<!DOCTYPE html>
                                 statusBadge = `<span class="badge" style="background:rgba(244,63,94,0.15); color:var(--accent-red); border:1px solid rgba(244,63,94,0.3); font-weight:700;" title="BTC падает (медвежий тренд). Защитный фильтр блокирует покупки альткоинов, защищая от ловушек">🛑 БЛОК: BTC BEAR</span>`;
                             } else {
                                 const mins = Math.floor((data.next_candle_seconds || 0) / 60);
-                                statusBadge = `<span class="badge badge-yellow" title="Уровень пробит внутри часа. Ожидание закрытия 1h свечи через ${mins} мин">⏳ ЖДЁТ ЗАКРЫТИЯ 1H (${mins}м)</span>`;
+                                statusBadge = `<span class="badge badge-yellow" title="Верхний уровень пробит внутри часа. Ожидание закрытия 1h свечи для входа в LONG через ${mins} мин">⏳ ЖДЁТ ЗАКРЫТИЯ 1H (${mins}м)</span>`;
                             }
+                        } else if (r.dist_to_short_pct === 0) {
+                            const mins = Math.floor((data.next_candle_seconds || 0) / 60);
+                            statusBadge = `<span class="badge" style="background:rgba(245,158,11,0.15); color:var(--accent-yellow); border:1px solid rgba(245,158,11,0.3); font-weight:700;" title="Нижняя граница Дончяна пробита внутри часа. Ожидание закрытия 1h свечи для входа в SHORT через ${mins} мин">⏳ ЖДЁТ ЗАКРЫТИЯ 1H (SHORT, ${mins}м)</span>`;
                         } else if (minDistance <= 1.0) {
                             statusBadge = `<span class="badge badge-yellow">🔥 ИМПУЛЬС (&le;1%)</span>`;
                         } else {

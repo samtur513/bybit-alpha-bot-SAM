@@ -540,7 +540,12 @@ class PaperTraderV32:
                         if self.btc_trend_status == "BEARISH" and sym != "BTCUSDT":
                             status_text = "🛑 БЛОК: BTC BEAR (Trend)"
                         else:
-                            status_text = "⏳ ЖДЁТ ЗАКРЫТИЯ 1H"
+                            status_text = "⏳ ЖДЁТ ЗАКРЫТИЯ 1H (LONG)"
+                    elif dist_low_pct == 0.0:
+                        if self.btc_trend_status == "BULLISH" and sym != "BTCUSDT":
+                            status_text = "🛑 БЛОК: BTC BULL (Trend)"
+                        else:
+                            status_text = "⏳ ЖДЁТ ЗАКРЫТИЯ 1H (SHORT)"
                     elif dist_up_pct <= 1.0 or dist_maker_buy_pct <= 1.0:
                         status_text = "🔥 ИМПУЛЬС (≤1%)"
                     else:
