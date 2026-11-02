@@ -68,7 +68,7 @@ HTML_PAGE = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bybit Multi-Alpha v3.1 | Dynamic Universe & News Shield</title>
+    <title>Bybit Multi-Alpha v3.1.1 (1h) | Dynamic Universe & News Shield</title>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -295,7 +295,7 @@ HTML_PAGE = """<!DOCTYPE html>
     <div class="container">
         <header>
             <div class="title-block">
-                <h1>Bybit Multi-Alpha v3.1 <span class="tag-v3">Port 8082</span></h1>
+                <h1>Bybit Multi-Alpha v3.1.1 <span class="badge" style="background: #2563eb; color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 13px; margin-left: 8px;">1h Breakout</span> <span class="tag-v3">Port 8082</span></h1>
             </div>
             <div class="header-meta">
                 <div class="badge" id="gearbox-badge">⚙️ Риск: Gear 3 (2.0%)</div>
@@ -434,7 +434,7 @@ HTML_PAGE = """<!DOCTYPE html>
         </table>
 
         <div class="footer-note">
-            Multi-Alpha Growth Engine v3.1 • Auto-Gearbox • Cascade Take-Profit • Fast-Scratch • Dynamic Universe • News Core v1.1 Shield
+            Multi-Alpha Growth Engine v3.1.1 (1h Breakout) • Auto-Gearbox • Cascade Take-Profit • Fast-Scratch • Dynamic Universe • News Core v1.2 Shield
         </div>
     </div>
 
@@ -805,7 +805,7 @@ def start_server_and_bot():
 
     server_address = ("0.0.0.0", PORT)
     with socketserver.ThreadingTCPServer(server_address, DashboardHTTPRequestHandler) as httpd:
-        logger.info(f"Multi-Alpha v3.1 Web Dashboard live on http://127.0.0.1:{PORT}")
+        logger.info(f"Multi-Alpha v3.1.1 (1h) Web Dashboard live on http://127.0.0.1:{PORT}")
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:

@@ -866,7 +866,8 @@ class PaperTraderV3:
         next_candle_sec = bar_sec - (int(server_ts / 1000) % bar_sec)
 
         status_data = {
-            "version": "3.0",
+            "version": "3.1.1",
+            "timeframe": "1h",
             "timestamp": server_ts,
             "mode": "PAPER_STREAM_V3_DYNAMIC_UNIVERSE",
             "stream_ready": self.ready,
@@ -925,9 +926,9 @@ class PaperTraderV3:
 
         # Markdown status file
         news_shield_str = "🛡️ **АКТИВЕН (v1.2)** (Defensive Only: Eject, Squeeze, Runner, Pre-Macro Trim, Regime Guard)" if getattr(self, "news_core", None) else "⚪ Отключен"
-        md = f"""# Bybit Multi-Alpha v3.0 Live Monitor (Port 8082)
+        md = f"""# Bybit Multi-Alpha v3.1.1 (1h Breakout) Live Monitor (Port 8082)
 
-**Архитектура**: Dynamic Universe Selection + 4h Donchian Breakout + News Defense Shield  
+**Архитектура**: Dynamic Universe Selection + 1h Donchian Breakout (120 bars = 5d) + News Core v1.2 Shield  
 **Последнее обновление**: {status_data['datetime_utc']}  
 **Текущий капитал**: **${snapshot.equity:.2f} USDT** (Старт: ${self.initial_capital} USDT)  
 **Общий чистый PnL**: **${snapshot.total_net_pnl:+.2f}**  

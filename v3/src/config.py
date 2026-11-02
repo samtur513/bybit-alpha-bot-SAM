@@ -21,8 +21,9 @@ PERSISTENT_STATE_FILE = REPORTS_DIR / "BOT_STATE_PERSISTENT_V3.json"
 LIVE_STATUS_FILE = REPORTS_DIR / "PAPER_TRADING_LIVE_V3.json"
 LIVE_MD_FILE = REPORTS_DIR / "PAPER_TRADING_LIVE_V3.md"
 
-# Server Port (Dedicated for v3)
+# Server Port (Dedicated for v3.1.1 1h)
 PORT = 8082
+VERSION_NAME = "v3.1.1 (1h)"
 
 # Data Dirs & Timestamps for Backtests
 PARQUET_DATA_DIR = BASE_DIR.parent / "data" / "parquet_2024_2026"

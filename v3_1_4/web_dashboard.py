@@ -1,0 +1,818 @@
+"""
+Live Web Dashboard & Paper Trading Server v3.1.4 (Port 8084).
+Features:
+- Dynamic Universe Radar & Real-Time Screener Telemetry (400+ Bybit Linear Perpetuals)
+- RVOL, Delta OI, KER, and ATR Exhaustion metrics live display
+- News Core v1.2 Defensive Shield Live Feed, Status, and Interactive Webhook Simulator
+- Auto-Gearbox Drawdown Risk Stepping (Gear 3, Gear 2, Gear 1) live badge
+- Cascade Partial TP and Fast-Scratch active telemetry
+- REST API: /api/status, /api/universe, /api/news_event, /api/logs
+"""
+
+import collections
+from datetime import datetime, timezone
+from decimal import Decimal
+import http.server
+import json
+import logging
+from pathlib import Path
+import socketserver
+import sys
+import threading
+import time
+import urllib.parse
+
+# Ensure UTF-8 output on Windows consoles
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+BASE_DIR = Path(__file__).resolve().parent
+PARENT_DIR = BASE_DIR.parent
+for p in [str(PARENT_DIR), str(BASE_DIR)]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+from v3_1_4.src.paper_trader_v314 import PaperTraderV314
+from v3_1_4.src.config import LIVE_STATUS_FILE, PERSISTENT_STATE_FILE, PORT
+
+LOG_BUFFER = collections.deque(maxlen=300)
+
+
+class BufferHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            LOG_BUFFER.append(msg)
+        except Exception:
+            pass
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+root_logger = logging.getLogger()
+buf_handler = BufferHandler()
+buf_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+root_logger.addHandler(buf_handler)
+
+logger = logging.getLogger("WebDashboardV314")
+GLOBAL_TRADER: PaperTraderV314 = None
+
+HTML_PAGE = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bybit Multi-Alpha v3.1.4 (4h) | Dynamic Universe & News Shield</title>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-dark: #080c14;
+            --bg-card: #0f172a;
+            --bg-card-hover: #1e293b;
+            --accent-cyan: #00f2fe;
+            --accent-blue: #38bdf8;
+            --accent-green: #10b981;
+            --accent-red: #f43f5e;
+            --accent-yellow: #f59e0b;
+            --accent-purple: #a855f7;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --border: #1e293b;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            font-family: 'Inter', sans-serif;
+            padding: 24px;
+        }
+        .container { max-width: 1480px; margin: 0 auto; }
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 20px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+        .title-block {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .tag-v3 {
+            background: rgba(0, 242, 254, 0.15);
+            border: 1px solid var(--accent-cyan);
+            color: var(--accent-cyan);
+            font-size: 11px;
+            font-weight: 700;
+            padding: 4px 10px;
+            border-radius: 6px;
+            text-transform: uppercase;
+        }
+        .header-meta {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .badge {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            padding: 8px 14px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-main);
+        }
+        .countdown-box {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            padding: 8px 14px;
+            border-radius: 8px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            color: var(--accent-yellow);
+        }
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .metric-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+            transition: all 0.2s ease;
+        }
+        .metric-card:hover {
+            border-color: var(--accent-blue);
+            transform: translateY(-2px);
+        }
+        .metric-title {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+        }
+        .metric-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 22px;
+            font-weight: 700;
+            color: var(--text-main);
+        }
+        .val-green { color: var(--accent-green); }
+        .val-red { color: var(--accent-red); }
+        .section-header {
+            font-size: 16px;
+            font-weight: 700;
+            margin-bottom: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .sub-header {
+            font-size: 12px;
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--bg-card);
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            margin-bottom: 24px;
+        }
+        th, td {
+            padding: 12px 14px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+        }
+        th {
+            background: #0b1120;
+            color: var(--text-muted);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: 0.5px;
+        }
+        tbody tr:hover { background: var(--bg-card-hover); }
+        .pos-badge {
+            font-size: 11px;
+            font-weight: 700;
+            padding: 3px 8px;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+        .badge-long { background: rgba(16, 185, 129, 0.2); color: var(--accent-green); }
+        .badge-short { background: rgba(244, 63, 94, 0.2); color: var(--accent-red); }
+        .badge-pass { background: rgba(16, 185, 129, 0.2); color: var(--accent-green); font-size: 11px; padding: 2px 6px; border-radius: 4px; }
+        .badge-rej { background: rgba(244, 63, 94, 0.15); color: #fda4af; font-size: 11px; padding: 2px 6px; border-radius: 4px; }
+        .badge-cooldown { background: rgba(245, 158, 11, 0.2); color: var(--accent-yellow); font-size: 10px; padding: 2px 6px; border-radius: 4px; }
+        
+        /* Grid for Live Feeds */
+        .two-col-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 24px;
+        }
+        @media (max-width: 1024px) {
+            .two-col-grid { grid-template-columns: 1fr; }
+        }
+        .card-box {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+        }
+        .btn-test {
+            background: rgba(56, 189, 248, 0.15);
+            border: 1px solid var(--accent-blue);
+            color: var(--accent-blue);
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .btn-test:hover {
+            background: var(--accent-blue);
+            color: #000;
+        }
+        .news-item {
+            padding: 10px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .news-item:last-child { border-bottom: none; }
+        .news-meta {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+        .news-headline {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-main);
+        }
+        .news-action {
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--accent-cyan);
+        }
+        .footer-note {
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 12px;
+            padding-top: 16px;
+            border-top: 1px solid var(--border);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="title-block">
+                <h1>Bybit Multi-Alpha v3.1.4 <span class="badge" style="background: #9333ea; color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 13px; margin-left: 8px;">4h Breakout</span> <span class="tag-v3">Port 8084</span></h1>
+            </div>
+            <div class="header-meta">
+                <div class="badge" id="gearbox-badge">⚙️ Риск: Gear 3 (2.0%)</div>
+                <div class="badge" id="news-shield-status">🛡️ Новостной Щит: Defensive Only</div>
+                <div class="badge" id="btc-filter-status">BTC Тренд: --</div>
+                <div class="badge" id="universe-badge">🌐 Dynamic Universe: 25 монет</div>
+                <div class="countdown-box">4H Бар: <span id="candle-timer">--</span></div>
+            </div>
+        </header>
+
+        <div class="metrics-grid">
+            <div class="metric-card">
+                <div class="metric-title">Капитал (USDT)</div>
+                <div class="metric-value" id="metric-capital">$300.00</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-title">Чистый PnL</div>
+                <div class="metric-value" id="metric-pnl">$0.00</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-title">Просадка (Max DD)</div>
+                <div class="metric-value" id="metric-dd">0.00%</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-title">Винрейт</div>
+                <div class="metric-value" id="metric-wr">0.0%</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-title">Открытых позиций</div>
+                <div class="metric-value" id="metric-open-count">0 / 4</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-title">Сделок завершено</div>
+                <div class="metric-value" id="metric-trades-count">0</div>
+            </div>
+        </div>
+
+        <!-- Open Positions -->
+        <div class="section-header">
+            <span>Открытые позиции (1h Trend Breakout + Cascade TP & Fast-Scratch)</span>
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Монета</th>
+                    <th>Направление</th>
+                    <th>Объём</th>
+                    <th>Вход ($)</th>
+                    <th>Текущая ($)</th>
+                    <th>Стоп ($)</th>
+                    <th>Unr. PnL ($)</th>
+                    <th>Статус / TP</th>
+                </tr>
+            </thead>
+            <tbody id="positions-body">
+                <tr><td colspan="8" style="text-align:center; color: var(--text-muted);">Загрузка открытых позиций...</td></tr>
+            </tbody>
+        </table>
+
+        <!-- Two Column: Live News Shield Feed & Interactive Simulator -->
+        <div class="two-col-grid">
+            <div class="card-box">
+                <div class="section-header">
+                    <span>🛡️ Живой Мониторинг Новостного Щита</span>
+                    <span class="sub-header" id="shield-defense-mode">Режим: Defensive Only</span>
+                </div>
+                <div style="margin-bottom: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
+                    <button class="btn-test" onclick="simulateNews('CRASH_SHOCK', 'BTCUSDT')">🚨 Тест Crash Shock</button>
+                    <button class="btn-test" onclick="simulateNews('MAJOR_CATALYST', 'ETHUSDT')">🚀 Тест Major Catalyst</button>
+                    <button class="btn-test" onclick="simulateNews('REGULATORY_CRACKDOWN', 'SOLUSDT')">⚖️ Тест Регулятора</button>
+                </div>
+                <div id="news-feed-body" style="max-height: 280px; overflow-y: auto;">
+                    <div style="color: var(--text-muted); font-size: 12px; text-align: center; padding: 20px;">Ожидание новостных событий...</div>
+                </div>
+            </div>
+
+            <div class="card-box">
+                <div class="section-header">
+                    <span>🌐 Динамический Скринер (RVOL & Delta OI)</span>
+                    <span class="sub-header" id="screener-countdown">Переоценка: --</span>
+                </div>
+                <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 10px;">
+                    Оценка 400+ контрактов Bybit: Ликвидность, Волатильность, KER, RVOL, ΔOI.
+                </div>
+                <div id="screener-stats-body" style="max-height: 310px; overflow-y: auto;">
+                    <table style="margin-bottom: 0;">
+                        <thead>
+                            <tr>
+                                <th>Монета</th>
+                                <th>Score</th>
+                                <th>RVOL</th>
+                                <th>ΔOI (%)</th>
+                                <th>Оборот 24h</th>
+                                <th>Статус</th>
+                            </tr>
+                        </thead>
+                        <tbody id="screener-table-body">
+                            <tr><td colspan="6" style="text-align:center; color: var(--text-muted);">Загрузка данных скринера...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Universe Radar -->
+        <div class="section-header">
+            <span>Радар рынка активных монет (Top Bybit Linear Perpetuals)</span>
+        </div>
+        <div class="macro-banner" id="macro-banner" style="background: rgba(15,23,42,0.6); padding: 10px 16px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; font-size: 12px;">
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <span style="color: var(--text-muted);">🛡️ Фильтр рынка BTC:</span>
+                <span id="banner-btc-status" style="font-weight: 700; color: var(--accent-red);">🔴 BEARISH (Защита: Long-пробои альтов заморожены)</span>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <span style="color: var(--text-muted);">⏱️ До закрытия 4h свечи:</span>
+                <span id="banner-candle-timer" style="font-family: 'JetBrains Mono', monospace; font-weight: 700; color: var(--accent-cyan);">--:--</span>
+                <span style="color: var(--text-muted); font-size: 11px;">(входы строго на закрытии 4h бара)</span>
+            </div>
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Монета</th>
+                    <th>Текущая цена</th>
+                    <th>До Long (Breakout)</th>
+                    <th>До Short (Breakdown)</th>
+                    <th>ATR (4h)</th>
+                    <th>Объём к SMA</th>
+                    <th>Тренд EMA</th>
+                    <th>Статус</th>
+                </tr>
+            </thead>
+            <tbody id="radar-body">
+                <tr><td colspan="8" style="text-align:center; color: var(--text-muted);">Загрузка радара рынка...</td></tr>
+            </tbody>
+        </table>
+
+        <div class="footer-note">
+            Multi-Alpha Growth Engine v3.1.4 (4h Breakout) • Auto-Gearbox • Cascade Take-Profit • Fast-Scratch • Dynamic Universe • News Core v1.2 Shield
+        </div>
+    </div>
+
+    <script>
+        function formatMoney(num) {
+            return '$' + Number(num).toFixed(2);
+        }
+
+        async function simulateNews(kind, symbol) {
+            let headline = "";
+            let tier = 1;
+            let ret1m = -0.03;
+            if (kind === 'CRASH_SHOCK') {
+                headline = `CRITICAL: Major crypto insolvency panic triggers immediate market crash across ${symbol}`;
+            } else if (kind === 'MAJOR_CATALYST') {
+                headline = `BREAKING: SEC approves historic ETF and institutional catalyst for ${symbol}`;
+                ret1m = 0.04;
+            } else {
+                headline = `REGULATORY: Enforcement lawsuit announced against ${symbol} exchange infrastructure`;
+            }
+
+            try {
+                const res = await fetch('/api/news_event', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        headline: headline,
+                        symbol: symbol,
+                        source_tier: tier,
+                        ret_1m: ret1m,
+                        vol_1m: 5.0,
+                        vol_median_60m: 1.0
+                    })
+                });
+                const resData = await res.json();
+                console.log("Simulated news event result:", resData);
+                updateDashboard();
+            } catch (e) {
+                alert("Ошибка отправки тестового события: " + e);
+            }
+        }
+
+        async function updateDashboard() {
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+
+                document.getElementById('metric-capital').innerText = formatMoney(data.capital);
+                const pnlEl = document.getElementById('metric-pnl');
+                const pnl = Number(data.total_net_pnl);
+                pnlEl.innerText = (pnl >= 0 ? '+' : '') + formatMoney(pnl);
+                pnlEl.className = 'metric-value ' + (pnl >= 0 ? 'val-green' : 'val-red');
+
+                document.getElementById('metric-dd').innerText = Number(data.drawdown_pct).toFixed(2) + '%';
+                document.getElementById('metric-wr').innerText = Number(data.win_rate_pct).toFixed(1) + '%';
+                document.getElementById('metric-open-count').innerText = data.open_positions_count + ' / 4';
+                document.getElementById('metric-trades-count').innerText = data.closed_trades_count;
+
+                if (data.news_defense_active) {
+                    document.getElementById('news-shield-status').innerText = '🛡️ Новостной Щит: Defensive Only';
+                } else {
+                    document.getElementById('news-shield-status').innerText = '⚪ Новостной Щит: Отключен';
+                }
+
+                if (data.gearbox_gear) {
+                    const pyra = data.gearbox_pyramiding_allowed ? ' | Pyramiding' : ' | No Add';
+                    document.getElementById('gearbox-badge').innerText = `⚙️ Gear ${data.gearbox_gear} [${Number(data.gearbox_risk_pct).toFixed(1)}%]${pyra}`;
+                }
+
+                if (data.btc_trend_status) {
+                    document.getElementById('btc-filter-status').innerText = 'BTC Тренд: ' + data.btc_trend_status;
+                }
+
+                if (data.monitored_symbols_count) {
+                    document.getElementById('universe-badge').innerText = '🌐 Dynamic Universe: ' + data.monitored_symbols_count + ' монет';
+                }
+
+                const sec = data.next_candle_seconds || 0;
+                const h = Math.floor(sec / 3600);
+                const m = Math.floor((sec % 3600) / 60);
+                const s = sec % 60;
+                document.getElementById('candle-timer').innerText = `${h}ч ${m}м ${s < 10 ? '0' : ''}${s}с`;
+
+                // Screener countdown
+                if (data.screener_next_run_seconds !== undefined) {
+                    const scSec = data.screener_next_run_seconds;
+                    const scH = Math.floor(scSec / 3600);
+                    const scM = Math.floor((scSec % 3600) / 60);
+                    document.getElementById('screener-countdown').innerText = `Следующая переоценка: ${scH}ч ${scM}м`;
+                }
+
+                // Open Positions
+                const pBody = document.getElementById('positions-body');
+                const posKeys = Object.keys(data.open_positions || {});
+                if (posKeys.length === 0) {
+                    pBody.innerHTML = '<tr><td colspan="8" style="text-align:center; color: var(--text-muted);">Нет открытых позиций. Динамический сканер активен.</td></tr>';
+                } else {
+                    let html = '';
+                    for (const sym of posKeys) {
+                        const p = data.open_positions[sym];
+                        const unr = Number(p.unrealized_pnl);
+                        const unrClass = unr >= 0 ? 'val-green' : 'val-red';
+                        const badgeClass = p.direction === 'LONG' ? 'badge-long' : 'badge-short';
+                        html += `<tr>
+                            <td style="font-weight:700;">${sym}</td>
+                            <td><span class="pos-badge ${badgeClass}">${p.direction}</span></td>
+                            <td>${p.qty}</td>
+                            <td>$${Number(p.entry_price).toFixed(4)}</td>
+                            <td>$${Number(p.current_price).toFixed(4)}</td>
+                            <td>$${Number(p.current_stop).toFixed(4)}</td>
+                            <td class="${unrClass}" style="font-weight:700;">${unr >= 0 ? '+' : ''}$${unr.toFixed(2)}</td>
+                            <td>${p.is_pyramided ? '🚀 Пирамидинг (+50%)' : (p.is_breakeven_set ? '🛡️ Безубыток установлен' : 'Ожидание импульса')}</td>
+                        </tr>`;
+                    }
+                    pBody.innerHTML = html;
+                }
+
+                // Live News Events Feed
+                const nBody = document.getElementById('news-feed-body');
+                const newsList = data.news_recent_events || [];
+                if (newsList.length > 0) {
+                    let nHtml = '';
+                    for (const ev of newsList) {
+                        const tsStr = new Date(ev.timestamp).toLocaleTimeString();
+                        const acts = (ev.actions_taken || []).join(', ') || 'MONITOR';
+                        nHtml += `<div class="news-item">
+                            <div class="news-meta">
+                                <span>${tsStr} • <b>${ev.symbol || 'MARKET'}</b> • [${ev.event_type || 'INFO'}]</span>
+                                <span class="news-action">${acts}</span>
+                            </div>
+                            <div class="news-headline">${ev.headline}</div>
+                        </div>`;
+                    }
+                    nBody.innerHTML = nHtml;
+                }
+
+                // Screener Top Candidates Table
+                const scBody = document.getElementById('screener-table-body');
+                const candList = data.screened_candidates || [];
+                if (candList.length > 0) {
+                    let scHtml = '';
+                    for (const c of candList.slice(0, 10)) {
+                        const passBadge = c.passed_filters 
+                            ? '<span class="badge-pass">PASS</span>' 
+                            : `<span class="badge-rej" title="${c.rejection_reason || ''}">REJ</span>`;
+                        scHtml += `<tr>
+                            <td style="font-weight:700;">${c.symbol}</td>
+                            <td style="font-family:'JetBrains Mono';">${c.composite_score}</td>
+                            <td style="color:${c.rvol >= 1.2 ? 'var(--accent-cyan)' : 'inherit'}">${c.rvol || 1.0}x</td>
+                            <td style="color:${c.delta_oi_pct > 0 ? 'var(--accent-green)' : 'inherit'}">${c.delta_oi_pct > 0 ? '+' : ''}${c.delta_oi_pct || 0}%</td>
+                            <td>$${(c.turnover_24h / 1e6).toFixed(1)}M</td>
+                            <td>${passBadge}</td>
+                        </tr>`;
+                    }
+                    scBody.innerHTML = scHtml;
+                }
+
+                // Macro BTC Banner & Countdown
+                const btcStatusEl = document.getElementById('banner-btc-status');
+                const btcTrend = data.btc_trend_status || 'NEUTRAL';
+                if (btcStatusEl) {
+                    if (btcTrend === 'BEARISH') {
+                        btcStatusEl.innerHTML = '<span style="color:var(--accent-red);">🔴 BEARISH (Защита: Long-пробои альтов заморожены)</span>';
+                    } else if (btcTrend === 'BULLISH') {
+                        btcStatusEl.innerHTML = '<span style="color:var(--accent-green);">🟢 BULLISH (Рынок разрешает пробойные покупки)</span>';
+                    } else {
+                        btcStatusEl.innerHTML = '<span style="color:var(--accent-yellow);">🟡 NEUTRAL (Переходная фаза)</span>';
+                    }
+                }
+                const candleTimerEl = document.getElementById('banner-candle-timer');
+                if (candleTimerEl && data.next_candle_seconds !== undefined) {
+                    const mins = Math.floor(data.next_candle_seconds / 60);
+                    const secs = data.next_candle_seconds % 60;
+                    candleTimerEl.innerText = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+                }
+
+                // Market Radar
+                const rBody = document.getElementById('radar-body');
+                const rKeys = Object.keys(data.radar || {});
+                if (rKeys.length > 0) {
+                    let html = '';
+                    for (const sym of rKeys) {
+                        const r = data.radar[sym];
+                        const coolBadge = r.is_cooldown ? ' <span class="badge-cooldown">Cooldown 3b</span>' : '';
+                        
+                        let stBadge;
+                        if (r.is_in_position) {
+                            stBadge = '<span class="pos-badge badge-long">В позиции</span>';
+                        } else if (r.is_cooldown) {
+                            stBadge = coolBadge;
+                        } else if (r.dist_to_long_pct === 0) {
+                            if (btcTrend === 'BEARISH' && sym !== 'BTCUSDT') {
+                                stBadge = '<span style="background:rgba(244,63,94,0.15); color:var(--accent-red); border:1px solid rgba(244,63,94,0.3); padding:3px 8px; border-radius:4px; font-size:11px; font-weight:700;" title="BTC падает (медвежий тренд). Защитный фильтр блокирует покупки альткоинов, защищая от ловушек">🛑 БЛОК: BTC BEAR</span>';
+                            } else {
+                                const mins = Math.floor((data.next_candle_seconds || 0) / 60);
+                                stBadge = `<span style="background:rgba(245,158,11,0.15); color:var(--accent-yellow); border:1px solid rgba(245,158,11,0.3); padding:3px 8px; border-radius:4px; font-size:11px; font-weight:700;" title="Верхний уровень пробит внутри часа. Ожидание закрытия 4h свечи для входа в LONG через ${mins} мин">⏳ ЖДЁТ ЗАКРЫТИЯ 4H (${mins}м)</span>`;
+                            }
+                        } else if (r.dist_to_short_pct === 0) {
+                            if (btcTrend === 'BULLISH' && sym !== 'BTCUSDT') {
+                                stBadge = '<span style="background:rgba(244,63,94,0.15); color:var(--accent-red); border:1px solid rgba(244,63,94,0.3); padding:3px 8px; border-radius:4px; font-size:11px; font-weight:700;" title="BTC растет (бычий тренд). Защитный фильтр блокирует шорты альткоинов">🛑 БЛОК: BTC BULL</span>';
+                            } else {
+                                const mins = Math.floor((data.next_candle_seconds || 0) / 60);
+                                stBadge = `<span style="background:rgba(245,158,11,0.15); color:var(--accent-yellow); border:1px solid rgba(245,158,11,0.3); padding:3px 8px; border-radius:4px; font-size:11px; font-weight:700;" title="Нижняя граница Дончяна пробита внутри часа. Ожидание закрытия 4h свечи для входа в SHORT через ${mins} мин">⏳ ЖДЁТ ЗАКРЫТИЯ 4H (SHORT, ${mins}м)</span>`;
+                            }
+                        } else if (r.dist_to_long_pct <= 1.0 || r.dist_to_short_pct <= 1.0) {
+                            stBadge = '<span style="background:rgba(56,189,248,0.15); color:var(--accent-blue); border:1px solid rgba(56,189,248,0.3); padding:3px 8px; border-radius:4px; font-size:11px; font-weight:700;">🔥 ИМПУЛЬС (≤1%)</span>';
+                        } else {
+                            stBadge = '<span style="color:var(--text-muted);">Сканирование</span>';
+                        }
+
+                        const longTitle = r.dist_to_long_pct === 0 ? 'title="Уровень Дончяна коснулся/пробит внутри часа. Решения принимаются строго по закрытию 4h бара!"' : '';
+
+                        html += `<tr>
+                            <td style="font-weight:700;">${sym}</td>
+                            <td>$${Number(r.current_price).toFixed(4)}</td>
+                            <td style="color:${r.dist_to_long_pct < 2 ? 'var(--accent-green)' : 'inherit'}; font-weight:${r.dist_to_long_pct < 2 ? '700' : 'normal'}" ${longTitle}>${r.dist_to_long_pct}% ${r.dist_to_long_pct===0?'⏳':''}</td>
+                            <td style="color:${r.dist_to_short_pct < 2 ? 'var(--accent-red)' : 'inherit'}; font-weight:${r.dist_to_short_pct < 2 ? '700' : 'normal'}">${r.dist_to_short_pct}%</td>
+                            <td>${r.atr}</td>
+                            <td style="color:${r.volume_ratio >= 1.2 ? 'var(--accent-cyan)' : 'inherit'}">${r.volume_ratio}x</td>
+                            <td style="font-size:11px; color:var(--text-muted);">${r.trend}</td>
+                            <td>${stBadge}</td>
+                        </tr>`;
+                    }
+                    rBody.innerHTML = html;
+                }
+
+            } catch (e) {
+                console.error("Dashboard update failed:", e);
+            }
+        }
+
+        setInterval(updateDashboard, 3000);
+        updateDashboard();
+    </script>
+</body>
+</html>
+"""
+
+
+class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/" or parsed.path == "/index.html":
+            payload = HTML_PAGE.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+        elif parsed.path == "/api/status":
+            if GLOBAL_TRADER and getattr(GLOBAL_TRADER, "last_status_cache", None):
+                payload = json.dumps(GLOBAL_TRADER.last_status_cache, indent=2).encode("utf-8")
+            elif LIVE_STATUS_FILE.exists():
+                try:
+                    payload = LIVE_STATUS_FILE.read_bytes()
+                except Exception:
+                    payload = b"{}"
+            else:
+                payload = b"{}"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+        elif parsed.path == "/api/universe":
+            universe_data = []
+            if GLOBAL_TRADER and getattr(GLOBAL_TRADER, "screened_universe", None):
+                universe_data = [
+                    {
+                        "rank": idx,
+                        "symbol": a.symbol,
+                        "score": round(a.composite_score, 4),
+                        "passed": a.passed_filters,
+                        "rejection_reason": a.rejection_reason,
+                        "turnover_24h": round(a.turnover_24h, 2),
+                        "open_interest": round(a.open_interest, 2),
+                        "norm_atr": round(a.norm_atr, 4),
+                        "rvol": round(getattr(a, "rvol", 1.0), 2),
+                        "delta_oi_pct": round(getattr(a, "delta_oi_pct", 0.0) * 100, 2),
+                        "adx": round(a.adx, 2),
+                        "rel_strength": round(a.relative_strength, 4),
+                        "funding_rate": round(a.funding_rate, 6),
+                    }
+                    for idx, a in enumerate(GLOBAL_TRADER.screened_universe, 1)
+                ]
+            payload = json.dumps(universe_data, indent=2).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+        elif parsed.path == "/api/logs":
+            payload = json.dumps(list(LOG_BUFFER), indent=2).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def do_POST(self):
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/api/news_event":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode("utf-8")
+            try:
+                data = json.loads(body)
+                headline = data.get("headline", "")
+                sym = data.get("symbol")
+                tier = int(data.get("source_tier", 3))
+                ret_1m = float(data.get("ret_1m", 0.0))
+                vol_1m = float(data.get("vol_1m", 0.0))
+                vol_med = float(data.get("vol_median_60m", 1.0))
+
+                actions = []
+                if GLOBAL_TRADER:
+                    actions = GLOBAL_TRADER.handle_news_event(
+                        headline=headline,
+                        symbol=sym,
+                        source_tier=tier,
+                        ret_1m=ret_1m,
+                        vol_1m=vol_1m,
+                        vol_median_60m=vol_med,
+                    )
+                resp = json.dumps({
+                    "status": "ok",
+                    "actions_count": len(actions),
+                    "actions": [
+                        {
+                            "action_type": a.action_type.value,
+                            "symbol": a.symbol,
+                            "side": a.side.value,
+                            "reason": a.reason,
+                            "stop_price": a.stop_price,
+                        }
+                        for a in actions
+                    ]
+                }).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            except Exception as e:
+                logger.error(f"Failed to process /api/news_event: {e}")
+                self.send_error(400, f"Error processing news event: {e}")
+        else:
+            self.send_error(403, "Mutation endpoints disabled on public dashboard")
+
+    def log_message(self, format, *args):
+        return
+
+
+def start_server_and_bot():
+    global GLOBAL_TRADER
+    logger.info("Initializing PaperTraderV314 daemon...")
+    GLOBAL_TRADER = PaperTraderV314(poll_interval_seconds=5)
+
+    bot_thread = threading.Thread(target=GLOBAL_TRADER.run_daemon, daemon=True)
+    bot_thread.start()
+    logger.info("Background PaperTraderV314 thread launched.")
+
+    server_address = ("0.0.0.0", PORT)
+    with socketserver.ThreadingTCPServer(server_address, DashboardHTTPRequestHandler) as httpd:
+        logger.info(f"Multi-Alpha v3.1.4 (4h) Web Dashboard live on http://127.0.0.1:{PORT}")
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            logger.info("Server interrupted. Shutting down...")
+            GLOBAL_TRADER.stop()
+            httpd.server_close()
+
+
+if __name__ == "__main__":
+    start_server_and_bot()
