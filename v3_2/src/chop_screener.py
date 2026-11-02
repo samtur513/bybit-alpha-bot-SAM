@@ -21,16 +21,16 @@ logger = logging.getLogger("ChopScreenerV32")
 
 @dataclass
 class ChopScreenerConfig:
-    min_turnover_24h: float = 10_000_000.0   # $10,000,000 USDT minimum 24h volume
+    min_turnover_24h: float = 5_000_000.0    # $5,000,000 USDT minimum 24h volume
     min_open_interest: float = 2_000_000.0   # $2,000,000 USDT minimum open interest
-    max_ker: float = 0.15                    # Kaufman Efficiency Ratio <= 0.15 (pure stationary noise)
-    min_bandwidth_pct: float = 0.035         # Minimum 3.5% Bollinger Bandwidth to beat exchange friction
-    max_adx: float = 18.0                    # Absence of directional trend
+    max_ker: float = 0.25                    # Kaufman Efficiency Ratio <= 0.25 (pure stationary noise)
+    min_bandwidth_pct: float = 0.025         # Minimum 2.5% Bollinger Bandwidth to beat exchange friction
+    max_adx: float = 20.0                    # Absence of directional trend (< 20)
     top_n: int = 10                          # Top-N range coins to monitor
     bb_period: int = 20                      # Bollinger period
     bb_std_mult: float = 2.0                 # 2.0 std dev
     atr_period: int = 14                     # ATR period
-    rescan_interval_hours: int = 2           # Re-scan schedule (every 2h)
+    rescan_interval_hours: int = 1           # Re-scan schedule (every 1h)
     prefer_positive_carry: bool = True       # Prefer pairs where funding pays position
 
 
@@ -298,7 +298,7 @@ class ChopUniverseScreener:
         self,
         client: Optional[Any] = None,
         exclude_symbols: Optional[Set[str]] = None,
-        max_symbols_to_evaluate: int = 70,
+        max_symbols_to_evaluate: int = 120,
     ) -> List[ChopCandidateMetric]:
         """
         Executes full screener pass over Bybit linear perpetuals.

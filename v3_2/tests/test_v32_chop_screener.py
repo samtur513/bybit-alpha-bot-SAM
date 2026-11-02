@@ -116,3 +116,13 @@ def test_screener_accepts_pure_chop_with_iras(screener):
     assert cand.crossings >= 5
     assert cand.chop_score > 0.05
     assert cand.carry_mult > 1.0
+
+
+def test_calibrated_default_config():
+    """Verifies calibrated production defaults for IRAS screener."""
+    default_cfg = ChopScreenerConfig()
+    assert default_cfg.min_turnover_24h == 5_000_000.0
+    assert default_cfg.max_ker == 0.25
+    assert default_cfg.min_bandwidth_pct == 0.025
+    assert default_cfg.max_adx == 20.0
+    assert default_cfg.rescan_interval_hours == 1

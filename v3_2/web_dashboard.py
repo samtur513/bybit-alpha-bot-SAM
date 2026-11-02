@@ -370,9 +370,9 @@ HTML_PAGE = """<!DOCTYPE html>
                         <th>Монета</th>
                         <th>Цена</th>
                         <th>24h Оборот</th>
-                        <th>Ширина канала (BW)</th>
-                        <th>KER (Шум ≤ 0.15)</th>
-                        <th>ADX (< 18)</th>
+                        <th>Ширина канала (BW ≥ 2.5%)</th>
+                        <th>KER (Шум ≤ 0.25)</th>
+                        <th>ADX (< 20)</th>
                         <th>Колебания (SMA20)</th>
                         <th>Фандинг (8h)</th>
                         <th>IRAS Score</th>
@@ -561,7 +561,7 @@ HTML_PAGE = """<!DOCTYPE html>
                 const chopBody = document.getElementById('chop-table-body');
                 if (chopBody) {
                     if (chopPool.length === 0) {
-                        chopBody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted);">Поиск кандидатов с шириной ≥ 3.5% и KER ≤ 0.15...</td></tr>';
+                        chopBody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted);">Поиск кандидатов с шириной ≥ 2.5% и KER ≤ 0.25...</td></tr>';
                     } else {
                         chopBody.innerHTML = chopPool.map(c => `
                             <tr>

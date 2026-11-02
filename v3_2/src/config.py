@@ -37,7 +37,7 @@ SYMBOLS = DEFAULT_SYMBOLS
 ENABLE_DYNAMIC_UNIVERSE = True
 UNIVERSE_TOP_N = 25
 TREND_UNIVERSE_TOP_N = 15
-SCREENER_INTERVAL_HOURS = 2
+SCREENER_INTERVAL_HOURS = 1
 MIN_24H_TURNOVER = 25_000_000.0
 MIN_OPEN_INTEREST = 5_000_000.0
 MAX_FUNDING_RATE_ABS = 0.0005
@@ -49,15 +49,15 @@ ENABLE_DELTA_OI_FILTER = False
 ENABLE_ATR_EXHAUSTION_GUARD = True
 MAX_DAILY_ATR_EXHAUSTION = 2.5
 
-# Dynamic Chop Universe Screener Configuration (IRAS Standard for Range Engine)
+# Dynamic Chop Universe Screener Configuration (Calibrated IRAS Standard for Range Engine)
 ENABLE_CHOP_SCREENER = True
 CHOP_UNIVERSE_TOP_N = 10
-CHOP_MIN_24H_TURNOVER = 10_000_000.0
-CHOP_MIN_OPEN_INTEREST = 2_000_000.0
-CHOP_MAX_KER = 0.15
-CHOP_MIN_BANDWIDTH_PCT = 0.035
-CHOP_MAX_ADX = 18.0
-CHOP_RESCAN_INTERVAL_HOURS = 2
+CHOP_MIN_24H_TURNOVER = 5_000_000.0        # $5M min turnover captures liquid altcoins
+CHOP_MIN_OPEN_INTEREST = 2_000_000.0       # $2M min open interest
+CHOP_MAX_KER = 0.25                        # KER <= 0.25 (pure stationary noise, rejects directional drift)
+CHOP_MIN_BANDWIDTH_PCT = 0.025            # 2.5% minimum Bollinger Bandwidth (Target to SMA20 >= 1.25% vs 0.065% fee)
+CHOP_MAX_ADX = 20.0                       # Harmonized with ADX_REGIME_THRESHOLD (ADX < 20 = non-trending)
+CHOP_RESCAN_INTERVAL_HOURS = 1            # Hourly re-scan on closed 1h bars for maximal responsiveness
 
 # Timeframe & Indicators
 CANDLE_INTERVAL = "60"
@@ -83,7 +83,7 @@ BASE_MAKER_FEE = Decimal("0.000324")        # 0.0324% Non-VIP Bybit + 10% MNT
 BASE_TAKER_FEE = Decimal("0.0009")          # 0.09% Taker fee
 BASE_SLIPPAGE = Decimal("0.0002")           # 0.02% slippage on stops
 RANGE_SL_ATR_MULT = Decimal("1.0")          # 1.0 ATR stop beyond boundary
-MIN_BANDWIDTH_CLEARANCE = Decimal("0.035")  # Minimum 3.5% bandwidth clearance (IRAS standard)
+MIN_BANDWIDTH_CLEARANCE = Decimal("0.025")  # Minimum 2.5% bandwidth clearance (Calibrated IRAS standard)
 MIN_TP_DIST_PCT = Decimal("0.012")          # Minimum 1.2% distance to SMA20
 MAX_TP_DIST_PCT = Decimal("0.035")          # Maximum 3.5% target clamp
 RANGE_COOLDOWN_BARS = 3
