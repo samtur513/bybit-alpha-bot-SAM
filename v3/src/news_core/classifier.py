@@ -28,13 +28,15 @@ class NewsClassifier:
     # Pre-compiled regex patterns for speed and zero-leakage
     _CRASH_PATTERNS = re.compile(
         r"\b("
-        r"hack|hacked|hacker|exploit|exploited|vulnerability|drained|drain|"
+        r"hack|hacked|hacker|exploit|exploited|vulnerability|drained|drain|stolen|"
         r"delist|delisting|delisted|removes? trading pairs?|"
         r"bankrupt|bankruptcy|chapter 11|insolvent|insolvency|illiquid|"
         r"depeg|depegged|lost peg|"
-        r"sec sues|sec lawsuit|sec charges|charges filed|subpoena|doj charges|indictment|"
-        r"rug pull|exit scam|smart contract bug|unauthorized withdrawal|compromised private key|"
-        r"freeze deposits|trading suspended|halts? trading|withdrawals? halted|cease and desist"
+        r"sec sues?|sec lawsuit|sec charges|charges filed|subpoena|doj charges|indictment|"
+        r"rug pull|exit scam|smart contract bug|unauthorized withdrawal|"
+        r"(?:compromised\s+)?private\s+key\s+compromise|compromised\s+private\s+key|private\s+key\s+leak|"
+        r"freezes?\s+(?:all\s+)?withdrawals?|withdrawals?\s+(?:frozen|halted|suspended)|halts?\s+withdrawals?|"
+        r"freeze deposits|trading suspended|halts? trading|bridge attack|cease and desist"
         r")\b",
         re.IGNORECASE,
     )
