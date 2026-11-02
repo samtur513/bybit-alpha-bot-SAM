@@ -559,6 +559,34 @@ class CoreV3Engine:
             return True
         return False
 
+    def partial_trim_position(
+        self,
+        symbol: str,
+        trim_ratio: Decimal,
+        current_price: Decimal,
+        timestamp: int,
+        reason: str = "MACRO_PROFIT_TRIM",
+    ) -> Optional[Decimal]:
+        """
+        Partially trim position volume (e.g. 30% profit trimming prior to high-impact macro event).
+        Preserves remaining position volume and maintains original stop loss.
+        Returns the trimmed Decimal quantity if executed, or None if skipped/invalid.
+        """
+        if symbol not in self.open_positions:
+            return None
+        pos = self.open_positions[symbol]
+        rules = self.instrument_rules.get(symbol, {})
+        qty_step = rules.get("qtyStep", Decimal("0.001"))
+        min_qty = rules.get("minOrderQty", qty_step)
+
+        raw_trim_qty = pos.current_qty * trim_ratio
+        trim_qty = (raw_trim_qty // qty_step) * qty_step
+        if trim_qty < min_qty or trim_qty >= pos.current_qty:
+            return None
+
+        self._reduce(symbol, trim_qty, current_price, timestamp, reason)
+        return trim_qty
+
     def get_portfolio_snapshot(self, current_prices: Dict[str, Decimal]) -> PortfolioSnapshot:
         """Returns complete portfolio metrics and state."""
         eq = self.get_equity(current_prices)

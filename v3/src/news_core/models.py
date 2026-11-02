@@ -36,6 +36,7 @@ class ActionType(str, Enum):
     """Actions emitted to the main bot."""
     CLOSE_MARKET = "CLOSE_MARKET"        # Emergency Eject or Squeeze Escape (100% close)
     MODIFY_STOP_TP = "MODIFY_STOP_TP"    # Super-Runner breakeven tightening
+    PARTIAL_TRIM = "PARTIAL_TRIM"        # v1.2: Pre-macro 30% profit trimming at T-45m
     PLACE_ORDER = "PLACE_ORDER"          # Offensive entry (N1 pullback or N3 crash short)
     NO_ACTION = "NO_ACTION"
 

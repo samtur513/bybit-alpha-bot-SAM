@@ -1,0 +1,49 @@
+{
+  "baseline": {
+    "final_equity": 1366.28,
+    "net_pnl": 366.28,
+    "cagr_pct": 11.79,
+    "max_dd_pct": 40.37,
+    "calmar_ratio": 0.29,
+    "win_rate_pct": 23.3,
+    "profit_factor": 1.24,
+    "total_trades": 90,
+    "whipsaws_avoided": 0,
+    "pre_macro_trims": 0,
+    "capital_preserved": 0.0
+  },
+  "v1_1": {
+    "final_equity": 2788.91,
+    "net_pnl": 1788.91,
+    "cagr_pct": 44.24,
+    "max_dd_pct": 32.85,
+    "calmar_ratio": 1.35,
+    "win_rate_pct": 33.3,
+    "profit_factor": 1.75,
+    "total_trades": 96,
+    "whipsaws_avoided": 5,
+    "pre_macro_trims": 0,
+    "capital_preserved": 1470.05
+  },
+  "v1_2": {
+    "final_equity": 2482.76,
+    "net_pnl": 1482.76,
+    "cagr_pct": 38.37,
+    "max_dd_pct": 31.71,
+    "calmar_ratio": 1.21,
+    "win_rate_pct": 35.4,
+    "profit_factor": 1.74,
+    "total_trades": 96,
+    "whipsaws_avoided": 7,
+    "pre_macro_trims": 29,
+    "capital_preserved": 1126.76
+  },
+  "mode_a": {
+    "recall_pct": 100.0,
+    "precision_pct": 100.0,
+    "latency_ms": 0.05441764712004977
+  },
+  "mode_b": {
+    "avg_car_atr": -4.6275
+  }
+}

@@ -9,6 +9,9 @@ from typing import Dict, List, Optional
 
 @dataclass
 class NewsConfig:
+    # News Core Version
+    core_version: str = "1.2"
+
     # --- Layer 1: Classification & Deduplication ---
     min_score_to_act: int = 2
     cooldown_minutes: int = 45
@@ -19,8 +22,9 @@ class NewsConfig:
     watch_window_minutes: int = 15       # Window to wait for confirmation before expiring
     require_market_confirmation: bool = True  # If False, acts immediately (unsafe, test only)
 
-    # --- Layer 3: Position Management Matrix & v1.1 Anti-False-Positive Guards ---
-    enable_emergency_eject: bool = True       # Long + CRASH_SHOCK (-3) -> close 100% market
+    # --- Layer 3: Position Management Matrix & v1.1/v1.2 Anti-False-Positive Guards ---
+    enable_emergency_eject: bool = True       # Long + CRASH_SHOCK (-3) -> close market
+    emergency_eject_ratio: float = 1.0        # 1.0 = 100% close (v1.1 default) or 0.50 (skill std)
     enable_squeeze_escape: bool = True        # Short + MAJOR_CATALYST (+3) -> close 100% market
     enable_super_runner: bool = True          # Long + catalyst + profit >= 0.8R -> stop to breakeven +0.3%
     super_runner_r_threshold: float = 0.8     # Profit threshold in R multiples
@@ -52,12 +56,23 @@ class NewsConfig:
     enable_slot_preemption: bool = False      # Force-closing other positions for news trade (disabled)
     max_news_risk_pct: float = 0.10           # Max 10% risk/size allocation of balance
 
-    # --- Regime Guard ---
-    macro_blackout_minutes: int = 15          # ±15 minutes around high-impact macro (FOMC, CPI, NFP)
+    # --- Regime Guard & Macro Lockout v1.2 ---
+    macro_blackout_minutes: Optional[int] = None # Legacy parameter: if explicitly passed, sets symmetric window
+    macro_lockout_before_minutes: int = 45    # [-45m] pre-event lockout (liquidity pull-out)
+    macro_lockout_after_minutes: int = 30     # [+30m] post-event lockout (volatility settle)
+    enable_macro_profit_trimming: bool = True # Bank 30% profit on runners >= 1.0R at T-45m
+    macro_trim_ratio: float = 0.30            # 30% partial close
+    macro_trim_min_r: float = 1.0             # Minimum floating profit in R multiples to qualify
+    macro_trim_min_atr: float = 1.0           # Minimum floating profit in ATR multiples to qualify
     enable_stablecoin_guard: bool = True      # Guard against USDC/USDT depeg
     stablecoin_depeg_threshold: float = 0.008 # 0.8% deviation from $1.00
     enable_paxg_guard: bool = True            # Guard against gold risk-off flight
     paxg_spike_threshold_1m: float = 0.007    # 0.7% 1m spike in PAXG
+
+    def __post_init__(self):
+        if self.macro_blackout_minutes is not None:
+            self.macro_lockout_before_minutes = self.macro_blackout_minutes
+            self.macro_lockout_after_minutes = self.macro_blackout_minutes
 
     # --- Execution & Cost Models ---
     cost_model: str = "BASE"                  # "BASE" (5.3 bp), "STRESS" (8.5 bp), "NEWS_STRESS" (x3 in ±5m)

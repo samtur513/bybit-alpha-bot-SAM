@@ -11,7 +11,7 @@ Verifies:
 8. Super-Runner Defense: Positive catalyst with profit >= 0.8R moves stop to BE +0.3%.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 import pytest
 
@@ -91,6 +91,8 @@ def test_trader(mock_rules, tmp_path):
     trader.btc_trend_status = "BULLISH"
     trader.screened_universe = []
     trader.last_screener_run_ts = 0.0
+    from collections import deque
+    trader.recent_news_events = deque(maxlen=25)
 
     trader.engine = CoreV3Engine(
         initial_capital=Decimal("300.0"),
@@ -265,3 +267,56 @@ def test_v3_runner_protection_trails_stop_instead_of_eject(test_trader):
     assert "SOLUSDT" in test_trader.engine.open_positions
     new_stop = test_trader.engine.open_positions["SOLUSDT"].current_stop
     assert new_stop >= Decimal("152.0")
+
+
+def test_v3_macro_profit_trimming_execution(test_trader):
+    """
+    News Core v1.2 Pre-Macro Trimming:
+    Verifies that 45 minutes prior to FOMC, a runner position with R >= 1.0R
+    is partially trimmed by 30% via partial_trim_position, leaving 70% with stop intact.
+    Also verifies deduplication (does not trim twice for the same event).
+    """
+    initial_realized_eq = test_trader.engine.realized_equity
+
+    # Open winning Long position on BTCUSDT (entry 60,000, stop 58,000, risk $2,000)
+    # Current price 63,000 -> profit = $3,000 / $2,000 = 1.5R (>= 1.0R)
+    test_trader.prices["BTCUSDT"] = Decimal("63000.0")
+    test_trader.engine.open_positions["BTCUSDT"] = ActivePosition(
+        symbol="BTCUSDT",
+        direction=1,
+        initial_qty=Decimal("0.100"),
+        current_qty=Decimal("0.100"),
+        entry_price=Decimal("60000.0"),
+        current_stop=Decimal("58000.0"),
+        initial_atr=Decimal("1000.0"),
+        highest_price=Decimal("63500.0"),
+        lowest_price=Decimal("59800.0"),
+        entry_time=1000,
+    )
+
+    # FOMC on 2024-01-31 at 19:00 UTC. Now is 18:20 UTC (T-40m)
+    fomc_time = datetime(2024, 1, 31, 19, 0, 0, tzinfo=timezone.utc)
+    now_eval = fomc_time - timedelta(minutes=40)
+
+    # First check: triggers 30% trim
+    actions = test_trader.check_macro_defenses(now_dt=now_eval)
+    assert len(actions) == 1
+    act = actions[0]
+    assert act.action_type == ActionType.PARTIAL_TRIM
+    assert act.symbol == "BTCUSDT"
+
+    # Verify position state in engine
+    assert "BTCUSDT" in test_trader.engine.open_positions
+    pos = test_trader.engine.open_positions["BTCUSDT"]
+    # 0.100 * 0.70 = 0.070 BTC remaining
+    assert pos.current_qty == Decimal("0.070")
+    # Stop loss remains untouched at 58,000 (never moved to BE)
+    assert pos.current_stop == Decimal("58000.0")
+    # Realized equity increased by 30% profit
+    assert test_trader.engine.realized_equity > initial_realized_eq
+
+    # Second check at T-30m: deduplicated, no duplicate trim
+    now_later = fomc_time - timedelta(minutes=30)
+    actions_dup = test_trader.check_macro_defenses(now_dt=now_later)
+    assert len(actions_dup) == 0
+    assert test_trader.engine.open_positions["BTCUSDT"].current_qty == Decimal("0.070")

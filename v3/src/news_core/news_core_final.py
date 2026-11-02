@@ -64,7 +64,7 @@ class NewsCore:
         self.regime_guard = RegimeGuard(self.config)
 
     # ---------------------------------------------------------
-    # Regime Guard: Global embargo checks
+    # Regime Guard: Global embargo checks & Macro Defense v1.2
     # ---------------------------------------------------------
     def get_status(self, symbol: str, now: Optional[datetime] = None) -> Dict[str, Any]:
         """
@@ -80,6 +80,24 @@ class NewsCore:
             "reason": status_obj.reason,
             "details": status_obj.details,
         }
+
+    def evaluate_macro_trimming(
+        self,
+        open_positions: Union[List[PositionView], Dict[str, PositionView]],
+        current_prices: Optional[Dict[str, float]] = None,
+        now: Optional[datetime] = None,
+    ) -> List[PositionAction]:
+        """
+        Evaluate Pre-Macro Profit Trimming at T-45m for open positions (News Core v1.2).
+        Banks 30% profit if floating profit >= 1.0R, keeping remaining 70% with original stop intact.
+        Usage:
+            actions = core.evaluate_macro_trimming(open_positions, prices, now_utc)
+        """
+        return self.regime_guard.evaluate_macro_trimming(
+            open_positions=open_positions,
+            current_prices=current_prices,
+            current_time=now,
+        )
 
     # ---------------------------------------------------------
     # Layer 1: Classification

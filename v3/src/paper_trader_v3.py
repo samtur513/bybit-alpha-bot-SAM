@@ -479,6 +479,13 @@ class PaperTraderV3:
 
     def poll_cycle(self) -> PortfolioSnapshot:
         with self.lock:
+            # Check scheduled macro defenses (News Core v1.2: T-45m profit trimming)
+            if getattr(self, "news_core", None):
+                try:
+                    self.check_macro_defenses()
+                except Exception as e:
+                    logger.warning(f"PaperTraderV3: Error during macro defense check: {e}")
+
             prices = self.get_live_prices()
             snap = self.engine.get_portfolio_snapshot(prices)
             try:
@@ -486,6 +493,85 @@ class PaperTraderV3:
             except Exception as e:
                 logger.warning(f"PaperTraderV3: Error during status export: {e}")
             return snap
+
+    def check_macro_defenses(self, now_dt: Optional[datetime] = None) -> List[PositionAction]:
+        """
+        Evaluates scheduled high-impact macro defenses (News Core v1.2):
+        Banks 30% floating profit at T-45m for runners with profit >= 1.0R.
+        Leaves the remaining 70% of the position with original stop loss intact.
+        """
+        nc = getattr(self, "news_core", None)
+        if not nc or not self.engine.open_positions:
+            return []
+
+        now = now_dt or datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+
+        pos_views = {}
+        for sym, pos in self.engine.open_positions.items():
+            curr_p = float(self.prices.get(sym, pos.entry_price))
+            entry_p = float(pos.entry_price)
+            stop_p = float(pos.current_stop)
+            risk_dist = abs(entry_p - stop_p)
+            r_mult = ((curr_p - entry_p) / risk_dist) if (pos.direction == 1 and risk_dist > 0) else (
+                ((entry_p - curr_p) / risk_dist) if risk_dist > 0 else 0.0
+            )
+            pos_views[sym] = PositionView(
+                symbol=sym,
+                side=Side.LONG if pos.direction == 1 else Side.SHORT,
+                size=float(pos.current_qty),
+                entry_price=entry_p,
+                current_price=curr_p,
+                stop_loss=stop_p,
+                unrealized_pnl_r=r_mult,
+            )
+
+        actions = nc.evaluate_macro_trimming(
+            pos_views,
+            {s: float(p) for s, p in self.prices.items()},
+            now,
+        )
+        now_ms = int(now.timestamp() * 1000)
+        executed_actions = []
+
+        for act in actions:
+            if act.action_type == ActionType.PARTIAL_TRIM:
+                mark_price = self.prices.get(act.symbol, Decimal(str(pos_views[act.symbol].current_price)))
+                trim_ratio = Decimal(str(getattr(nc.config, "macro_trim_ratio", 0.30)))
+                trimmed_qty = self.engine.partial_trim_position(
+                    symbol=act.symbol,
+                    trim_ratio=trim_ratio,
+                    current_price=mark_price,
+                    timestamp=now_ms,
+                    reason=act.reason,
+                )
+                if trimmed_qty:
+                    logger.warning(
+                        f"🛡️ NEWS SHIELD: Pre-Macro Trim {trimmed_qty} ({trim_ratio*100:.0f}%) for {act.symbol} ({act.reason})"
+                    )
+                    self.notifier.notify(
+                        dict(
+                            kind="NEWS_MACRO_TRIM",
+                            symbol=act.symbol,
+                            trimmed_qty=str(trimmed_qty),
+                            reason=act.reason,
+                            price=str(mark_price),
+                        )
+                    )
+                    self.save_persistent_state()
+                    executed_actions.append(act)
+                    if hasattr(self, "recent_news_events") and self.recent_news_events is not None:
+                        self.recent_news_events.append({
+                            "timestamp": now_ms,
+                            "headline": act.reason,
+                            "symbol": act.symbol,
+                            "event_type": "MACRO_PRE_TRIM",
+                            "actions_taken": [f"PARTIAL_TRIM:{trimmed_qty}"],
+                            "impact": "PRE_MACRO_PROFIT_BANKED",
+                        })
+
+        return executed_actions
 
     def handle_news_event(
         self,
@@ -824,7 +910,7 @@ class PaperTraderV3:
             logger.warning(f"PaperTraderV3: Failed to write {self.live_status_file}: {e}")
 
         # Markdown status file
-        news_shield_str = "🛡️ **АКТИВЕН** (Defensive Only: Eject, Squeeze, Runner, Regime Guard)" if getattr(self, "news_core", None) else "⚪ Отключен"
+        news_shield_str = "🛡️ **АКТИВЕН (v1.2)** (Defensive Only: Eject, Squeeze, Runner, Pre-Macro Trim, Regime Guard)" if getattr(self, "news_core", None) else "⚪ Отключен"
         md = f"""# Bybit Multi-Alpha v3.0 Live Monitor (Port 8082)
 
 **Архитектура**: Dynamic Universe Selection + 4h Donchian Breakout + News Defense Shield  

@@ -618,3 +618,112 @@ def test_v11_runner_protection_trails_stop():
     assert actions[0].action_type == ActionType.MODIFY_STOP_TP
     assert actions[0].stop_price >= 105.0 # Entry (100) + 0.5 * Risk (10) = 105.0
     assert "RUNNER_PROTECTION_TRAIL" in actions[0].reason
+
+
+# ============================================================================
+# News Core v1.2: Asymmetric Lockout [-45m, +30m] & Pre-Macro Trimming (30%)
+# ============================================================================
+
+def test_v12_asymmetric_macro_lockout():
+    """Verifies that v1.2 enforces asymmetric [-45m : +30m] lockout around macro events."""
+    core = NewsCore(NewsConfig(macro_lockout_before_minutes=45, macro_lockout_after_minutes=30))
+    # FOMC on 2024-01-31 at 19:00 UTC
+    fomc_time = datetime(2024, 1, 31, 19, 0, 0, tzinfo=timezone.utc)
+
+    # 1. T - 40m (18:20 UTC) -> Inside [-45m] pre-event window -> BLOCKED
+    st_t_minus_40 = core.get_status("BTCUSDT", fomc_time - timedelta(minutes=40))
+    assert st_t_minus_40["block_new_entries"] is True
+    assert "Macro blackout" in st_t_minus_40["reason"]
+
+    # 2. T - 50m (18:10 UTC) -> Outside [-45m] pre-event window -> CLEAR
+    st_t_minus_50 = core.get_status("BTCUSDT", fomc_time - timedelta(minutes=50))
+    assert st_t_minus_50["block_new_entries"] is False
+
+    # 3. T + 20m (19:20 UTC) -> Inside [+30m] post-event window -> BLOCKED
+    st_t_plus_20 = core.get_status("BTCUSDT", fomc_time + timedelta(minutes=20))
+    assert st_t_plus_20["block_new_entries"] is True
+
+    # 4. T + 35m (19:35 UTC) -> Outside [+30m] post-event window -> CLEAR
+    st_t_plus_35 = core.get_status("BTCUSDT", fomc_time + timedelta(minutes=35))
+    assert st_t_plus_35["block_new_entries"] is False
+
+
+def test_v12_pre_macro_profit_trimming():
+    """
+    Verifies that v1.2 banks 30% profit at T-45m if floating profit >= 1.0R,
+    while preserving remaining 70% with original stop loss intact.
+    """
+    core = NewsCore(NewsConfig())
+    # Event: US CPI on 2024-01-11 at 13:30 UTC
+    cpi_event = datetime(2024, 1, 11, 13, 30, 0, tzinfo=timezone.utc)
+    now_eval = cpi_event - timedelta(minutes=40)  # T - 40m (inside pre-macro window)
+
+    # Position with Entry: 100, Stop: 95 (Risk = 5), Current: 107 -> R = +1.4R (>= 1.0R)
+    pos = PositionView(
+        symbol="SOLUSDT",
+        side=Side.LONG,
+        size=10.0,
+        entry_price=100.0,
+        current_price=107.0,
+        stop_loss=95.0,
+        unrealized_pnl_r=1.4,
+    )
+
+    actions = core.evaluate_macro_trimming([pos], {"SOLUSDT": 107.0}, now=now_eval)
+    assert len(actions) == 1
+    act = actions[0]
+    assert act.action_type == ActionType.PARTIAL_TRIM
+    assert act.symbol == "SOLUSDT"
+    # Bank 30% -> size = 10.0 * 0.30 = 3.0
+    assert abs(act.size - 3.0) < 1e-6
+    # Original stop loss preserved intact
+    assert act.stop_price == 95.0
+    assert "MACRO_PRE_TRIM" in act.reason
+    assert "30%" in act.reason
+
+
+def test_v12_pre_macro_trimming_low_r_skipped():
+    """Verifies that a position with floating profit < 1.0R is NOT trimmed before macro events."""
+    core = NewsCore(NewsConfig())
+    cpi_event = datetime(2024, 1, 11, 13, 30, 0, tzinfo=timezone.utc)
+    now_eval = cpi_event - timedelta(minutes=30)
+
+    # Position with Entry: 100, Stop: 95, Current: 102 -> R = +0.4R (< 1.0R)
+    pos = PositionView(
+        symbol="SOLUSDT",
+        side=Side.LONG,
+        size=10.0,
+        entry_price=100.0,
+        current_price=102.0,
+        stop_loss=95.0,
+        unrealized_pnl_r=0.4,
+    )
+
+    actions = core.evaluate_macro_trimming([pos], {"SOLUSDT": 102.0}, now=now_eval)
+    assert len(actions) == 0
+
+
+def test_v12_pre_macro_trimming_deduplication():
+    """Verifies that pre-macro trimming triggers exactly once per symbol per event."""
+    core = NewsCore(NewsConfig())
+    cpi_event = datetime(2024, 1, 11, 13, 30, 0, tzinfo=timezone.utc)
+    t1 = cpi_event - timedelta(minutes=42)
+    t2 = cpi_event - timedelta(minutes=35)
+
+    pos = PositionView(
+        symbol="SOLUSDT",
+        side=Side.LONG,
+        size=10.0,
+        entry_price=100.0,
+        current_price=110.0,
+        stop_loss=95.0,
+        unrealized_pnl_r=2.0,
+    )
+
+    # First evaluation at T-42m -> trims 30%
+    actions1 = core.evaluate_macro_trimming([pos], {"SOLUSDT": 110.0}, now=t1)
+    assert len(actions1) == 1
+
+    # Second evaluation at T-35m -> deduplicated! Returns 0 actions
+    actions2 = core.evaluate_macro_trimming([pos], {"SOLUSDT": 110.0}, now=t2)
+    assert len(actions2) == 0
