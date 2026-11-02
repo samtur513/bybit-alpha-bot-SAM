@@ -1,0 +1,67 @@
+"""
+Configuration for Bybit Multi-Alpha Meta-Dashboard (Port 8085).
+Monitors and aggregates all 5 active engines:
+- Port 8080: v2.0 (1h Baseline Breakout, 18 coins)
+- Port 8081: v2.1 (4h Breakout + News Core v1.1, 18 coins)
+- Port 8082: v3.1.1 (1h Breakout + Dynamic Universe + News Core v1.2)
+- Port 8083: v3.2 (Dual-Regime Hybrid: Trend + Calibrated IRAS Range Maker)
+- Port 8084: v3.1.4 (4h Breakout Champion + Dynamic Universe + News Core v1.2)
+"""
+
+import os
+
+META_PORT = int(os.environ.get("META_PORT", 8085))
+POLL_INTERVAL_SECONDS = float(os.environ.get("META_POLL_INTERVAL", 2.0))
+
+ENGINES = [
+    {
+        "id": "v20",
+        "name": "v2.0 Base Engine",
+        "tag": "1h Baseline Breakout",
+        "version": "2.0",
+        "timeframe": "1h",
+        "port": 8080,
+        "strategy": "Donchian 120h (Static 18 Coins)",
+        "color": "#94a3b8",  # slate
+    },
+    {
+        "id": "v21",
+        "name": "v2.1 Static 4h",
+        "tag": "4h Breakout + News v1.1",
+        "version": "2.1",
+        "timeframe": "4h",
+        "port": 8081,
+        "strategy": "Donchian 30 bars (Static 18 Coins) + News Core v1.1",
+        "color": "#38bdf8",  # sky blue
+    },
+    {
+        "id": "v311",
+        "name": "v3.1.1 Trend 1h",
+        "tag": "1h Breakout + Dynamic Screener + News v1.2",
+        "version": "3.1.1",
+        "timeframe": "1h",
+        "port": 8082,
+        "strategy": "Dynamic Universe Screener + 1h Donchian + News Core v1.2",
+        "color": "#a855f7",  # purple
+    },
+    {
+        "id": "v32",
+        "name": "v3.2 Dual-Regime",
+        "tag": "Dual Trend + IRAS Range Maker",
+        "version": "3.2",
+        "timeframe": "1h",
+        "port": 8083,
+        "strategy": "Dual-Regime Hybrid (Donchian Trend + Calibrated IRAS Maker)",
+        "color": "#f59e0b",  # amber
+    },
+    {
+        "id": "v314",
+        "name": "v3.1.4 Champion 4h",
+        "tag": "4h Breakout Champion + News v1.2",
+        "version": "3.1.4",
+        "timeframe": "4h",
+        "port": 8084,
+        "strategy": "Dynamic Universe Screener + 4h Donchian + News Core v1.2",
+        "color": "#00f2fe",  # cyan
+    },
+]

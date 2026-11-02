@@ -930,6 +930,20 @@ class PaperTraderV314:
             "screener_next_run_seconds": max(0, int(SCREENER_INTERVAL_HOURS * 3600 - (time.time() - self.last_screener_run_ts))) if self.last_screener_run_ts > 0 else 0,
             "screened_candidates": [c.to_dict() for c in getattr(self, "screened_universe", [])[:30]],
             "closed_trades_count": len(snapshot.closed_trades),
+            "closed_trades": [
+                {
+                    "symbol": t.symbol,
+                    "direction": "LONG" if t.direction == 1 else "SHORT",
+                    "entry_price": float(t.entry_price),
+                    "exit_price": float(t.exit_price),
+                    "net_pnl": float(t.net_pnl),
+                    "reason": t.exit_reason,
+                    "was_pyramided": t.was_pyramided,
+                    "hold_hours": round(t.hold_hours, 1),
+                    "exit_time": t.exit_time,
+                }
+                for t in snapshot.closed_trades[-30:]
+            ],
             "gearbox_gear": self.engine.risk_manager.current_gear,
             "gearbox_risk_pct": float(self.engine.risk_manager.get_effective_base_risk_pct() * 100),
             "gearbox_pyramiding_allowed": self.engine.risk_manager.is_pyramiding_allowed,
