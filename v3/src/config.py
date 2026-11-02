@@ -8,6 +8,7 @@ Features:
 - Port 8082 for parallel A/B/C testing with v2.0 (8080) and v2.1 (8081)
 """
 
+import os
 from decimal import Decimal
 from pathlib import Path
 
@@ -107,14 +108,21 @@ FUNDING_8H_ESTIMATE = Decimal("0.0001")# 0.01% estimated 8h funding rate
 MAX_CONCURRENT_LONGS = 2
 MAX_CONCURRENT_SHORTS = 2
 
-# News Core Defensive Shield Configuration
+# News Core Defensive Shield Configuration (v1.2)
 ENABLE_NEWS_DEFENSE = True             # Enable News Core defensive shields
 NEWS_CONFIG_PROFILE = "defensive_only" # Strictly defensive (no offensive N1/N3 orders)
-ENABLE_MACRO_BLACKOUT = True           # Block entries ±15m around FOMC, CPI, NFP
+ENABLE_MACRO_BLACKOUT = True           # Block entries in macro lockout window
 ENABLE_DEPEG_GUARD = True              # Block entries on stablecoin depeg (>0.8%)
 ENABLE_EMERGENCY_EJECT = True          # Close Long on verified CRASH_SHOCK
 ENABLE_SQUEEZE_ESCAPE = True           # Close Short on MAJOR_CATALYST
 ENABLE_RUNNER_PROTECTION = True        # Trail stop instead of ejecting if R >= 1.5R
+
+# Configurable Macro Lockout & Profit Trimming Proportions (v1.2)
+MACRO_LOCKOUT_BEFORE_MINUTES = int(os.getenv("MACRO_LOCKOUT_BEFORE_MINUTES", "45")) # Lockout before event (default: 45 min)
+MACRO_LOCKOUT_AFTER_MINUTES = int(os.getenv("MACRO_LOCKOUT_AFTER_MINUTES", "30"))   # Lockout after event (default: 30 min)
+ENABLE_MACRO_PROFIT_TRIMMING = os.getenv("ENABLE_MACRO_PROFIT_TRIMMING", "True").lower() == "true" # Bank profit at T-45m
+MACRO_TRIM_RATIO = Decimal(os.getenv("MACRO_TRIM_RATIO", "0.30"))                   # Trim ratio: 0.30 (30%), customizable to 0.15, 0.20, etc.
+MACRO_TRIM_MIN_R = Decimal(os.getenv("MACRO_TRIM_MIN_R", "1.0"))                   # Min profit R-multiple to qualify for trim
 
 # Polling Interval
 DEFAULT_POLL_INTERVAL_SEC = 5

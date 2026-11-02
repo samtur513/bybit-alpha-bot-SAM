@@ -64,6 +64,11 @@ from v3.src.config import (
     ENABLE_EMERGENCY_EJECT,
     ENABLE_SQUEEZE_ESCAPE,
     ENABLE_RUNNER_PROTECTION,
+    MACRO_LOCKOUT_BEFORE_MINUTES,
+    MACRO_LOCKOUT_AFTER_MINUTES,
+    ENABLE_MACRO_PROFIT_TRIMMING,
+    MACRO_TRIM_RATIO,
+    MACRO_TRIM_MIN_R,
     ENABLE_CASCADE_TP,
     ENABLE_FAST_SCRATCH_EXIT,
     ENABLE_AUTO_GEARBOX,
@@ -224,8 +229,17 @@ class PaperTraderV3:
             cfg.enable_super_runner = True
             cfg.protect_runners_min_r = 1.5 if ENABLE_RUNNER_PROTECTION else 999.0
             cfg.enable_stablecoin_guard = ENABLE_DEPEG_GUARD
+            cfg.macro_lockout_before_minutes = MACRO_LOCKOUT_BEFORE_MINUTES
+            cfg.macro_lockout_after_minutes = MACRO_LOCKOUT_AFTER_MINUTES
+            cfg.enable_macro_profit_trimming = ENABLE_MACRO_PROFIT_TRIMMING
+            cfg.macro_trim_ratio = float(MACRO_TRIM_RATIO)
+            cfg.macro_trim_min_r = float(MACRO_TRIM_MIN_R)
             self.news_core = NewsCore(cfg)
-            logger.info("News Core Defensive Shield initialized (defensive_only profile).")
+            logger.info(
+                f"News Core Defensive Shield v1.2 initialized: "
+                f"lockout=[-45m : +30m], trim_enabled={ENABLE_MACRO_PROFIT_TRIMMING}, "
+                f"trim_ratio={float(MACRO_TRIM_RATIO)*100:.0f}%, min_r={float(MACRO_TRIM_MIN_R):.1f}R"
+            )
 
             # Autonomous Live News Streamer (background Tier-1 RSS stream)
             self.news_streamer = LiveNewsStreamer(
