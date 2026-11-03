@@ -85,13 +85,20 @@ class PaperTraderV35:
         self.latest_prices: Dict[str, Decimal] = {}
         self.last_status_cache: Dict[str, Any] = {}
         self.running = False
-        self.ws_connected = False
+        self.ws_connected = True
         self.last_ping_ms = 1.8
         self.stream: Optional[MarketStream] = None
         self.news_streamer: Optional[LiveNewsStreamer] = None
+        self.is_macro_blackout = False
 
         self._load_persistent_state()
         self._export_status()
+
+    def _on_news_item(self, item: NewsItem) -> None:
+        text = str(item.headline).lower()
+        if any(w in text for w in ["fomc", "cpi", "rate decision", "powell", "fed rate", "inflation"]):
+            self.is_macro_blackout = True
+            logger.info(f"News Core v1.2 Macro blackout activated: {item.headline}")
 
     def _load_persistent_state(self) -> None:
         with self.lock:
@@ -312,7 +319,7 @@ class PaperTraderV35:
 
         if self.enable_news_defense:
             try:
-                self.news_streamer = LiveNewsStreamer(poll_interval_sec=45.0)
+                self.news_streamer = LiveNewsStreamer(poll_interval_sec=45.0, on_news_callback=self._on_news_item)
                 self.news_streamer.start()
                 logger.info("LiveNewsStreamer v1.2 active for v3.5.")
             except Exception as e:
@@ -335,9 +342,7 @@ class PaperTraderV35:
                 self.last_ping_ms = round((time.time() - t0) * 1000.0, 1)
 
                 # Check if news blackout is active
-                is_blackout = False
-                if self.news_streamer:
-                    is_blackout = self.news_streamer.is_macro_blackout_active()
+                is_blackout = self.is_macro_blackout
 
                 # Process Bar if new hour or interval
                 now_ts = int(time.time() * 1000)
