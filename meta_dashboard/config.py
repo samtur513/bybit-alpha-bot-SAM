@@ -94,4 +94,14 @@ ENGINES = [
         "strategy": "Market-Neutral CAR-CSMOM (168h vs BTC) + Hysteresis Buffer",
         "color": "#10b981",  # emerald green
     },
+    {
+        "id": "v36",
+        "name": "v3.6 Omega ZF-8",
+        "tag": "1h Dual-Regime + 8-Speed ZF + News Core v1.2",
+        "version": "3.6",
+        "timeframe": "1h",
+        "port": 8089,
+        "strategy": "Dual-Regime Hybrid (ZF-8 Transmission + IRAS Maker + News Guard)",
+        "color": "#f59e0b",  # gold / amber
+    },
 ]

@@ -32,7 +32,7 @@ HTML_PAGE = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bybit Multi-Alpha | Master Meta-Dashboard (8 Engines)</title>
+    <title>Bybit Multi-Alpha | Master Meta-Dashboard (9 Engines)</title>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
@@ -353,8 +353,8 @@ HTML_PAGE = """<!DOCTYPE html>
             <div class="logo-group">
                 <div class="logo-badge">BYBIT V5 // META</div>
                 <div>
-                    <div class="title">Multi-Alpha Master Meta-Dashboard (8 Engines)</div>
-                    <div class="subtitle">Централизованный мониторинг 8 квантовых движков, потоков Bybit WS и защитного щита News Core</div>
+                    <div class="title">Multi-Alpha Master Meta-Dashboard (9 Engines)</div>
+                    <div class="subtitle">Централизованный мониторинг 9 квантовых движков, потоков Bybit WS и защитного щита News Core</div>
                 </div>
             </div>
             <div class="header-stats">
@@ -385,13 +385,13 @@ HTML_PAGE = """<!DOCTYPE html>
             </div>
         </header>
 
-        <!-- SECTION 1: 8-ENGINE INFRASTRUCTURE & HEALTH MATRIX -->
+        <!-- SECTION 1: 9-ENGINE INFRASTRUCTURE & HEALTH MATRIX -->
         <div class="section-header">
-            <div class="section-title">Состояние и телеметрия 8 квантовых движков</div>
+            <div class="section-title">Состояние и телеметрия 9 квантовых движков</div>
             <span style="font-size: 12px; color: var(--text-dim);">Автообновление каждые 2 сек</span>
         </div>
         <div class="engines-grid" id="engines-grid">
-            <!-- Dynamic Render of 8 Engine Cards -->
+            <!-- Dynamic Render of 9 Engine Cards -->
         </div>
 
         <!-- SECTION 2: COMPARATIVE CHART & LIVE NEWS RADAR -->
