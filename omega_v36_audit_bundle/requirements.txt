@@ -1,0 +1,8 @@
+# Dependencies for Bybit Multi-Alpha v3.6 Omega Dual-Regime ZF-8
+numpy>=1.26.0
+pandas>=2.2.0
+pyarrow>=15.0.0
+pytest>=8.0.0
+requests>=2.31.0
+websocket-client>=1.7.0
+urllib3>=2.0.0
