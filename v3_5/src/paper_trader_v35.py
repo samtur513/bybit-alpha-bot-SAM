@@ -183,9 +183,8 @@ class PaperTraderV35:
         logger.info(f"Warming up 1h klines for {len(self.symbols)} symbols (168 bars lookback)...")
         for s in self.symbols:
             try:
-                res = self.client.get_kline(category="linear", symbol=s, interval="60", limit=180)
-                if res and "result" in res and "list" in res["result"]:
-                    raw_bars = res["result"]["list"]
+                raw_bars = self.client.get_kline(symbol=s, interval="60", limit=180, category="linear")
+                if isinstance(raw_bars, list) and len(raw_bars) > 0:
                     parsed = []
                     for b in reversed(raw_bars):
                         parsed.append({
@@ -201,7 +200,18 @@ class PaperTraderV35:
                         self.latest_prices[s] = Decimal(str(parsed[-1]["close"]))
             except Exception as e:
                 logger.warning(f"Failed kline warmup for {s}: {e}")
-        logger.info("Warmup complete.")
+
+        # Compute initial rankings immediately
+        now_ts = int(time.time() * 1000)
+        with self.lock:
+            self.engine.process_bar(
+                prices_series=self.kline_history,
+                current_prices=self.latest_prices,
+                bar_ts=now_ts,
+                macro_lockout=False,
+            )
+            self._export_status()
+        logger.info(f"Warmup complete. Calculated initial rankings for {len(self.engine.latest_rankings)} symbols.")
 
     def _export_status(self) -> None:
         with self.lock:
@@ -277,7 +287,7 @@ class PaperTraderV35:
                 "news_defense_active": self.enable_news_defense,
                 "news_shield": self.enable_news_defense,
                 "news_profile": "v1.2 Shield" if self.enable_news_defense else "Disabled",
-                "latest_rankings": self.engine.latest_rankings[:10],
+                "latest_rankings": self.engine.latest_rankings,
                 "last_update_ts": int(time.time() * 1000),
             }
             self.last_status_cache = status
@@ -302,7 +312,7 @@ class PaperTraderV35:
 
         if self.enable_news_defense:
             try:
-                self.news_streamer = LiveNewsStreamer(poll_interval_seconds=45.0)
+                self.news_streamer = LiveNewsStreamer(poll_interval_sec=45.0)
                 self.news_streamer.start()
                 logger.info("LiveNewsStreamer v1.2 active for v3.5.")
             except Exception as e:
