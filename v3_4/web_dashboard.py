@@ -533,9 +533,9 @@ HTML_PAGE = """<!DOCTYPE html>
             try {
                 const res = await fetch('/api/logs');
                 if (res.ok) {
-                    const text = await res.text();
+                    const logs = await res.json();
                     const box = document.getElementById('log-box');
-                    box.textContent = text;
+                    box.innerHTML = logs.slice(-50).map(l => `<div>${l}</div>`).join('');
                     box.scrollTop = box.scrollHeight;
                 }
             } catch (err) {}
@@ -557,100 +557,85 @@ HTML_PAGE = """<!DOCTYPE html>
 """
 
 
-class DashboardHandler(http.server.BaseHTTPRequestHandler):
+class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
 
         if path in ["/", "/index.html"]:
+            content = HTML_PAGE.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(content)))
             self.end_headers()
-            self.wfile.write(HTML_PAGE.encode("utf-8"))
+            self.wfile.write(content)
 
         elif path == "/api/status":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-
-            status_payload = {}
             if GLOBAL_TRADER and getattr(GLOBAL_TRADER, "last_status_cache", None):
-                status_payload = dict(GLOBAL_TRADER.last_status_cache)
+                resp = json.dumps(GLOBAL_TRADER.last_status_cache, indent=2).encode("utf-8")
             elif LIVE_STATUS_FILE.exists():
                 try:
-                    with open(LIVE_STATUS_FILE, "r", encoding="utf-8") as f:
-                        status_payload = json.load(f)
+                    resp = LIVE_STATUS_FILE.read_bytes()
                 except Exception:
-                    status_payload = {}
+                    resp = b"{}"
+            else:
+                resp = b"{}"
 
-            if not status_payload and GLOBAL_TRADER:
-                trans = GLOBAL_TRADER.engine.transmission.to_dict()
-                status_payload = {
-                    "version": VERSION_NAME,
-                    "timeframe": "1h",
-                    "capital": float(GLOBAL_TRADER.engine.realized_equity),
-                    "initial_capital": float(GLOBAL_TRADER.engine.initial_capital),
-                    "drawdown_pct": float(GLOBAL_TRADER.engine.max_drawdown_pct),
-                    "open_positions": {},
-                    "closed_trades": [],
-                    "gearbox_gear": trans["current_gear"],
-                    "gearbox_risk_pct": trans["risk_pct"],
-                    "gear_name": trans["gear_name"],
-                    "gear_tag": trans["gear_tag"],
-                    "rr_target": trans["rr_label"],
-                    "streak_wins": trans["streak_wins"],
-                    "streak_losses": trans["streak_losses"],
-                    "gearbox_pyramiding_allowed": trans["pyramiding_allowed"],
-                    "pyramiding_ratio": trans["pyramid_ratio"],
-                    "is_circuit_breaker_active": trans["is_circuit_breaker_active"],
-                    "last_shift_reason": trans["last_shift_reason"],
-                    "all_gears": trans["all_gears"],
-                    "stream_ready": True,
-                    "fresh_symbols": len(GLOBAL_TRADER.universe),
-                    "btc_trend_status": GLOBAL_TRADER.btc_trend_status,
-                }
-
-            self.wfile.write(json.dumps(status_payload).encode("utf-8"))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(resp)))
+            self.end_headers()
+            self.wfile.write(resp)
 
         elif path == "/api/logs":
+            logs = list(LOG_BUFFER)
+            resp = json.dumps(logs).encode("utf-8")
             self.send_response(200)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(resp)))
             self.end_headers()
-            logs = "\n".join(LOG_BUFFER)
-            self.wfile.write(logs.encode("utf-8"))
+            self.wfile.write(resp)
 
         elif path == "/api/universe":
+            univ = []
+            if GLOBAL_TRADER and hasattr(GLOBAL_TRADER, "screened_universe"):
+                univ = [c.to_dict() if hasattr(c, "to_dict") else vars(c) for c in GLOBAL_TRADER.screened_universe]
+            resp = json.dumps(univ).encode("utf-8")
             self.send_response(200)
-            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(resp)))
             self.end_headers()
-            uni_data = []
-            if GLOBAL_TRADER and hasattr(GLOBAL_TRADER, "screener"):
-                uni_data = [c.to_dict() for c in getattr(GLOBAL_TRADER.screener, "current_universe", [])]
-            self.wfile.write(json.dumps(uni_data).encode("utf-8"))
+            self.wfile.write(resp)
 
         else:
-            self.send_response(404)
-            self.end_headers()
+            self.send_error(404, "Endpoint not found")
+
+    def log_message(self, format, *args):
+        return
 
 
-def start_server():
+def start_server_and_bot():
     global GLOBAL_TRADER
     logger.info("Initializing PaperTraderV34 daemon on Port 8087...")
     GLOBAL_TRADER = PaperTraderV34()
 
-    trader_thread = threading.Thread(target=GLOBAL_TRADER.run_forever, daemon=True)
-    trader_thread.start()
+    bot_thread = threading.Thread(target=GLOBAL_TRADER.run_daemon, daemon=True)
+    bot_thread.start()
     logger.info("Background PaperTraderV34 thread launched.")
 
     server_address = ("0.0.0.0", PORT)
-    socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(server_address, DashboardHandler) as httpd:
+    with socketserver.ThreadingTCPServer(server_address, DashboardHTTPRequestHandler) as httpd:
         logger.info(f"Multi-Alpha v3.4 ZF-8 Quant (Port {PORT}) Web Dashboard live on http://127.0.0.1:{PORT}")
-        httpd.serve_forever()
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            logger.info("Server interrupted. Shutting down...")
+            GLOBAL_TRADER.stop()
+            httpd.server_close()
 
 
 if __name__ == "__main__":
-    start_server()
+    start_server_and_bot()
