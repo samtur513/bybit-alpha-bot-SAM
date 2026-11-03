@@ -77,13 +77,14 @@ class MetaAggregator:
                 # Positions & Orders Extraction
                 normalized_positions = []
                 
-                # Format 1: dict open_positions (v2.0, v2.1, v3.1.1, v3.1.4)
-                if isinstance(data.get("open_positions"), dict):
-                    for sym, pos in data["open_positions"].items():
+                # Format 1: dict or list open_positions (v2.0, v2.1, v3.1.1, v3.1.4, v3.3, v3.4, v3.5)
+                raw_open_pos = data.get("open_positions")
+                if isinstance(raw_open_pos, dict):
+                    for sym, pos in raw_open_pos.items():
                         entry_p = float(pos.get("entry_price", 0.0))
                         curr_p = float(pos.get("current_price", entry_p))
                         dir_str = str(pos.get("direction", "LONG")).upper()
-                        unr_pnl = float(pos.get("unrealized_pnl", 0.0))
+                        unr_pnl = float(pos.get("unrealized_pnl", pos.get("floating_pnl", 0.0)))
                         unr_pct = round(((curr_p - entry_p) / entry_p * 100.0) if dir_str == "LONG" else ((entry_p - curr_p) / entry_p * 100.0), 2) if entry_p > 0 else 0.0
                         normalized_positions.append({
                             "engine_id": engine["id"],
@@ -91,11 +92,36 @@ class MetaAggregator:
                             "port": port,
                             "symbol": sym,
                             "direction": dir_str,
-                            "module": "TREND",
+                            "module": "ALPHA_PAIRS" if engine["id"] == "v35" else "TREND",
                             "qty": float(pos.get("qty", 0.0)),
                             "entry_price": entry_p,
                             "current_price": curr_p,
-                            "stop_loss": float(pos.get("current_stop", 0.0)),
+                            "stop_loss": float(pos.get("current_stop", pos.get("stop_price", 0.0))),
+                            "take_profit": None,
+                            "unrealized_pnl": unr_pnl,
+                            "unrealized_pct": unr_pct,
+                            "is_pyramided": bool(pos.get("is_pyramided", False)),
+                            "is_breakeven_set": bool(pos.get("is_breakeven_set", False)),
+                        })
+                elif isinstance(raw_open_pos, list):
+                    for pos in raw_open_pos:
+                        sym = pos.get("symbol", "")
+                        entry_p = float(pos.get("entry_price", 0.0))
+                        curr_p = float(pos.get("current_price", entry_p))
+                        dir_str = str(pos.get("direction", "LONG")).upper()
+                        unr_pnl = float(pos.get("unrealized_pnl", pos.get("floating_pnl", 0.0)))
+                        unr_pct = round(((curr_p - entry_p) / entry_p * 100.0) if dir_str == "LONG" else ((entry_p - curr_p) / entry_p * 100.0), 2) if entry_p > 0 else 0.0
+                        normalized_positions.append({
+                            "engine_id": engine["id"],
+                            "engine_name": engine["name"],
+                            "port": port,
+                            "symbol": sym,
+                            "direction": dir_str,
+                            "module": "ALPHA_PAIRS" if engine["id"] == "v35" else "TREND",
+                            "qty": float(pos.get("qty", 0.0)),
+                            "entry_price": entry_p,
+                            "current_price": curr_p,
+                            "stop_loss": float(pos.get("current_stop", pos.get("stop_price", 0.0))),
                             "take_profit": None,
                             "unrealized_pnl": unr_pnl,
                             "unrealized_pct": unr_pct,

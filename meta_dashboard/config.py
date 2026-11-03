@@ -84,4 +84,14 @@ ENGINES = [
         "strategy": "8-Speed ZF Transmission (1.0%-3.6% Smart Kickdown)",
         "color": "#8b5cf6",  # violet
     },
+    {
+        "id": "v35",
+        "name": "v3.5 Alpha Pairs",
+        "tag": "1h Market-Neutral Long/Short Pairs (Beta ~ 0)",
+        "version": "3.5",
+        "timeframe": "1h",
+        "port": 8088,
+        "strategy": "Market-Neutral CAR-CSMOM (168h vs BTC) + Hysteresis Buffer",
+        "color": "#10b981",  # emerald green
+    },
 ]
