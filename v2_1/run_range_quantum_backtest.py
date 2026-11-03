@@ -101,6 +101,7 @@ def load_and_prepare_universe(symbols: List[str]) -> Tuple[Dict[str, Dict[str, D
             "bb_width_pctl": df.set_index("timestamp")["bb_width_pctl"].to_dict(),
             "kc_upper": df.set_index("timestamp")["kc_upper"].to_dict(),
             "kc_lower": df.set_index("timestamp")["kc_lower"].to_dict(),
+            "ker": df.set_index("timestamp")["ker"].to_dict(),
         }
         timestamps_set.update(df["timestamp"].tolist())
 

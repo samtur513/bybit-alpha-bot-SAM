@@ -61,6 +61,8 @@ class PaperTraderV33(PaperTraderV3):
         status_file: Path = LIVE_STATUS_FILE,
         md_file: Path = LIVE_MD_FILE,
         enable_news_defense: bool = True,
+        client: Optional[Any] = None,
+        poll_interval_seconds: int = 5,
     ):
         # We invoke PaperTraderV3 setup but override engine with CoreV33Engine
         super().__init__(
@@ -68,9 +70,11 @@ class PaperTraderV33(PaperTraderV3):
             initial_capital=initial_capital,
             base_risk_pct=BASE_RISK_PCT,
             max_leverage=MAX_LEVERAGE_CAP,
+            poll_interval_seconds=poll_interval_seconds,
+            client=client,
             state_file=state_file,
-            status_file=status_file,
-            md_file=md_file,
+            live_status_file=status_file,
+            live_md_file=md_file,
             enable_news_defense=enable_news_defense,
         )
 

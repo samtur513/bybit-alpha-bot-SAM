@@ -41,6 +41,7 @@ class RegimeData:
     is_volatility_compressed: bool
     is_chop: bool
     is_trend: bool
+    ker: float = 0.5
 
     @property
     def allows_range_trading(self) -> bool:
@@ -240,6 +241,12 @@ class MarketRegimeClassifier:
         # Volume SMA
         df["volume_sma"] = volume.shift(1).rolling(window=self.volume_sma_period).mean()
 
+        # Kaufman Efficiency Ratio on shift(1)
+        shift_close = close.shift(1)
+        ker_change = (shift_close - shift_close.shift(self.atr_period)).abs()
+        ker_volatility = (shift_close - shift_close.shift(1)).abs().rolling(self.atr_period).sum()
+        df["ker"] = (ker_change / ker_volatility.replace(0, np.nan)).fillna(0.5)
+
         return df
 
     def classify_bar(
@@ -256,6 +263,7 @@ class MarketRegimeClassifier:
         atr: float,
         volume: float,
         volume_sma: float,
+        ker: float = 0.5,
     ) -> RegimeData:
         """
         Classifies market regime for a single bar at close.
@@ -301,4 +309,5 @@ class MarketRegimeClassifier:
             is_volatility_compressed=is_compressed,
             is_chop=is_chop,
             is_trend=is_trend,
+            ker=float(ker) if np.isfinite(ker) else 0.5,
         )

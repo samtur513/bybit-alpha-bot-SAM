@@ -79,6 +79,14 @@ RANGE_MIN_TP_PCT = Decimal("0.010")    # 1.0% min TP distance
 RANGE_MAX_TP_PCT = Decimal("0.020")    # 2.0% max TP distance
 ENABLE_REGIME_CLASSIFIER = True        # ADX & Volatility compression gate
 
+# Dynamic Chop Universe Screener Parameters
+ENABLE_DYNAMIC_CHOP_SCREENER = True        # Dynamically scan 400+ Bybit coins for pure chop
+CHOP_SCREENER_MIN_TURNOVER = 10_000_000.0  # $10M 24h turnover
+CHOP_SCREENER_MAX_KER = 0.20               # Pure noise / oscillation (KER <= 0.20)
+CHOP_SCREENER_MIN_BW_PCT = 0.025           # Minimum 2.5% bandwidth to beat fees
+CHOP_SCREENER_TOP_N = 10                   # Top 10 range candidates
+CHOP_SCREENER_INTERVAL_HOURS = 4           # Re-scan schedule
+
 # News Core Defensive Shield Configuration
 ENABLE_NEWS_DEFENSE = True             # Enable News Core defensive shield (Regime Guard + Position Matrix)
 NEWS_CONFIG_PROFILE = "defensive_only" # Strictly defensive (no offensive N1/N3 trading)

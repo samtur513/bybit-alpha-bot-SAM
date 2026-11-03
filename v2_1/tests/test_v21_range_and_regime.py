@@ -290,3 +290,82 @@ def test_range_engine_max_positions_and_leverage():
     assert len(orders) == 1
     assert orders[0].symbol == "ETHUSDT"
     assert orders[0].direction == 1
+
+
+def test_range_engine_time_stop_exit():
+    """Verify that positions exceeding max_hold_bars are closed with TIME_STOP reason."""
+    engine = RangeMeanReversionEngine(
+        initial_capital=Decimal("300.0"),
+        max_hold_bars=4,
+    )
+    # Simulate active position entered at bar_idx = 1
+    engine.bar_counter = 1
+    engine.open_positions["SOLUSDT"] = RangeActivePosition(
+        symbol="SOLUSDT",
+        direction=1,
+        entry_price=Decimal("100.0"),
+        current_qty=Decimal("1.0"),
+        stop_loss=Decimal("95.0"),
+        take_profit=Decimal("105.0"),
+        initial_atr=Decimal("2.0"),
+        entry_time=1000,
+        entry_bar_idx=1,
+        entry_fees=Decimal("0.0324"),
+    )
+
+    # Bars 2, 3, 4: inside range without touching SL or TP
+    bars = {"SOLUSDT": {"open": 100.0, "high": 102.0, "low": 98.0, "close": 101.0}}
+    regime = RegimeData(
+        symbol="SOLUSDT", regime=MarketRegime.RANGE, adx=15.0, bb_mid=100.0,
+        bb_upper=105.0, bb_lower=95.0, bb_width=0.10, bb_width_pctl=30.0,
+        kc_upper=104.0, kc_lower=96.0, rsi=45.0, atr=2.0, volume=500.0, volume_sma=600.0,
+        is_volatility_compressed=True, is_chop=True, is_trend=False,
+    )
+
+    # Bar 2 (bars_held = 1) -> No exit
+    engine.bar_counter = 2
+    closed = engine.manage_positions_on_bar(2000, bars, {"SOLUSDT": regime})
+    assert len(closed) == 0
+
+    # Bar 5 (bars_held = 4 >= max_hold_bars) -> TIME_STOP exit
+    engine.bar_counter = 5
+    closed = engine.manage_positions_on_bar(5000, bars, {"SOLUSDT": regime})
+    assert len(closed) == 1
+    assert closed[0].exit_reason == "TIME_STOP"
+    assert "SOLUSDT" not in engine.open_positions
+
+
+def test_range_engine_trend_aligned_directionality():
+    """Verify that trend_aligned_only enforces Longs on Bullish BTC and Shorts on Bearish BTC."""
+    engine = RangeMeanReversionEngine(
+        initial_capital=Decimal("300.0"),
+        trend_aligned_only=True,
+    )
+    reg_oversold = RegimeData(
+        symbol="AVAXUSDT", regime=MarketRegime.RANGE, adx=15.0, bb_mid=30.0,
+        bb_upper=33.0, bb_lower=27.0, bb_width=0.20, bb_width_pctl=30.0,
+        kc_upper=32.0, kc_lower=28.0, rsi=30.0, atr=1.0, volume=500.0, volume_sma=600.0,
+        is_volatility_compressed=True, is_chop=True, is_trend=False,
+    )
+    bars = {"AVAXUSDT": {"open": 28.0, "high": 29.0, "low": 27.5, "close": 28.0}}
+
+    # When BTC is Bearish: Long candidates must be BLOCKED!
+    orders = engine.scan_and_generate_orders(
+        timestamp=1000,
+        bars=bars,
+        regimes={"AVAXUSDT": reg_oversold},
+        btc_bullish=False,
+        btc_bearish=True,
+    )
+    assert len(orders) == 0
+
+    # When BTC is Bullish: Long candidate is ALLOWED!
+    orders = engine.scan_and_generate_orders(
+        timestamp=1000,
+        bars=bars,
+        regimes={"AVAXUSDT": reg_oversold},
+        btc_bullish=True,
+        btc_bearish=False,
+    )
+    assert len(orders) == 1
+    assert orders[0].direction == 1

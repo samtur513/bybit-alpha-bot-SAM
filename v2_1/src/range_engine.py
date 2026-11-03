@@ -92,6 +92,20 @@ class RangeMeanReversionEngine:
         max_tp_dist_pct: Decimal = Decimal("0.020"),    # Target clamp up to 2.0%
         cooldown_bars: int = 3,                         # 3-bar re-entry cooldown
         anomalous_vol_mult: float = 1.5,
+        allow_alts_on_btc_bearish: bool = False,        # If True, allow alt limit buys even during sliding/bearish BTC
+        allow_alts_on_btc_bullish: bool = False,        # If True, allow alt limit sells even during bullish BTC
+        rsi_long_threshold: float = 35.0,               # RSI oversold entry threshold (e.g. 35.0 or 40.0)
+        rsi_short_threshold: float = 65.0,              # RSI overbought entry threshold (e.g. 65.0 or 60.0)
+        min_bandwidth_pct: Decimal = Decimal("0.015"),  # Minimum 1.5% BB bandwidth
+        # Quantitative Institutional Enhancements (crypto-hybrid-bot-tester standard):
+        max_position_leverage: Decimal = Decimal("1.5"), # Max 1.5x notional leverage per position
+        trend_aligned_only: bool = False,               # If True, Long ONLY when BTC Bullish, Short ONLY when BTC Bearish
+        max_hold_bars: int = 0,                         # Time Stop: 0 = disabled, >0 = max hours before closing trade
+        ker_filter_enabled: bool = False,               # Kaufman Efficiency Ratio filter (< max_ker)
+        max_ker: float = 0.25,                          # Pure noise threshold
+        use_dynamic_slippage: bool = False,             # Volatility-dependent dynamic slippage
+        enable_circuit_breaker: bool = False,           # Hard circuit breaker halt at 7.0% DD
+        circuit_breaker_dd_pct: Decimal = Decimal("7.0"),
     ):
         self.initial_capital = initial_capital
         self.realized_equity = initial_capital
@@ -100,6 +114,7 @@ class RangeMeanReversionEngine:
         self.risk_per_trade_pct = risk_per_trade_pct
         self.max_concurrent_positions = max_concurrent_positions
         self.max_portfolio_leverage = max_portfolio_leverage
+        self.max_position_leverage = max_position_leverage
 
         self.maker_fee = maker_fee
         self.taker_fee = taker_fee
@@ -110,6 +125,21 @@ class RangeMeanReversionEngine:
         self.max_tp_dist_pct = max_tp_dist_pct
         self.cooldown_bars = cooldown_bars
         self.anomalous_vol_mult = anomalous_vol_mult
+        self.allow_alts_on_btc_bearish = allow_alts_on_btc_bearish
+        self.allow_alts_on_btc_bullish = allow_alts_on_btc_bullish
+        self.rsi_long_threshold = rsi_long_threshold
+        self.rsi_short_threshold = rsi_short_threshold
+        self.min_bandwidth_pct = min_bandwidth_pct
+
+        self.trend_aligned_only = trend_aligned_only
+        self.max_hold_bars = max_hold_bars
+        self.ker_filter_enabled = ker_filter_enabled
+        self.max_ker = max_ker
+        self.use_dynamic_slippage = use_dynamic_slippage
+        self.enable_circuit_breaker = enable_circuit_breaker
+        self.circuit_breaker_dd_pct = circuit_breaker_dd_pct
+        self.circuit_breaker_tripped = False
+        self.circuit_breaker_trip_time: Optional[int] = None
 
         self.instrument_rules = instrument_rules or {}
         self.open_positions: Dict[str, RangeActivePosition] = {}
@@ -132,6 +162,22 @@ class RangeMeanReversionEngine:
             unrealized += gross - est_fee
         return self.realized_equity + unrealized
 
+    def _compute_slippage(self, b: Optional[Dict[str, Any]] = None) -> Decimal:
+        """Dynamic volatility-dependent slippage model from crypto-hybrid-bot-tester standard."""
+        if not self.use_dynamic_slippage or not b:
+            return self.slippage
+        try:
+            bar_open = float(b.get("open", 1.0))
+            bar_high = float(b.get("high", bar_open))
+            bar_low = float(b.get("low", bar_open))
+            if bar_open <= 0:
+                return self.slippage
+            vol_ratio = (bar_high - bar_low) / bar_open
+            slip = 0.0005 + 0.15 * vol_ratio
+            return Decimal(str(round(slip, 6)))
+        except Exception:
+            return self.slippage
+
     def _observe_drawdown(self, prices: Dict[str, Decimal]) -> Decimal:
         eq = self.get_equity(prices)
         if eq > self.peak_equity:
@@ -140,6 +186,9 @@ class RangeMeanReversionEngine:
             dd = (self.peak_equity - eq) / self.peak_equity * Decimal("100")
             if dd > self.max_drawdown_pct:
                 self.max_drawdown_pct = dd
+            if self.enable_circuit_breaker and dd >= self.circuit_breaker_dd_pct and not self.circuit_breaker_tripped:
+                self.circuit_breaker_tripped = True
+                self.circuit_breaker_trip_time = self.bar_counter
         return eq
 
     def _capacity_check(self, symbol: str, notional: Decimal, prices: Dict[str, Decimal]) -> bool:
@@ -159,7 +208,7 @@ class RangeMeanReversionEngine:
         stop_price: Decimal,
         current_equity: Decimal,
     ) -> Optional[Decimal]:
-        """Calculates 1.0% risk position size adhering to qty steps."""
+        """Calculates fixed fractional risk position size adhering to qty steps and 1.5x cap."""
         rules = self.instrument_rules.get(
             symbol,
             {
@@ -182,6 +231,11 @@ class RangeMeanReversionEngine:
         # Unit loss accounting: stop distance + entry maker fee + exit taker fee + slippage
         unit_risk = stop_distance + entry_price * self.maker_fee + stop_price * (self.taker_fee + self.slippage)
         raw_qty = risk_amount / unit_risk
+
+        # Enforce max position leverage (e.g. 1.5x cap from crypto-hybrid-bot-tester)
+        max_notional = current_equity * self.max_position_leverage
+        if raw_qty * entry_price > max_notional:
+            raw_qty = max_notional / entry_price
 
         # Quantize to step
         qty = (raw_qty / step).to_integral_value(rounding=ROUND_FLOOR) * step
@@ -313,10 +367,15 @@ class RangeMeanReversionEngine:
             if hit_sl and hit_tp:
                 hit_tp = False
 
+            # Time-based staleness stop
+            bars_held = self.bar_counter - pos.entry_bar_idx
+            time_stop_triggered = (self.max_hold_bars > 0 and bars_held >= self.max_hold_bars)
+
             if hit_sl:
                 # Execution price at stop or open gap
+                slip = self._compute_slippage(b)
                 fill_p = min(bar_open, sl) if direction == 1 else max(bar_open, sl)
-                exec_price = fill_p * (Decimal("1") - self.slippage * direction)
+                exec_price = fill_p * (Decimal("1") - slip * direction)
                 exit_fee = pos.current_qty * exec_price * self.taker_fee
                 gross_pnl = pos.current_qty * (exec_price - pos.entry_price) * direction
                 net_pnl = gross_pnl - exit_fee + pos.funding_pnl
@@ -372,7 +431,8 @@ class RangeMeanReversionEngine:
 
             elif regime_handoff:
                 # Exit at close with Taker fee and slippage to hand off to Trend
-                exec_price = bar_close * (Decimal("1") - self.slippage * direction)
+                slip = self._compute_slippage(b)
+                exec_price = bar_close * (Decimal("1") - slip * direction)
                 exit_fee = pos.current_qty * exec_price * self.taker_fee
                 gross_pnl = pos.current_qty * (exec_price - pos.entry_price) * direction
                 net_pnl = gross_pnl - exit_fee + pos.funding_pnl
@@ -398,6 +458,35 @@ class RangeMeanReversionEngine:
                 del self.open_positions[sym]
                 self.events.append(dict(kind="RANGE_CLOSE", symbol=sym, reason="REGIME_HANDOFF", net=str(net_pnl)))
 
+            elif time_stop_triggered:
+                # Time-based stop (Staleness exit after max_hold_bars)
+                slip = self._compute_slippage(b)
+                exec_price = bar_close * (Decimal("1") - slip * direction)
+                exit_fee = pos.current_qty * exec_price * self.taker_fee
+                gross_pnl = pos.current_qty * (exec_price - pos.entry_price) * direction
+                net_pnl = gross_pnl - exit_fee + pos.funding_pnl
+                self.realized_equity += (pos.current_qty * (exec_price - pos.entry_price) * direction - exit_fee)
+
+                closed = RangeClosedTrade(
+                    symbol=sym,
+                    direction=direction,
+                    entry_time=pos.entry_time,
+                    exit_time=timestamp,
+                    entry_price=pos.entry_price,
+                    exit_price=exec_price,
+                    qty=pos.current_qty,
+                    net_pnl=net_pnl,
+                    exit_reason="TIME_STOP",
+                    hold_hours=(timestamp - pos.entry_time) / 3600000.0,
+                    fees_paid=pos.entry_fees + exit_fee,
+                    funding_pnl=pos.funding_pnl,
+                )
+                self.closed_trades.append(closed)
+                closed_this_bar.append(closed)
+                self.cooldown_tracker[(sym, direction)] = self.bar_counter + 2
+                del self.open_positions[sym]
+                self.events.append(dict(kind="RANGE_CLOSE", symbol=sym, reason="TIME_STOP", net=str(net_pnl)))
+
         return closed_this_bar
 
     def scan_and_generate_orders(
@@ -408,11 +497,15 @@ class RangeMeanReversionEngine:
         btc_bullish: bool = True,
         btc_bearish: bool = True,
         active_trend_symbols: Optional[List[str]] = None,
+        sentiment_long_veto: bool = False,
     ) -> List[RangeLimitOrder]:
         """
         Scans all symbols in RANGE regime and generates limit entry orders.
         Strict conflict avoidance: does not trade symbols active in Trend module.
         """
+        if self.circuit_breaker_tripped:
+            return []
+
         active_trend = set(active_trend_symbols or [])
         available_slots = self.max_concurrent_positions - len(self.open_positions)
         if available_slots <= 0:
@@ -431,6 +524,12 @@ class RangeMeanReversionEngine:
             if not reg or not reg.allows_range_trading:
                 continue
 
+            # Kaufman Efficiency Ratio filter (pure noise check)
+            if self.ker_filter_enabled:
+                ker_val = getattr(reg, "ker", 0.5)
+                if ker_val > self.max_ker:
+                    continue
+
             # Check bandwidth (range width)
             bb_mid = Decimal(str(reg.bb_mid))
             bb_up = Decimal(str(reg.bb_upper))
@@ -439,20 +538,29 @@ class RangeMeanReversionEngine:
                 continue
 
             bw = (bb_up - bb_lo) / bb_mid
-            if bw < Decimal("0.015"):
+            if bw < self.min_bandwidth_pct:
                 continue
 
             atr = Decimal(str(reg.atr))
             close = Decimal(str(b["close"]))
             rsi = reg.rsi
 
+            # Directional permission:
+            # If trend_aligned_only:
+            # - When BTC is Bullish: allow ONLY Longs (buy dip in bull market)
+            # - When BTC is Bearish: allow ONLY Shorts (sell overbought spike in bear market)
+            if self.trend_aligned_only:
+                can_long = btc_bullish and not sentiment_long_veto
+                can_short = btc_bearish
+            else:
+                can_long = ((sym == "BTCUSDT") or (not btc_bearish) or self.allow_alts_on_btc_bearish) and not sentiment_long_veto
+                can_short = (sym == "BTCUSDT") or (not btc_bullish) or self.allow_alts_on_btc_bullish
+
             # LONG candidate:
-            # RSI oversold (< 35), price inside range (close >= bb_lower)
-            # Altcoins filter against strong BTC bear trend
             if (
-                rsi < 35.0
+                rsi < self.rsi_long_threshold
                 and close >= bb_lo
-                and (sym == "BTCUSDT" or not btc_bearish)
+                and can_long
                 and (self.bar_counter >= self.cooldown_tracker.get((sym, 1), 0))
             ):
                 limit_p = bb_lo
@@ -461,7 +569,7 @@ class RangeMeanReversionEngine:
                 if (tp - limit_p) / limit_p >= self.min_tp_dist_pct:
                     qty = self.calculate_position_size(sym, limit_p, sl, current_equity)
                     if qty and self._capacity_check(sym, qty * limit_p, current_marks):
-                        tms = (35.0 - rsi) * float(bw)
+                        tms = (self.rsi_long_threshold - rsi) * float(bw)
                         candidates.append(
                             RangeLimitOrder(
                                 symbol=sym,
@@ -478,11 +586,10 @@ class RangeMeanReversionEngine:
                         )
 
             # SHORT candidate:
-            # RSI overbought (> 65), price inside range (close <= bb_upper)
             if (
-                rsi > 65.0
+                rsi > self.rsi_short_threshold
                 and close <= bb_up
-                and (sym == "BTCUSDT" or not btc_bullish)
+                and can_short
                 and (self.bar_counter >= self.cooldown_tracker.get((sym, -1), 0))
             ):
                 limit_p = bb_up
@@ -491,7 +598,7 @@ class RangeMeanReversionEngine:
                 if (limit_p - tp) / limit_p >= self.min_tp_dist_pct:
                     qty = self.calculate_position_size(sym, limit_p, sl, current_equity)
                     if qty and self._capacity_check(sym, qty * limit_p, current_marks):
-                        tms = (rsi - 65.0) * float(bw)
+                        tms = (rsi - self.rsi_short_threshold) * float(bw)
                         candidates.append(
                             RangeLimitOrder(
                                 symbol=sym,
@@ -526,6 +633,7 @@ class RangeMeanReversionEngine:
         btc_bullish: bool = True,
         btc_bearish: bool = True,
         active_trend_symbols: Optional[List[str]] = None,
+        sentiment_long_veto: bool = False,
     ) -> Dict[str, Any]:
         """
         Unified bar execution step for Range Engine:
@@ -553,6 +661,7 @@ class RangeMeanReversionEngine:
             btc_bullish=btc_bullish,
             btc_bearish=btc_bearish,
             active_trend_symbols=active_trend_symbols,
+            sentiment_long_veto=sentiment_long_veto,
         )
 
         return {
@@ -561,4 +670,5 @@ class RangeMeanReversionEngine:
             "equity": eq,
             "pending_orders": len(self.pending_orders),
             "open_positions": len(self.open_positions),
+            "circuit_breaker_tripped": self.circuit_breaker_tripped,
         }
