@@ -201,8 +201,8 @@ class MetaAggregator:
                         })
                 
                 # Gearbox
-                gear = data.get("gearbox_gear", 3)
-                risk_pct = data.get("gearbox_risk_pct", 2.0)
+                gear = data.get("gearbox_gear", 1)
+                risk_pct = data.get("gearbox_risk_pct", 1.5)
 
                 return {
                     "id": engine["id"],
