@@ -393,7 +393,11 @@ class PaperTraderV36:
             "trend_engine": self.trend_engine.to_dict(),
             "range_engine": self.range_engine.to_dict(),
             "gear": self.trend_engine.transmission.current_gear,
-            "gear_config": self.trend_engine.transmission.current_config.__dict__,
+            "gear_config": {
+                k: (float(v) if isinstance(v, Decimal) else v)
+                for k, v in self.trend_engine.transmission.current_config.__dict__.items()
+            },
+            "transmission_telemetry": self.trend_engine.transmission.to_dict(),
             "runtime": {
                 "last_processed_bar_ts": self.last_processed_bar_ts,
             },

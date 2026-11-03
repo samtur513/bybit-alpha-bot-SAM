@@ -4,15 +4,24 @@ import logging
 import os
 import tempfile
 import time
+from decimal import Decimal
 from pathlib import Path
 
 logger = logging.getLogger("persistence")
 
 
+def _json_default(obj):
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if hasattr(obj, "__dict__"):
+        return obj.__dict__
+    return str(obj)
+
+
 def atomic_json(path, data, max_retries=8, initial_delay=0.01):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(data, indent=2, allow_nan=False)
+    payload = json.dumps(data, indent=2, allow_nan=False, default=_json_default)
     fd, name = tempfile.mkstemp(prefix=path.name, suffix='.tmp', dir=path.parent)
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as stream:
