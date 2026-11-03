@@ -721,31 +721,88 @@ class PaperTraderV36:
         self.last_status_cache = payload
         return payload
 
-    def run_daemon(self) -> None:
-        logger.info(f"Starting {VERSION_NAME} Paper Trading Daemon on Port {PORT}...")
-        self.candle_buffers = self._fetch_history()
-        for sym, df in self.candle_buffers.items():
-            if len(df) > 0:
-                self.last_processed_bar_ts[sym] = int(df["timestamp"].iloc[-1])
+    def run_daemon(self, max_iterations: Optional[int] = None) -> None:
+        logger.info(f"Connecting to Bybit WebSocket stream for {VERSION_NAME}...")
+        self.stream.start()
+        iterations = 0
+        last_export = 0.0
 
-        self.stream.start(
-            on_price=lambda sym, p: self._on_price(sym, p),
-            on_kline=lambda sym, b: self._on_bar(sym, b),
-        )
-
-        time.sleep(2.0)
-        self.ready = True
-        logger.info("Warmup complete. Stream connected and listening to live ticks.")
-
-        while True:
+        with ThreadPoolExecutor(max_workers=1) as worker:
+            history = worker.submit(self._fetch_history)
             try:
-                self._signals()
-                status = self.poll_cycle()
-                atomic_json(self.live_status_file, status)
-                self.save_persistent_state()
+                while max_iterations is None or iterations < max_iterations:
+                    if self.stream.overflow.is_set():
+                        raise RuntimeError("WebSocket queue overflow or rejected subscription")
+                    if history is not None and history.done():
+                        with self.lock:
+                            self.candle_buffers = history.result()
+                            for sym, df in self.candle_buffers.items():
+                                if len(df) > 0:
+                                    self.last_processed_bar_ts[sym] = int(df.iloc[-1]["timestamp"])
+                            self.batches.clear()
+                            self.ready = len(self.candle_buffers) >= max(3, int(len(self.symbols) * 0.7))
+                            btc_df = self.candle_buffers.get("BTCUSDT")
+                            if btc_df is not None and len(btc_df) > 0:
+                                last = btc_df.iloc[-1]
+                                c = float(last["close"])
+                                ef = float(last.get("ema_fast", 0))
+                                es = float(last.get("ema_slow", 0))
+                                if ef > es and c > ef:
+                                    self.btc_trend_status = "BULLISH"
+                                elif ef < es and c < ef:
+                                    self.btc_trend_status = "BEARISH"
+                                else:
+                                    self.btc_trend_status = "NEUTRAL"
+                            logger.info(f"{VERSION_NAME} ready with {len(self.candle_buffers)}/{len(self.symbols)} assets.")
+                        history = None
+
+                    try:
+                        kind, sym, ts, data, received = self.stream.events.get(timeout=0.2)
+                    except queue.Empty:
+                        kind = None
+
+                    with self.lock:
+                        if kind == "reset":
+                            self.ready = False
+                            self.prices.clear()
+                            self.price_times.clear()
+                            if history is None:
+                                history = worker.submit(self._fetch_history)
+                        elif (
+                            kind == "price"
+                            and time.monotonic() - received < 5
+                            and abs(time.time() * 1000 - ts) < 15000
+                        ):
+                            price = Decimal(str(data))
+                            if price.is_finite() and price > 0:
+                                self.prices[sym] = price
+                                self.price_times[sym] = received
+                                self.trend_engine.process_price_event(ts, self.get_live_prices())
+                        elif kind == "bar" and self.ready:
+                            self._on_bar(sym, data)
+
+                        if not self.ready and history is None:
+                            history = worker.submit(self._fetch_history)
+
+                        self._signals()
+
+                        if self.trend_engine.events:
+                            self.save_persistent_state()
+                            for event in self.trend_engine.events:
+                                self.notifier.notify(event)
+                            self.trend_engine.events.clear()
+
+                        now = time.monotonic()
+                        if now - last_export >= self.poll_interval:
+                            status = self.poll_cycle()
+                            atomic_json(self.live_status_file, status)
+                            self.save_persistent_state()
+                            last_export = now
+                            iterations += 1
+
             except Exception as e:
                 logger.error(f"Exception in paper trader loop: {e}", exc_info=True)
-            time.sleep(self.poll_interval)
+                time.sleep(2.0)
 
     def _on_price(self, sym: str, price: Decimal) -> None:
         with self.lock:
