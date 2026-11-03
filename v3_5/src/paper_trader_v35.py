@@ -89,7 +89,7 @@ class PaperTraderV35:
         self.last_ping_ms = 1.8
         self.stream: Optional[MarketStream] = None
         self.news_streamer: Optional[LiveNewsStreamer] = None
-        self.is_macro_blackout = False
+        self.macro_blackout_until: float = 0.0
 
         self._load_persistent_state()
         self._export_status()
@@ -97,8 +97,12 @@ class PaperTraderV35:
     def _on_news_item(self, item: NewsItem) -> None:
         text = str(item.headline).lower()
         if any(w in text for w in ["fomc", "cpi", "rate decision", "powell", "fed rate", "inflation"]):
-            self.is_macro_blackout = True
-            logger.info(f"News Core v1.2 Macro blackout activated: {item.headline}")
+            self.macro_blackout_until = time.time() + 1800.0  # 30-min blackout window
+            logger.info(f"News Core v1.2 Macro blackout activated for 30m: {item.headline}")
+
+    @property
+    def is_macro_blackout(self) -> bool:
+        return time.time() < getattr(self, "macro_blackout_until", 0.0)
 
     def _load_persistent_state(self) -> None:
         with self.lock:
@@ -344,9 +348,9 @@ class PaperTraderV35:
                 # Check if news blackout is active
                 is_blackout = self.is_macro_blackout
 
-                # Process Bar if new hour or interval
+                # Process Bar if new hour or interval or initial empty start
                 now_ts = int(time.time() * 1000)
-                if now_ts - last_rebal_ts >= 3600 * 1000:
+                if (now_ts - last_rebal_ts >= 3600 * 1000) or (len(self.engine.open_positions) == 0 and last_rebal_ts == 0):
                     last_rebal_ts = now_ts
                     with self.lock:
                         self.engine.process_bar(

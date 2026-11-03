@@ -289,7 +289,7 @@ class AlphaPairsEngine:
             del self.open_positions[s]
 
         # 2. Rebalancing & Hysteresis Ranking Check (every 12 hours)
-        if self.bar_counter % REBALANCE_INTERVAL_HOURS == 0 and rankings:
+        if (self.bar_counter % REBALANCE_INTERVAL_HOURS == 0 or len(self.open_positions) == 0) and rankings:
             ranked_symbols = [r["symbol"] for r in rankings]
             rank_map = {r["symbol"]: (r["rank"], r["rs"], r["score"]) for r in rankings}
 
