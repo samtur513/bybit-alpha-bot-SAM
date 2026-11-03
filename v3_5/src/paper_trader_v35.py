@@ -221,8 +221,9 @@ class PaperTraderV35:
                 bar_ts=now_ts,
                 macro_lockout=False,
             )
+            self.save_persistent_state()
             self._export_status()
-        logger.info(f"Warmup complete. Calculated initial rankings for {len(self.engine.latest_rankings)} symbols.")
+        logger.info(f"Warmup complete. Calculated initial rankings for {len(self.engine.latest_rankings)} symbols. Active positions: {len(self.engine.open_positions)}.")
 
     def _export_status(self) -> None:
         with self.lock:

@@ -51,7 +51,7 @@ ENTRY_TOP_K = 2                        # Max 2 Longs
 ENTRY_BOTTOM_K = 2                     # Max 2 Shorts
 MIN_REL_STRENGTH_LONG = Decimal("0.025")   # Long candidate must outperform BTC by >= 2.5%
 MIN_REL_STRENGTH_SHORT = Decimal("-0.025") # Short candidate must underperform BTC by <= -2.5%
-MIN_KER_THRESHOLD = Decimal("0.40")        # Kaufman Efficiency Ratio >= 0.40 (smooth trend)
+MIN_KER_THRESHOLD = Decimal("0.0")         # Softly weighted in composite rank score: rs * (0.6 + 0.4 * ker)
 
 # Hysteresis Rank Retention
 HYSTERESIS_TOP_RANK = 5                # Keep existing Long while in Top 5 and RS > 0
