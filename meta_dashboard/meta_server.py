@@ -642,8 +642,8 @@ HTML_PAGE = """<!DOCTYPE html>
                         <span class="health-tag health-tag-good" style="font-size: 10px;">
                             ⚡ Ping: ${eng.latency_ms > 0 ? eng.latency_ms + 'ms' : 'N/A'}
                         </span>
-                        <span class="health-tag" style="background: rgba(255,255,255,0.05); color: var(--text-muted); font-size: 10px;">
-                            BTC: ${eng.btc_trend || 'N/A'}
+                        <span class="health-tag" style="background: ${eng.btc_trend === 'BULLISH' ? 'rgba(16,185,129,0.15)' : (eng.btc_trend === 'BEARISH' ? 'rgba(239,68,68,0.15)' : 'rgba(255,255,255,0.05)')}; color: ${eng.btc_trend === 'BULLISH' ? 'var(--accent-green)' : (eng.btc_trend === 'BEARISH' ? '#f87171' : 'var(--text-muted)')}; font-size: 10px;">
+                            BTC: ${eng.btc_trend === 'DISABLED' ? 'Disabled' : (eng.btc_trend || 'N/A')}
                         </span>
                     </div>
                 `;

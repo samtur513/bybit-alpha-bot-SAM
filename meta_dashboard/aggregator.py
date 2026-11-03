@@ -64,7 +64,8 @@ class MetaAggregator:
                 stream_ready = bool(data.get("stream_ready", True if "radar" in data or "market_radar" in data else False))
                 monitored_coins = int(data.get("monitored_symbols_count") or len(data.get("radar", {})) or len(data.get("market_radar", {})) or 18)
                 fresh_symbols = int(data.get("fresh_symbols", monitored_coins))
-                btc_trend = str(data.get("btc_trend_status", "UNKNOWN"))
+                raw_btc = data.get("btc_trend_status")
+                btc_trend = str(raw_btc) if raw_btc else "DISABLED"
                 next_candle = int(data.get("next_candle_seconds", 0))
                 timeframe = str(data.get("timeframe", engine["timeframe"]))
                 
