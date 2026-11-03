@@ -179,9 +179,9 @@ class MetaAggregator:
                     for t in raw_closed:
                         pnl_val = t.get("net_pnl", t.get("pnl", 0.0))
                         try:
-                            net_pnl = float(pnl_val) if pnl_val is not None else 0.0
+                            t_net_pnl = float(pnl_val) if pnl_val is not None else 0.0
                         except (ValueError, TypeError):
-                            net_pnl = 0.0
+                            t_net_pnl = 0.0
 
                         entry_p = float(t.get("entry_price", 0.0))
                         exit_p = float(t.get("exit_price", 0.0))
@@ -195,7 +195,7 @@ class MetaAggregator:
                             "direction": str(t.get("direction", "LONG")).upper(),
                             "entry_price": entry_p,
                             "exit_price": exit_p,
-                            "net_pnl": round(net_pnl, 2),
+                            "net_pnl": round(t_net_pnl, 2),
                             "hold_hours": t.get("hold_hours", 0),
                             "reason": reason,
                             "was_pyramided": bool(t.get("was_pyramided", False)),

@@ -593,8 +593,12 @@ HTML_PAGE = """<!DOCTYPE html>
 
             data.engines.forEach(eng => {
                 const isOnline = eng.online;
-                const pnlSign = eng.net_pnl >= 0 ? '+' : '';
-                const pnlClass = eng.net_pnl >= 0 ? 'val-green' : 'val-red';
+                const netPnlVal = eng.net_pnl || 0;
+                const retPctVal = eng.return_pct || 0;
+                const pnlClass = netPnlVal >= 0 ? 'val-green' : 'val-red';
+                const pnlSign = netPnlVal >= 0 ? '+' : '-';
+                const pnlFormatted = `${pnlSign}$${Math.abs(netPnlVal).toFixed(2)}`;
+                const retFormatted = `${retPctVal >= 0 ? '+' : ''}${retPctVal.toFixed(1)}%`;
                 const wsClass = eng.bybit_connected ? 'health-tag-good' : 'health-tag-off';
                 const newsClass = eng.news_defense_active ? 'health-tag-good' : 'health-tag-warn';
 
@@ -619,7 +623,7 @@ HTML_PAGE = """<!DOCTYPE html>
                         </div>
                         <div class="engine-stat-item">
                             <span class="engine-stat-label">Чистый PnL</span>
-                            <span class="engine-stat-value ${pnlClass}">${pnlSign}$${(eng.net_pnl || 0).toFixed(2)} (${pnlSign}${(eng.return_pct || 0).toFixed(1)}%)</span>
+                            <span class="engine-stat-value ${pnlClass}">${pnlFormatted} (${retFormatted})</span>
                         </div>
                         <div class="engine-stat-item">
                             <span class="engine-stat-label">Макс. просадка</span>
