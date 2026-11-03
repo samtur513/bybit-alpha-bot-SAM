@@ -205,6 +205,7 @@ class CoreV34Engine(CoreV3Engine):
         atr: Decimal,
         execution: Decimal,
         prices: Dict[str, Decimal],
+        bar_open: Optional[Decimal] = None,
     ) -> None:
         pos = self.open_positions.get(sym)
         if not pos:
@@ -217,27 +218,29 @@ class CoreV34Engine(CoreV3Engine):
 
         # Pyramiding check
         if gear_cfg.pyramiding_allowed:
+            from copy import deepcopy
             rules = self.instrument_rules.get(sym, {})
-            action = self.pyramiding_engine.evaluate(
-                pos=pos,
-                high=high,
-                low=low,
-                close=close,
-                atr=atr,
-                min_order_qty=rules.get("minOrderQty", Decimal("0.001")),
-                qty_step=rules.get("qtyStep", Decimal("0.001")),
-                min_notional=rules.get("minNotional", Decimal("5.0")),
-            )
+            step = rules.get("qtyStep", Decimal("0.001"))
+            minimum = rules.get("minOrderQty", Decimal("0.001"))
+            proposal = deepcopy(pos)
+            action = self.pyramiding_engine.evaluate_bar(proposal, high, low, close, atr, step, minimum)
+            pos.highest_price, pos.lowest_price = proposal.highest_price, proposal.lowest_price
+            pos.current_stop = proposal.current_stop
+            pos.is_breakeven_set = proposal.is_breakeven_set
+
             if action.action_type == "PYRAMID_ADD" and action.added_qty > Decimal("0"):
                 cost = action.added_qty * execution
                 current_equity = self.get_equity(prices)
-                if cost / current_equity <= self.max_leverage and self._capacity(sym, execution, action.added_qty, prices):
+                if cost / current_equity <= self.portfolio_leverage and self._capacity(sym, execution, action.added_qty, prices):
                     fee = cost * self.taker_fee
                     self.realized_equity -= fee
-                    self.pyramiding_engine.apply_pyramid(pos, action.added_qty, execution, fee, action.new_stop)
+                    old_qty = pos.current_qty
+                    pos.entry_price = (pos.entry_price * old_qty + execution * action.added_qty) / (old_qty + action.added_qty)
+                    pos.current_qty += action.added_qty
+                    pos.entry_fees += fee
+                    pos.is_pyramided = True
+                    pos.current_stop = action.new_stop
                     self.events.append(dict(kind="PYRAMID", symbol=sym, qty=str(action.added_qty), price=str(execution)))
-            elif action.action_type == "STOP_UPDATE":
-                pos.current_stop = action.new_stop
 
         # Stop-loss execution
         is_stopped = (execution <= pos.current_stop) if pos.direction == 1 else (execution >= pos.current_stop)
@@ -251,7 +254,7 @@ class CoreV34Engine(CoreV3Engine):
             origin = pos.original_entry if pos.original_entry > Decimal("0") else pos.entry_price
             adverse_dist = (origin - execution) * pos.direction
             mfe_dist = (pos.highest_price - origin) if pos.direction == 1 else (origin - pos.lowest_price)
-            if adverse_dist >= Decimal("0.5") * pos.initial_atr and mfe_dist < self.fast_scratch_mfe_r * pos.initial_atr:
+            if adverse_dist >= Decimal("0.5") * pos.initial_atr and mfe_dist < Decimal(str(self.fast_scratch_mfe_r)) * pos.initial_atr:
                 fill = execution
                 self._reduce(sym, pos.current_qty, fill, timestamp, "FAST_SCRATCH")
                 return
