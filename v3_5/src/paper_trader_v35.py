@@ -311,12 +311,17 @@ class PaperTraderV35:
         last_rebal_ts = 0
         while self.running:
             try:
-                # 1. Update prices
+                # 1. Update prices in a single efficient call
                 t0 = time.time()
-                for s in self.symbols[:5]:
-                    p = self.client.get_last_price("linear", s)
-                    if p:
-                        self.latest_prices[s] = p
+                try:
+                    tickers = self.client.get_linear_tickers()
+                    if tickers:
+                        for s in self.symbols:
+                            if s in tickers:
+                                self.latest_prices[s] = tickers[s]
+                        self.ws_connected = True
+                except Exception as ex:
+                    logger.warning(f"Ticker update warning: {ex}")
                 self.last_ping_ms = round((time.time() - t0) * 1000.0, 1)
 
                 # Check if news blackout is active
@@ -347,7 +352,7 @@ class PaperTraderV35:
         self.running = False
         if self.stream:
             try:
-                self.stream.stop()
+                self.stream.close()
             except Exception:
                 pass
         if self.news_streamer:
