@@ -384,6 +384,7 @@ class PaperTraderV32:
                                         self.last_processed_bar_ts[s] = int(df["timestamp"].iloc[-1])
                                 except Exception as e_hist:
                                     logger.warning(f"History fetch for new symbol {s} failed: {e_hist}")
+                                time.sleep(0.05)
 
                     self.symbols = new_symbols
                     self._load_instrument_specs()
@@ -422,6 +423,7 @@ class PaperTraderV32:
                     buffers[sym] = prepare_dual_regime_indicators(df, self.regime_classifier, lookback=DONCHIAN_WINDOW)
             except Exception as e:
                 logger.warning(f"Failed to fetch history for {sym}: {e}")
+            time.sleep(0.05)
         return buffers
 
     def get_live_prices(self) -> Dict[str, Decimal]:

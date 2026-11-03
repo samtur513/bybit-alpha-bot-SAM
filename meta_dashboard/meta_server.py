@@ -479,6 +479,7 @@ HTML_PAGE = """<!DOCTYPE html>
             <table>
                 <thead>
                     <tr>
+                        <th>Движок</th>
                         <th>Монета</th>
                         <th>Сторона</th>
                         <th>Вход</th>
@@ -490,7 +491,7 @@ HTML_PAGE = """<!DOCTYPE html>
                     </tr>
                 </thead>
                 <tbody id="closed-trades-body">
-                    <tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 20px;">История закрытых сделок пока пуста</td></tr>
+                    <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 20px;">История закрытых сделок пока пуста</td></tr>
                 </tbody>
             </table>
         </div>
@@ -735,22 +736,30 @@ HTML_PAGE = """<!DOCTYPE html>
             document.getElementById('trades-header-count').textContent = data.all_closed_trades.length + ' сделок';
 
             if (data.all_closed_trades.length === 0) {
-                tradesBody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 20px;">История закрытых сделок пока пуста</td></tr>';
+                tradesBody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 20px;">История закрытых сделок пока пуста</td></tr>';
             } else {
                 tradesBody.innerHTML = '';
                 data.all_closed_trades.slice(-25).reverse().forEach(t => {
                     const row = document.createElement('tr');
+                    const engName = t.engine_name ? `${t.engine_name} [${t.port}]` : 'Engine';
                     const sideBadge = t.direction === 'LONG' ? '<span class="badge badge-long">LONG</span>' : '<span class="badge badge-short">SHORT</span>';
                     const pnlClass = t.net_pnl >= 0 ? 'val-green' : 'val-red';
                     const pnlSign = t.net_pnl >= 0 ? '+' : '';
+                    let reasonBadge = `<span class="badge" style="background: rgba(255,255,255,0.05); color: var(--text-muted);">${t.reason || 'EXIT'}</span>`;
+                    if (t.reason && t.reason.includes('SCRATCH')) {
+                        reasonBadge = `<span class="badge" style="background: rgba(245, 158, 11, 0.2); color: var(--accent-amber); font-weight: 700;">⚡ FAST SCRATCH</span>`;
+                    } else if (t.reason && (t.reason.includes('EJECT') || t.reason.includes('NEWS'))) {
+                        reasonBadge = `<span class="badge" style="background: rgba(244, 63, 94, 0.2); color: var(--accent-red); font-weight: 700;">🚨 NEWS EJECT</span>`;
+                    }
                     row.innerHTML = `
+                        <td><span class="badge badge-engine">${engName}</span></td>
                         <td><strong>${t.symbol}</strong></td>
                         <td>${sideBadge}</td>
                         <td>$${t.entry_price.toFixed(4)}</td>
                         <td>$${t.exit_price.toFixed(4)}</td>
                         <td class="${pnlClass}"><strong>${pnlSign}$${t.net_pnl.toFixed(2)}</strong></td>
                         <td>${t.hold_hours || 0} ч</td>
-                        <td><span class="badge" style="background: rgba(255,255,255,0.05); color: var(--text-muted);">${t.reason || 'EXIT'}</span></td>
+                        <td>${reasonBadge}</td>
                         <td>${t.was_pyramided ? '✅ +50%' : '—'}</td>
                     `;
                     tradesBody.appendChild(row);

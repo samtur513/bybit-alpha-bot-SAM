@@ -406,6 +406,7 @@ class PaperTraderV314:
                     buffers[sym] = prepare_symbol_indicators(df, lookback=DONCHIAN_WINDOW)
             except Exception as e:
                 logger.warning(f"Failed to fetch history for {sym}: {e}")
+            time.sleep(0.05)
         return buffers
 
     def get_live_prices(self) -> Dict[str, Decimal]:

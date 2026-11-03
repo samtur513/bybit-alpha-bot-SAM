@@ -30,9 +30,9 @@ class MetaAggregator:
         # State storage
         self.latest_states: Dict[str, Dict[str, Any]] = {}
         self.equity_history: Dict[str, deque] = {
-            e["id"]: deque(maxlen=150) for e in ENGINES
+            e["id"]: deque(maxlen=360) for e in ENGINES
         }
-        self.timestamps_history: deque = deque(maxlen=150)
+        self.timestamps_history: deque = deque(maxlen=360)
         self.last_chart_sample_ts = 0.0
         
         # News deduplicator
@@ -172,7 +172,33 @@ class MetaAggregator:
                         })
 
                 # Closed trades
-                closed_trades = data.get("closed_trades", [])
+                raw_closed = data.get("closed_trades", [])
+                closed_trades = []
+                if isinstance(raw_closed, list):
+                    for t in raw_closed:
+                        pnl_val = t.get("net_pnl", t.get("pnl", 0.0))
+                        try:
+                            net_pnl = float(pnl_val) if pnl_val is not None else 0.0
+                        except (ValueError, TypeError):
+                            net_pnl = 0.0
+
+                        entry_p = float(t.get("entry_price", 0.0))
+                        exit_p = float(t.get("exit_price", 0.0))
+                        reason = str(t.get("exit_reason", t.get("reason", "EXIT"))).upper()
+
+                        closed_trades.append({
+                            "engine_id": engine["id"],
+                            "engine_name": engine["name"],
+                            "port": port,
+                            "symbol": t.get("symbol", ""),
+                            "direction": str(t.get("direction", "LONG")).upper(),
+                            "entry_price": entry_p,
+                            "exit_price": exit_p,
+                            "net_pnl": round(net_pnl, 2),
+                            "hold_hours": t.get("hold_hours", 0),
+                            "reason": reason,
+                            "was_pyramided": bool(t.get("was_pyramided", False)),
+                        })
                 
                 # Gearbox
                 gear = data.get("gearbox_gear", 3)
@@ -255,11 +281,11 @@ class MetaAggregator:
                         "source_engine": eng["name"],
                     })
 
-        # Chart sampling (every 10 seconds)
+        # Chart sampling (every 30 seconds -> 360 points = 3 hours rolling window)
         now = time.time()
         with self.lock:
             self.latest_states = new_states
-            if now - self.last_chart_sample_ts >= 10.0:
+            if now - self.last_chart_sample_ts >= 30.0:
                 self.last_chart_sample_ts = now
                 dt_str = datetime.now(timezone.utc).strftime("%H:%M:%S")
                 self.timestamps_history.append(dt_str)

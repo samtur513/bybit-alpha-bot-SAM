@@ -350,7 +350,7 @@ class ChopUniverseScreener:
             )
             if metric.passed_filters:
                 candidates.append(metric)
-            time.sleep(0.02)  # rate limit safety
+            time.sleep(0.06)  # rate limit safety (16 req/sec max)
 
         candidates.sort(key=lambda c: c.chop_score, reverse=True)
         self.active_chop_universe = candidates[:self.config.top_n]

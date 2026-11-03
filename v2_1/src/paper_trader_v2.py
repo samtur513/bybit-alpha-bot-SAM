@@ -236,6 +236,7 @@ class PaperTraderV21:
             if len(df) < 50:
                 raise ValueError(f"Insufficient history for {sym}: only {len(df)} bars")
             buffers[sym] = prepare_symbol_indicators(df, lookback=DONCHIAN_WINDOW)
+            time.sleep(0.05)
         return buffers
 
     def get_live_prices(self) -> Dict[str, Decimal]:
