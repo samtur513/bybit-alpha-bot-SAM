@@ -41,6 +41,11 @@ class ActivePosition:
     tp2_taken: bool = False
     bars_held: int = 0
     breakout_level: Decimal = Decimal("0")
+    tp1_r_mult: Decimal = Decimal("3.0")
+    tp2_r_mult: Decimal = Decimal("4.0")
+    tp1_ratio: Decimal = Decimal("0.35")
+    tp2_ratio: Decimal = Decimal("0.35")
+    entry_gear: int = 1
 
 
 class PyramidingEngine:

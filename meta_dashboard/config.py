@@ -64,4 +64,14 @@ ENGINES = [
         "strategy": "Dynamic Universe Screener + 4h Donchian + News Core v1.2",
         "color": "#00f2fe",  # cyan
     },
+    {
+        "id": "v33",
+        "name": "v3.3 Turbo Risk",
+        "tag": "1h Dynamic + Streak Adaptive R:R (1:3-1:5)",
+        "version": "3.3",
+        "timeframe": "1h",
+        "port": 8086,
+        "strategy": "Adaptive Streak Gearing (1.5%-3.2%) + Dynamic R:R (1:3-1:5)",
+        "color": "#ec4899",  # pink / magenta
+    },
 ]
