@@ -106,9 +106,8 @@ MACRO_LOCKOUT_BEFORE_MINUTES = 45
 MACRO_LOCKOUT_AFTER_MINUTES = 30
 MACRO_PROFIT_TRIM_PCT = Decimal("0.30")
 
-# Bybit Non-VIP ("Обычный пользователь") Execution Friction
-# Фьючерсы: Тейкер 0.10% (0.0010), Мейкер 0.036% (0.00036).
-# При включении скидки 10% с MNT: Тейкер 0.09% (0.0009), Мейкер 0.0324% (0.000324).
-BASE_TAKER_FEE = Decimal("0.0010")     # 0.10% базовый тейкер (без MNT)
-BASE_MAKER_FEE = Decimal("0.00036")    # 0.036% базовый мейкер (без MNT)
+# Bybit Non-VIP ("Обычный пользователь") с активной скидкой 10% в MNT
+# Фьючерсы: Тейкер 0.09% (0.0009), Мейкер 0.0324% (0.000324).
+BASE_TAKER_FEE = Decimal("0.0009")     # 0.090% тейкер (со скидкой 10% MNT)
+BASE_MAKER_FEE = Decimal("0.000324")   # 0.0324% мейкер (со скидкой 10% MNT)
 BASE_SLIPPAGE = Decimal("0.0002")      # 0.02% консервативное проскальзывание
