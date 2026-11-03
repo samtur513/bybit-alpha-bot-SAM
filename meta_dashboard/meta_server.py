@@ -385,13 +385,13 @@ HTML_PAGE = """<!DOCTYPE html>
             </div>
         </header>
 
-        <!-- SECTION 1: 5-ENGINE INFRASTRUCTURE & HEALTH MATRIX -->
+        <!-- SECTION 1: 8-ENGINE INFRASTRUCTURE & HEALTH MATRIX -->
         <div class="section-header">
-            <div class="section-title">Состояние и телеметрия 5 квантовых движков</div>
+            <div class="section-title">Состояние и телеметрия 8 квантовых движков</div>
             <span style="font-size: 12px; color: var(--text-dim);">Автообновление каждые 2 сек</span>
         </div>
         <div class="engines-grid" id="engines-grid">
-            <!-- Dynamic Render of 5 Engine Cards -->
+            <!-- Dynamic Render of 8 Engine Cards -->
         </div>
 
         <!-- SECTION 2: COMPARATIVE CHART & LIVE NEWS RADAR -->
