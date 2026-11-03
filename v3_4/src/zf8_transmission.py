@@ -200,6 +200,16 @@ class ZF8Transmission:
         """Returns the GearConfig for the active gear."""
         return GEAR_CONFIGS.get(self.current_gear, GEAR_CONFIGS[1])
 
+    @property
+    def current_config(self) -> GearConfig:
+        """Alias property for get_config()."""
+        return self.get_config()
+
+    @property
+    def in_limp_mode(self) -> bool:
+        """Alias property for is_circuit_breaker_active."""
+        return self.is_circuit_breaker_active
+
     def get_effective_gear(self, current_dd: Decimal = Decimal("0")) -> int:
         """
         Returns active gear considering drawdown circuit breaker:

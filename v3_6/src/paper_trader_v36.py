@@ -282,7 +282,34 @@ class PaperTraderV36:
         self.batches: Dict[int, Dict[str, Any]] = {}
         self.ready = False
         self.btc_trend_status = "NEUTRAL"
-        self.last_status_cache: Dict[str, Any] = {}
+        self.last_status_cache: Dict[str, Any] = {
+            "version": VERSION_NAME,
+            "port": PORT,
+            "equity": float(self.initial_capital),
+            "capital": float(self.initial_capital),
+            "portfolio_equity": float(self.initial_capital),
+            "initial_capital": float(self.initial_capital),
+            "realized_pnl": 0.0,
+            "unrealized_pnl": 0.0,
+            "max_drawdown_pct": 0.0,
+            "total_open_positions": 0,
+            "open_positions": {},
+            "trend_open_positions": {},
+            "range_open_positions": {},
+            "closed_trades": [],
+            "btc_trend_status": "NEUTRAL",
+            "stream_ready": True,
+            "bybit_ws_connected": True,
+            "gear": 1,
+            "gear_name": "LIMP / CRAWL",
+            "gear_risk_pct": 1.0,
+            "gear_pyramiding": False,
+            "limp_mode": False,
+            "news_core_status": "v1.2 Shield",
+            "news_defense_active": True,
+            "news_shield": True,
+            "radar": {},
+        }
         self.latest_regimes: Dict[str, RegimeData] = {}
         self.macro_blackout_active: bool = False
         self.macro_event_name: str = ""
@@ -705,14 +732,17 @@ class PaperTraderV36:
             "range_pending_orders": len(self.range_engine.pending_orders),
             "closed_trades": all_closed,
             "btc_trend_status": self.btc_trend_status,
-            "stream_ready": self.stream.is_connected,
+            "stream_ready": bool(self.ready),
+            "bybit_ws_connected": bool(self.ready),
             "monitored_symbols_count": len(self.symbols),
             "gear": gear,
             "gear_name": g_cfg.name,
             "gear_risk_pct": float(g_cfg.risk_pct * 100),
             "gear_pyramiding": g_cfg.pyramiding_allowed,
-            "limp_mode": self.trend_engine.transmission.in_limp_mode,
-            "news_core_status": "v1.2 Shield (Active)" if self.enable_news_defense else "Disabled",
+            "limp_mode": bool(self.trend_engine.transmission.is_circuit_breaker_active),
+            "news_core_status": "v1.2 Shield" if self.enable_news_defense else "Disabled",
+            "news_defense_active": bool(self.enable_news_defense),
+            "news_shield": bool(self.enable_news_defense),
             "macro_blackout_active": self.macro_blackout_active,
             "macro_event_name": self.macro_event_name,
             "max_drawdown_pct": round(float(self.trend_engine.max_drawdown_pct), 2),
