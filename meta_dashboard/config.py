@@ -74,4 +74,14 @@ ENGINES = [
         "strategy": "Adaptive Streak Gearing (1.5%-3.2%) + Dynamic R:R (1:3-1:5)",
         "color": "#ec4899",  # pink / magenta
     },
+    {
+        "id": "v34",
+        "name": "v3.4 ZF-8 Quant",
+        "tag": "1h Dynamic + 8-Speed Intelligent Transmission",
+        "version": "3.4",
+        "timeframe": "1h",
+        "port": 8087,
+        "strategy": "8-Speed ZF Transmission (1.0%-3.6% Smart Kickdown)",
+        "color": "#8b5cf6",  # violet
+    },
 ]

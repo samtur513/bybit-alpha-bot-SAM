@@ -1,0 +1,656 @@
+"""
+Live Web Dashboard & Paper Trading Server v3.4 ZF-8 Quant (Port 8087).
+Features:
+- 8-Speed Intelligent ZF Quant Transmission (Smart Kickdown & ABS Rapid Braking)
+- Dynamic Universe Radar (Top 25 screened Bybit linear perpetuals)
+- News Core v1.2 Defensive Shield
+- Anti-Martingale Pyramiding (0% on G1 up to 100% on G8)
+- REST API: /api/status, /api/universe, /api/logs
+"""
+
+import collections
+from datetime import datetime, timezone
+from decimal import Decimal
+import http.server
+import json
+import logging
+from pathlib import Path
+import socketserver
+import sys
+import threading
+import time
+import urllib.parse
+
+# Ensure UTF-8 output on Windows consoles
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+BASE_DIR = Path(__file__).resolve().parent
+REPO_ROOT = BASE_DIR.parent
+for p in [str(REPO_ROOT), str(BASE_DIR)]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+from v3_4.src.paper_trader_v34 import PaperTraderV34
+from v3_4.src.config import PORT, VERSION_NAME, LIVE_STATUS_FILE
+
+LOG_BUFFER = collections.deque(maxlen=300)
+
+
+class BufferHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            LOG_BUFFER.append(msg)
+        except Exception:
+            pass
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+root_logger = logging.getLogger()
+buf_handler = BufferHandler()
+buf_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+root_logger.addHandler(buf_handler)
+
+logger = logging.getLogger("WebDashboardV34")
+GLOBAL_TRADER: PaperTraderV34 = None
+
+HTML_PAGE = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bybit Multi-Alpha v3.4 ZF-8 Quant | 8-Speed Intelligent Transmission</title>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-dark: #080c14;
+            --bg-card: #0f172a;
+            --bg-card-hover: #1e293b;
+            --accent-cyan: #00f2fe;
+            --accent-blue: #38bdf8;
+            --accent-green: #10b981;
+            --accent-red: #f43f5e;
+            --accent-amber: #f59e0b;
+            --accent-purple: #a855f7;
+            --accent-violet: #8b5cf6;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --border: #1e293b;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            font-family: 'Inter', sans-serif;
+            padding: 24px;
+        }
+        .container { max-width: 1560px; margin: 0 auto; }
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 20px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+        .logo-group {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+        .logo-badge {
+            background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
+            color: #ffffff;
+            font-weight: 800;
+            font-size: 13px;
+            padding: 6px 12px;
+            border-radius: 6px;
+            letter-spacing: 1px;
+            font-family: 'JetBrains Mono', monospace;
+            box-shadow: 0 0 15px rgba(168, 85, 247, 0.4);
+        }
+        .title { font-size: 20px; font-weight: 800; }
+        .subtitle { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
+        
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 18px 20px;
+            position: relative;
+            overflow: hidden;
+        }
+        .card-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+        .card-val {
+            font-size: 24px;
+            font-weight: 800;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .card-sub {
+            font-size: 12px;
+            margin-top: 6px;
+            color: var(--text-muted);
+        }
+
+        .val-green { color: var(--accent-green); }
+        .val-red { color: var(--accent-red); }
+        .val-amber { color: var(--accent-amber); }
+        .val-cyan { color: var(--accent-cyan); }
+        .val-purple { color: var(--accent-purple); }
+
+        /* ZF-8 Transmission Dashboard */
+        .transmission-panel {
+            background: linear-gradient(135deg, rgba(168, 85, 247, 0.08) 0%, rgba(15, 23, 42, 0.9) 100%);
+            border: 1px solid rgba(168, 85, 247, 0.3);
+            border-radius: 12px;
+            padding: 18px 22px;
+            margin-bottom: 24px;
+        }
+        .trans-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        .trans-status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 14px;
+            border-radius: 8px;
+            font-weight: 800;
+            font-size: 14px;
+            font-family: 'JetBrains Mono', monospace;
+            background: rgba(168, 85, 247, 0.2);
+            color: #d8b4fe;
+            border: 1px solid rgba(168, 85, 247, 0.5);
+            box-shadow: 0 0 15px rgba(168, 85, 247, 0.3);
+        }
+        .gears-track {
+            display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            gap: 8px;
+            margin-bottom: 14px;
+        }
+        @media (max-width: 900px) {
+            .gears-track { grid-template-columns: repeat(4, 1fr); }
+        }
+        .gear-slot {
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 8px;
+            padding: 10px 8px;
+            text-align: center;
+            transition: all 0.2s ease;
+        }
+        .gear-slot.active {
+            background: linear-gradient(180deg, rgba(168, 85, 247, 0.25) 0%, rgba(168, 85, 247, 0.05) 100%);
+            border: 2px solid #a855f7;
+            box-shadow: 0 0 16px rgba(168, 85, 247, 0.4);
+            transform: translateY(-2px);
+        }
+        .gear-slot-tag {
+            font-size: 15px;
+            font-weight: 800;
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--text-muted);
+        }
+        .gear-slot.active .gear-slot-tag {
+            color: #f3e8ff;
+        }
+        .gear-slot-risk {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-top: 4px;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .gear-slot.active .gear-slot-risk {
+            color: #c084fc;
+            font-weight: 700;
+        }
+        .gear-slot-rr {
+            font-size: 10px;
+            color: rgba(255,255,255,0.4);
+            margin-top: 2px;
+        }
+        .gear-slot.active .gear-slot-rr {
+            color: #e9d5ff;
+        }
+
+        .trans-telemetry-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 12px;
+            color: var(--text-muted);
+            padding-top: 10px;
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        th {
+            text-align: left;
+            padding: 12px 14px;
+            color: var(--text-muted);
+            border-bottom: 1px solid var(--border);
+            font-weight: 600;
+            font-size: 11px;
+            text-transform: uppercase;
+        }
+        td {
+            padding: 12px 14px;
+            border-bottom: 1px solid rgba(30, 41, 59, 0.5);
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 700;
+        }
+        .badge-long { background: rgba(16, 185, 129, 0.15); color: var(--accent-green); }
+        .badge-short { background: rgba(244, 63, 94, 0.15); color: var(--accent-red); }
+
+        .log-box {
+            background-color: #050811;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 14px 18px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: #94a3b8;
+            max-height: 240px;
+            overflow-y: auto;
+            line-height: 1.5;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo-group">
+                <span class="logo-badge">v3.4 ZF-8</span>
+                <div>
+                    <h1 class="title">Bybit Multi-Alpha v3.4 ZF-8 Quant (Port 8087)</h1>
+                    <p class="subtitle">8-Speed Intelligent Transmission &bull; Smart Kickdown &bull; ABS Rapid Braking</p>
+                </div>
+            </div>
+            <div style="font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--text-muted);" id="live-clock">
+                --:--:-- UTC
+            </div>
+        </header>
+
+        <!-- ZF-8 Transmission Dashboard -->
+        <div class="transmission-panel">
+            <div class="trans-header">
+                <div>
+                    <span style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px;">АКТИВНАЯ ПЕРЕДАЧА ZF-8</span>
+                    <div style="margin-top: 6px;">
+                        <span id="trans-badge" class="trans-status-badge">⚙️ G1: LIMP / CRAWL (1.0%)</span>
+                    </div>
+                </div>
+                <div>
+                    <span style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px;">ПОСЛЕДНЕЕ ПЕРЕКЛЮЧЕНИЕ</span>
+                    <div id="shift-reason" style="font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--accent-purple); font-weight: 700; margin-top: 6px;">
+                        INITIAL_STATE
+                    </div>
+                </div>
+                <div>
+                    <span style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px;">СЕРИЯ ПОБЕД / ПОРАЖЕНИЙ</span>
+                    <div id="streak-counter" style="font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 700; margin-top: 6px;">
+                        0 побед подряд
+                    </div>
+                </div>
+                <div>
+                    <span style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px;">ПИРАМИДИНГ (ДОБАВКА)</span>
+                    <div id="pyramid-status" style="font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 700; margin-top: 6px;">
+                        0%
+                    </div>
+                </div>
+            </div>
+
+            <!-- 8 Gears Track -->
+            <div class="gears-track" id="gears-track">
+                <!-- Injected via JavaScript -->
+            </div>
+
+            <div class="trans-telemetry-row">
+                <span>🛡️ <b>Limp Mode Guard:</b> Сброс в G1 при просадке &ge; 8.0% | Восстановление при &le; 4.0%</span>
+                <span>⚡ <b>Kickdown:</b> +2G на раннерах (&ge;3.2R), +3G на мега-раннерах (&ge;5.0R)</span>
+                <span>🛑 <b>ABS Braking:</b> -2G на полном стопе (&lt;-0.7R)</span>
+            </div>
+        </div>
+
+        <!-- Core Metrics -->
+        <div class="stats-grid">
+            <div class="card">
+                <div class="card-label">Эквити Портфеля</div>
+                <div class="card-val" id="equity-val">$300.00</div>
+                <div class="card-sub" id="pnl-sub">Чистый PnL: $0.00 (0.00%)</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Риск на Сделку (1R)</div>
+                <div class="card-val val-purple" id="risk-val">1.0%</div>
+                <div class="card-sub" id="risk-usd-sub">$3.00 макс. риск</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Макс. Просадка</div>
+                <div class="card-val" id="dd-val">0.00%</div>
+                <div class="card-sub">Лимит: 30.0% (Limp при 8%)</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Винрейт / Сделки</div>
+                <div class="card-val" id="winrate-val">--%</div>
+                <div class="card-sub" id="trades-sub">0 сделок закрыто</div>
+            </div>
+        </div>
+
+        <!-- Open Positions -->
+        <div class="card" style="margin-bottom: 24px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <h3 style="font-size: 14px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px;">Открытые Позиции</h3>
+                <span id="pos-count" style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--accent-cyan);">0 позиций</span>
+            </div>
+            <div style="overflow-x: auto;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Символ</th>
+                            <th>Сторона</th>
+                            <th>Объем</th>
+                            <th>Вход</th>
+                            <th>Текущая</th>
+                            <th>Стоп-лосс</th>
+                            <th>Цель TP1</th>
+                            <th>Цель TP2</th>
+                            <th>Плавающий PnL</th>
+                            <th>Передача</th>
+                        </tr>
+                    </thead>
+                    <tbody id="positions-body">
+                        <tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 24px;">Нет открытых позиций</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- System Logs -->
+        <div class="card">
+            <h3 style="font-size: 14px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px; margin-bottom: 12px;">Системный Журнал Событий ZF-8</h3>
+            <div class="log-box" id="log-box">Загрузка логов...</div>
+        </div>
+    </div>
+
+    <script>
+        const GEARS_DATA = [
+            { gear: 1, name: "LIMP", risk: "1.0%", rr: "1:2.8-3.6", pyr: "0%" },
+            { gear: 2, name: "CITY", risk: "1.3%", rr: "1:3.0-4.0", pyr: "+20%" },
+            { gear: 3, name: "CRUISE", risk: "1.6%", rr: "1:3.3-4.4", pyr: "+35%" },
+            { gear: 4, name: "DRIVE", risk: "2.0%", rr: "1:3.6-4.8", pyr: "+50%" },
+            { gear: 5, name: "FAST", risk: "2.4%", rr: "1:4.0-5.2", pyr: "+65%" },
+            { gear: 6, name: "SPORT", risk: "2.8%", rr: "1:4.4-5.6", pyr: "+75%" },
+            { gear: 7, name: "SPORT+", risk: "3.2%", rr: "1:4.8-6.0", pyr: "+85%" },
+            { gear: 8, name: "LAUNCH", risk: "3.6%", rr: "1:5.2-6.5", pyr: "+100%" }
+        ];
+
+        function renderGearsTrack(activeGear) {
+            const track = document.getElementById('gears-track');
+            track.innerHTML = '';
+            GEARS_DATA.forEach(g => {
+                const isActive = (g.gear === activeGear);
+                const el = document.createElement('div');
+                el.className = 'gear-slot' + (isActive ? ' active' : '');
+                el.innerHTML = `
+                    <div class="gear-slot-tag">G${g.gear}</div>
+                    <div class="gear-slot-risk">${g.risk}</div>
+                    <div class="gear-slot-rr">${g.rr}</div>
+                `;
+                track.appendChild(el);
+            });
+        }
+
+        async function updateDashboard() {
+            try {
+                const res = await fetch('/api/status');
+                if (!res.ok) return;
+                const data = await res.json();
+
+                // Telemetry
+                const equity = data.capital || data.portfolio_equity || 300.0;
+                const initCapital = data.initial_capital || 300.0;
+                const pnl = equity - initCapital;
+                const pnlPct = (pnl / initCapital) * 100;
+                const dd = data.drawdown_pct || 0.0;
+
+                document.getElementById('equity-val').textContent = '$' + equity.toFixed(2);
+                const pnlSign = pnl >= 0 ? '+' : '';
+                const pnlSub = document.getElementById('pnl-sub');
+                pnlSub.textContent = `Чистый PnL: ${pnlSign}$${pnl.toFixed(2)} (${pnlSign}${pnlPct.toFixed(2)}%)`;
+                pnlSub.className = 'card-sub ' + (pnl >= 0 ? 'val-green' : 'val-red');
+
+                document.getElementById('dd-val').textContent = dd.toFixed(2) + '%';
+                document.getElementById('winrate-val').textContent = (data.win_rate_pct != null ? data.win_rate_pct.toFixed(1) : '--') + '%';
+                document.getElementById('trades-sub').textContent = `${(data.closed_trades || []).length} сделок закрыто`;
+
+                // Transmission Status
+                const gear = data.gearbox_gear || 1;
+                const riskPct = data.gearbox_risk_pct || 1.0;
+                const riskUsd = (equity * (riskPct / 100)).toFixed(2);
+                document.getElementById('risk-val').textContent = riskPct.toFixed(1) + '%';
+                document.getElementById('risk-usd-sub').textContent = `$${riskUsd} макс. риск`;
+
+                const transBadge = document.getElementById('trans-badge');
+                transBadge.textContent = `⚙️ G${gear}: ${data.gear_name || 'LIMP / CRAWL'} (${riskPct.toFixed(1)}%)`;
+                
+                document.getElementById('shift-reason').textContent = data.last_shift_reason || 'NORMAL_TRANSMISSION';
+                
+                const streakWins = data.streak_wins || 0;
+                const streakLosses = data.streak_losses || 0;
+                const streakEl = document.getElementById('streak-counter');
+                if (streakWins > 0) {
+                    streakEl.innerHTML = `<span class="val-green">🔥 ${streakWins} побед подряд</span>`;
+                } else if (streakLosses > 0) {
+                    streakEl.innerHTML = `<span class="val-red">❄️ ${streakLosses} поражений подряд</span>`;
+                } else {
+                    streakEl.textContent = '0 подряд';
+                }
+
+                const pyrPct = Math.round((data.pyramiding_ratio || 0.0) * 100);
+                document.getElementById('pyramid-status').innerHTML = pyrPct > 0 ? `<span class="val-purple">+${pyrPct}%</span>` : '<span style="color: var(--text-muted);">Выключен (0%)</span>';
+
+                renderGearsTrack(gear);
+
+                // Positions
+                const posBody = document.getElementById('positions-body');
+                const positions = Object.entries(data.open_positions || {});
+                document.getElementById('pos-count').textContent = positions.length + ' позиций';
+
+                if (positions.length === 0) {
+                    posBody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 24px;">Нет открытых позиций</td></tr>';
+                } else {
+                    posBody.innerHTML = '';
+                    positions.forEach(([sym, p]) => {
+                        const tr = document.createElement('tr');
+                        const pnlVal = p.unrealized_pnl || 0;
+                        const pnlClass = pnlVal >= 0 ? 'val-green' : 'val-red';
+                        const sideBadge = p.direction === 'LONG' ? '<span class="badge badge-long">LONG</span>' : '<span class="badge badge-short">SHORT</span>';
+                        tr.innerHTML = `
+                            <td><b>${sym}</b></td>
+                            <td>${sideBadge}</td>
+                            <td>${p.qty}</td>
+                            <td>$${Number(p.entry_price).toFixed(4)}</td>
+                            <td>$${Number(p.current_price).toFixed(4)}</td>
+                            <td class="val-red">$${Number(p.current_stop).toFixed(4)}</td>
+                            <td class="val-green">${p.tp1_price ? '$' + Number(p.tp1_price).toFixed(4) : '--'}</td>
+                            <td class="val-green">${p.tp2_price ? '$' + Number(p.tp2_price).toFixed(4) : '--'}</td>
+                            <td class="${pnlClass}">${pnlVal >= 0 ? '+' : ''}$${pnlVal.toFixed(2)}</td>
+                            <td><span class="badge" style="background: rgba(168, 85, 247, 0.2); color: #d8b4fe;">G${p.entry_gear || gear}</span></td>
+                        `;
+                        posBody.appendChild(tr);
+                    });
+                }
+            } catch (err) {
+                console.error("Dashboard update error:", err);
+            }
+        }
+
+        async function updateLogs() {
+            try {
+                const res = await fetch('/api/logs');
+                if (res.ok) {
+                    const text = await res.text();
+                    const box = document.getElementById('log-box');
+                    box.textContent = text;
+                    box.scrollTop = box.scrollHeight;
+                }
+            } catch (err) {}
+        }
+
+        setInterval(() => {
+            const now = new Date();
+            document.getElementById('live-clock').textContent = now.toUTCString().split(' ')[4] + ' UTC';
+        }, 1000);
+
+        renderGearsTrack(1);
+        updateDashboard();
+        updateLogs();
+        setInterval(updateDashboard, 2000);
+        setInterval(updateLogs, 4000);
+    </script>
+</body>
+</html>
+"""
+
+
+class DashboardHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+
+        if path in ["/", "/index.html"]:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(HTML_PAGE.encode("utf-8"))
+
+        elif path == "/api/status":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+
+            status_payload = {}
+            if GLOBAL_TRADER and getattr(GLOBAL_TRADER, "last_status_cache", None):
+                status_payload = dict(GLOBAL_TRADER.last_status_cache)
+            elif LIVE_STATUS_FILE.exists():
+                try:
+                    with open(LIVE_STATUS_FILE, "r", encoding="utf-8") as f:
+                        status_payload = json.load(f)
+                except Exception:
+                    status_payload = {}
+
+            if not status_payload and GLOBAL_TRADER:
+                trans = GLOBAL_TRADER.engine.transmission.to_dict()
+                status_payload = {
+                    "version": VERSION_NAME,
+                    "timeframe": "1h",
+                    "capital": float(GLOBAL_TRADER.engine.realized_equity),
+                    "initial_capital": float(GLOBAL_TRADER.engine.initial_capital),
+                    "drawdown_pct": float(GLOBAL_TRADER.engine.max_drawdown_pct),
+                    "open_positions": {},
+                    "closed_trades": [],
+                    "gearbox_gear": trans["current_gear"],
+                    "gearbox_risk_pct": trans["risk_pct"],
+                    "gear_name": trans["gear_name"],
+                    "gear_tag": trans["gear_tag"],
+                    "rr_target": trans["rr_label"],
+                    "streak_wins": trans["streak_wins"],
+                    "streak_losses": trans["streak_losses"],
+                    "gearbox_pyramiding_allowed": trans["pyramiding_allowed"],
+                    "pyramiding_ratio": trans["pyramid_ratio"],
+                    "is_circuit_breaker_active": trans["is_circuit_breaker_active"],
+                    "last_shift_reason": trans["last_shift_reason"],
+                    "all_gears": trans["all_gears"],
+                    "stream_ready": True,
+                    "fresh_symbols": len(GLOBAL_TRADER.universe),
+                    "btc_trend_status": GLOBAL_TRADER.btc_trend_status,
+                }
+
+            self.wfile.write(json.dumps(status_payload).encode("utf-8"))
+
+        elif path == "/api/logs":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            logs = "\n".join(LOG_BUFFER)
+            self.wfile.write(logs.encode("utf-8"))
+
+        elif path == "/api/universe":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            uni_data = []
+            if GLOBAL_TRADER and hasattr(GLOBAL_TRADER, "screener"):
+                uni_data = [c.to_dict() for c in getattr(GLOBAL_TRADER.screener, "current_universe", [])]
+            self.wfile.write(json.dumps(uni_data).encode("utf-8"))
+
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+
+def start_server():
+    global GLOBAL_TRADER
+    logger.info("Initializing PaperTraderV34 daemon on Port 8087...")
+    GLOBAL_TRADER = PaperTraderV34()
+
+    trader_thread = threading.Thread(target=GLOBAL_TRADER.run_forever, daemon=True)
+    trader_thread.start()
+    logger.info("Background PaperTraderV34 thread launched.")
+
+    server_address = ("0.0.0.0", PORT)
+    socketserver.TCPServer.allow_reuse_address = True
+    with socketserver.TCPServer(server_address, DashboardHandler) as httpd:
+        logger.info(f"Multi-Alpha v3.4 ZF-8 Quant (Port {PORT}) Web Dashboard live on http://127.0.0.1:{PORT}")
+        httpd.serve_forever()
+
+
+if __name__ == "__main__":
+    start_server()

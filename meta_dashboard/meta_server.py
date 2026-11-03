@@ -627,7 +627,7 @@ HTML_PAGE = """<!DOCTYPE html>
                         </div>
                         <div class="engine-stat-item">
                             <span class="engine-stat-label">Позиции / Плечо</span>
-                            <span class="engine-stat-value val-cyan">${(eng.open_positions || []).length} поз.${eng.id === 'v33' ? ` (Gear ${eng.gear || 1})` : ''}</span>
+                            <span class="engine-stat-value val-cyan">${(eng.open_positions || []).length} поз.${(eng.id === 'v33' || eng.id === 'v34') ? ` (Gear ${eng.gear || 1})` : ''}</span>
                         </div>
                     </div>
 

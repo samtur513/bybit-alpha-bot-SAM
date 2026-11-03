@@ -21,9 +21,9 @@ class TestMetaDashboard(unittest.TestCase):
         self.agg = MetaAggregator()
 
     def test_engines_configuration(self):
-        self.assertEqual(len(ENGINES), 6)
+        self.assertEqual(len(ENGINES), 7)
         ports = [e["port"] for e in ENGINES]
-        self.assertEqual(ports, [8080, 8081, 8082, 8083, 8084, 8086])
+        self.assertEqual(ports, [8080, 8081, 8082, 8083, 8084, 8086, 8087])
         self.assertEqual(META_PORT, 8085)
 
     def test_position_normalization_dict_and_list(self):
@@ -108,16 +108,17 @@ class TestMetaDashboard(unittest.TestCase):
             "v32": {"capital": 301.0, "net_pnl": 1.0, "online": True, "open_positions": []},
             "v314": {"capital": 300.0, "net_pnl": 0.0, "online": True, "open_positions": []},
             "v33": {"capital": 302.0, "net_pnl": 2.0, "online": True, "open_positions": []},
+            "v34": {"capital": 300.0, "net_pnl": 0.0, "online": True, "open_positions": []},
         }
 
         snap = self.agg.get_snapshot()
 
         # Invariant 1: Total equity = sum of engine equities
-        expected_total_eq = 300.0 + 303.0 + 305.0 + 301.0 + 300.0 + 302.0
+        expected_total_eq = 300.0 + 303.0 + 305.0 + 301.0 + 300.0 + 302.0 + 300.0
         self.assertEqual(snap["total_combined_equity"], round(expected_total_eq, 2))
 
         # Invariant 2: Total realized pnl = sum of engine net pnls
-        expected_realized = 0.0 + 3.0 + 5.0 + 1.0 + 0.0 + 2.0
+        expected_realized = 0.0 + 3.0 + 5.0 + 1.0 + 0.0 + 2.0 + 0.0
         self.assertEqual(snap["total_realized_pnl"], round(expected_realized, 2))
 
         # Invariant 3: Total unrealized pnl = sum of position unrealized pnls
@@ -134,7 +135,7 @@ class TestMetaDashboard(unittest.TestCase):
         state1 = {"recent_news": [item], "capital": 300.0, "net_pnl": 0.0, "online": True, "open_positions": []}
         state2 = {"recent_news": [item], "capital": 300.0, "net_pnl": 0.0, "online": True, "open_positions": []}
 
-        with patch.object(self.agg, "_fetch_engine_status", side_effect=[state1, state2, state1, state2, state1, state2]):
+        with patch.object(self.agg, "_fetch_engine_status", side_effect=[state1, state2, state1, state2, state1, state2, state1]):
             self.agg.update_all()
 
         # Invariant: news feed should only contain 1 item with that headline
@@ -148,7 +149,7 @@ class TestMetaDashboard(unittest.TestCase):
 
         chart = self.agg.get_chart_data()
         self.assertEqual(chart["labels"], ["20:00:00"])
-        self.assertEqual(len(chart["datasets"]), 6)
+        self.assertEqual(len(chart["datasets"]), 7)
         for ds in chart["datasets"]:
             self.assertIn("data", ds)
             self.assertIn("borderColor", ds)
