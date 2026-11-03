@@ -36,7 +36,7 @@ for p in [str(REPO_ROOT), str(BASE_DIR)]:
         sys.path.insert(0, p)
 
 from v3_3.src.paper_trader_v33 import PaperTraderV33
-from v3_3.src.config import PORT, VERSION_NAME
+from v3_3.src.config import PORT, VERSION_NAME, LIVE_STATUS_FILE
 
 LOG_BUFFER = collections.deque(maxlen=300)
 
@@ -442,10 +442,15 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(content)
 
         elif path == "/api/status":
-            status = {}
-            if GLOBAL_TRADER:
-                status = GLOBAL_TRADER.get_status_dict()
-            resp = json.dumps(status).encode("utf-8")
+            if GLOBAL_TRADER and getattr(GLOBAL_TRADER, "last_status_cache", None):
+                resp = json.dumps(GLOBAL_TRADER.last_status_cache, indent=2).encode("utf-8")
+            elif LIVE_STATUS_FILE.exists():
+                try:
+                    resp = LIVE_STATUS_FILE.read_bytes()
+                except Exception:
+                    resp = b"{}"
+            else:
+                resp = b"{}"
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Access-Control-Allow-Origin", "*")

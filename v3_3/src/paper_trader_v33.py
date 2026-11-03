@@ -43,6 +43,8 @@ from v3_3.src.config import (
     BAR_INTERVAL_MS,
     DEFAULT_SYMBOLS,
 )
+from v3.src.core_v3 import PortfolioSnapshot
+from v3.src.persistence import atomic_json
 from v3_3.src.core_v33 import CoreV33Engine
 
 logger = logging.getLogger("PaperTraderV33")
@@ -101,21 +103,27 @@ class PaperTraderV33(PaperTraderV3):
         # Re-load persistent state into new engine
         self._load_persistent_state()
 
-    def get_status_dict(self) -> Dict[str, Any]:
-        status = super().get_status_dict()
+    def _export_status(
+        self, snapshot: PortfolioSnapshot, current_prices: Dict[str, Decimal], server_ts: int
+    ) -> None:
+        super()._export_status(snapshot, current_prices, server_ts)
         streak_info = self.engine.streak_manager.to_dict()
 
-        # Augment telemetry with Streak Risk Manager data
-        status["version"] = VERSION_NAME
-        status["timeframe"] = "1h"
-        status["gearbox_gear"] = streak_info["current_gear"]
-        status["gearbox_risk_pct"] = streak_info["risk_pct"]
-        status["gear_name"] = streak_info["gear_name"]
-        status["rr_target"] = streak_info["rr_label"]
-        status["streak_wins"] = streak_info["streak_wins"]
-        status["streak_losses"] = streak_info["streak_losses"]
-        status["gearbox_pyramiding_allowed"] = streak_info["pyramiding_allowed"]
-        status["pyramiding_ratio"] = streak_info["pyramid_ratio"]
-        status["is_circuit_breaker_active"] = streak_info["is_circuit_breaker_active"]
-
-        return status
+        if self.last_status_cache:
+            self.last_status_cache.update({
+                "version": VERSION_NAME,
+                "timeframe": "1h",
+                "gearbox_gear": streak_info["current_gear"],
+                "gearbox_risk_pct": streak_info["risk_pct"],
+                "gear_name": streak_info["gear_name"],
+                "rr_target": streak_info["rr_label"],
+                "streak_wins": streak_info["streak_wins"],
+                "streak_losses": streak_info["streak_losses"],
+                "gearbox_pyramiding_allowed": streak_info["pyramiding_allowed"],
+                "pyramiding_ratio": streak_info["pyramid_ratio"],
+                "is_circuit_breaker_active": streak_info["is_circuit_breaker_active"],
+            })
+            try:
+                atomic_json(self.live_status_file, self.last_status_cache)
+            except Exception:
+                pass
