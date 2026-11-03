@@ -18,6 +18,7 @@ import socketserver
 import sys
 import threading
 import time
+from typing import Any, Dict, List, Optional
 import urllib.parse
 
 if sys.platform == "win32":

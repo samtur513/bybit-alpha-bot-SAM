@@ -91,6 +91,7 @@ class PaperTraderV35:
         self.news_streamer: Optional[LiveNewsStreamer] = None
 
         self._load_persistent_state()
+        self._export_status()
 
     def _load_persistent_state(self) -> None:
         with self.lock:
@@ -264,10 +265,18 @@ class PaperTraderV35:
                 "closed_trades_count": len(self.engine.closed_trades),
                 "trading_halted": self.engine.trading_halted,
                 "bybit_ws_connected": self.ws_connected,
+                "stream_ready": self.ws_connected,
+                "bybit_connected": self.ws_connected,
                 "bybit_ws_symbols": len(self.symbols),
+                "monitored_symbols_count": len(self.symbols),
+                "fresh_symbols": len(self.symbols),
                 "ping_ms": self.last_ping_ms,
                 "btc_regime": "MARKET_NEUTRAL (BETA ~ 0)",
+                "btc_trend_status": "NEUTRAL",
                 "news_core_status": "v1.2 Shield" if self.enable_news_defense else "Disabled",
+                "news_defense_active": self.enable_news_defense,
+                "news_shield": self.enable_news_defense,
+                "news_profile": "v1.2 Shield" if self.enable_news_defense else "Disabled",
                 "latest_rankings": self.engine.latest_rankings[:10],
                 "last_update_ts": int(time.time() * 1000),
             }

@@ -61,17 +61,17 @@ class MetaAggregator:
                 return_pct = round((net_pnl / initial_capital) * 100.0, 2) if initial_capital > 0 else 0.0
                 
                 # Bybit Stream Health
-                stream_ready = bool(data.get("stream_ready", True if "radar" in data or "market_radar" in data else False))
-                monitored_coins = int(data.get("monitored_symbols_count") or len(data.get("radar", {})) or len(data.get("market_radar", {})) or 18)
+                stream_ready = bool(data.get("stream_ready") or data.get("bybit_ws_connected") or data.get("bybit_connected") or ("radar" in data or "market_radar" in data))
+                monitored_coins = int(data.get("monitored_symbols_count") or data.get("bybit_ws_symbols") or len(data.get("radar", {})) or len(data.get("market_radar", {})) or 18)
                 fresh_symbols = int(data.get("fresh_symbols", monitored_coins))
-                raw_btc = data.get("btc_trend_status")
+                raw_btc = data.get("btc_trend_status") or data.get("btc_regime")
                 btc_trend = str(raw_btc) if raw_btc else "DISABLED"
                 next_candle = int(data.get("next_candle_seconds", 0))
                 timeframe = str(data.get("timeframe", engine["timeframe"]))
                 
                 # News Core Health
-                news_active = bool(data.get("news_defense_active") or data.get("news_shield"))
-                news_profile = str(data.get("news_profile", "defensive_only" if news_active else "disabled"))
+                news_active = bool(data.get("news_defense_active") or data.get("news_shield") or data.get("news_core_status") == "v1.2 Shield")
+                news_profile = str(data.get("news_profile", "v1.2 Shield" if news_active else "disabled"))
                 recent_news = data.get("news_recent_events", [])
                 
                 # Positions & Orders Extraction
