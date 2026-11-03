@@ -141,9 +141,14 @@ class CoreV34Engine(CoreV3Engine):
             current_bar_idx=self.bar_counter,
         )
 
-        current_dd = self.max_drawdown_pct
+        current_eq = self.get_equity(current)
+        current_dd = Decimal("0")
+        if self.peak_equity > 0:
+            current_dd = max(Decimal("0"), (self.peak_equity - current_eq) / self.peak_equity * Decimal("100"))
+
         active_gear = self.transmission.get_effective_gear(current_dd)
         gear_cfg = GEAR_CONFIGS.get(active_gear, GEAR_CONFIGS[1])
+        active_high_gears = sum(1 for p in self.open_positions.values() if getattr(p, "entry_gear", 1) >= 6)
 
         for cand in ranked:
             if blocked_symbols and cand.symbol in blocked_symbols:
@@ -168,13 +173,14 @@ class CoreV34Engine(CoreV3Engine):
 
             # Sizing calculated through ZF8Transmission
             sizing = self.transmission.calculate_sizing(
-                equity=self.get_equity(current),
+                equity=current_eq,
                 price=price,
                 stop_loss_distance=distance,
                 min_order_qty=rules["minOrderQty"],
                 qty_step=rules["qtyStep"],
                 min_notional=rules.get("minNotional", Decimal("5.0")),
                 current_dd=current_dd,
+                active_high_gear_positions=active_high_gears,
             )
 
             if (
@@ -372,6 +378,7 @@ class CoreV34Engine(CoreV3Engine):
                 net_pnl=total_net_trade,
                 initial_risk_usd=initial_risk,
                 current_dd=self.max_drawdown_pct,
+                current_equity=self.realized_equity,
             )
 
     def to_dict(self) -> Dict[str, Any]:

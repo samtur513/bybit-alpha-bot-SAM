@@ -201,3 +201,99 @@ def test_news_core_macro_lockout_window():
     status_locked = guard.check_status("BTCUSDT", current_time=datetime(2024, 3, 20, 17, 40, tzinfo=timezone.utc))
     assert status_locked.block_new_entries
     assert "Macro blackout" in (status_locked.reason or "")
+
+    # Post-window for FOMC is +90 min (to cover Powell's Q&A). At T + 45 min (18:45 UTC), it must still be locked!
+    status_fomc_qa = guard.check_status("BTCUSDT", current_time=datetime(2024, 3, 20, 18, 45, tzinfo=timezone.utc))
+    assert status_fomc_qa.block_new_entries, "FOMC press conference window (+90m) must block entries at T+45m"
+
+
+def test_zf8_high_gear_concentration_cap_and_cautious_upshift():
+    """
+    1. Concentration rule: if 1 position is already active in G6-G8, clamp sizing to G4.
+    2. Cautious upshift: if DD > 3.5%, ban kickdown (+2/+3), allow only +1.
+    """
+    tx = ZF8Transmission(initial_gear=7)
+
+    # With 0 active high gear positions: returns Gear 7
+    res_normal = tx.calculate_sizing(
+        equity=Decimal("300.0"), price=Decimal("100.0"), stop_loss_distance=Decimal("3.0"),
+        qty_step=Decimal("0.01"), min_order_qty=Decimal("0.01"), min_notional=Decimal("5.0"),
+        active_high_gear_positions=0,
+    )
+    assert res_normal.gear == 7
+
+    # With 1 active high gear position: clamped to Gear 4 (2.0% risk)
+    res_clamped = tx.calculate_sizing(
+        equity=Decimal("300.0"), price=Decimal("100.0"), stop_loss_distance=Decimal("3.0"),
+        qty_step=Decimal("0.01"), min_order_qty=Decimal("0.01"), min_notional=Decimal("5.0"),
+        active_high_gear_positions=1,
+    )
+    assert res_clamped.gear == 4
+    assert res_clamped.risk_usd == Decimal("6.000")  # 2.0% of $300.0
+
+    # Test cautious upshift on drawdown > 3.5%
+    tx_cautious = ZF8Transmission(initial_gear=2)
+    # Mega-runner (+5.0R) with DD = 4.0% > 3.5% -> shift limited to +1 (Gear 3 instead of Gear 5!)
+    g = tx_cautious.record_closed_trade(net_pnl=Decimal("15.0"), initial_risk_usd=Decimal("3.0"), current_dd=Decimal("4.0"))
+    assert g == 3
+    assert "CAUTIOUS_UPSHIFT" in tx_cautious.last_shift_reason
+
+
+def test_range_engine_cascade_tp1_and_breakeven():
+    """
+    Verifies that Range Mean-Reversion Engine banks 50% profit at TP1 (60% distance to SMA20)
+    and ratchets Stop Loss of remaining 50% to Breakeven (+0.1%).
+    """
+    from src.range_engine import RangeMeanReversionEngine, RangeLimitOrder, RangeActivePosition
+    from src.regime_classifier import MarketRegime, RegimeData
+
+    engine = RangeMeanReversionEngine(initial_capital=Decimal("300.0"))
+    # Buy at 95.0, TP at 100.0 (distance = 5.0). TP1 at 60% distance = 95.0 + 3.0 = 98.0
+    engine.open_positions["SOLUSDT"] = RangeActivePosition(
+        symbol="SOLUSDT",
+        direction=1,
+        entry_price=Decimal("95.0"),
+        current_qty=Decimal("2.0"),
+        stop_loss=Decimal("92.0"),
+        take_profit=Decimal("100.0"),
+        initial_atr=Decimal("3.0"),
+        entry_time=1700000000000,
+        entry_bar_idx=0,
+        entry_fees=Decimal("0.06"),
+        tp1_done=False,
+        tp1_price=Decimal("98.0"),
+        initial_qty=Decimal("2.0"),
+        be_activated=False,
+    )
+    engine.bar_counter = 1
+
+    # Bar touches 98.5 (reaches TP1, but does not reach final TP 100.0)
+    bars_tp1 = {
+        "SOLUSDT": {
+            "open": 96.0,
+            "high": 98.5,
+            "low": 95.5,
+            "close": 97.5,
+            "volume": 1000.0,
+            "volume_sma": 1000.0,
+        }
+    }
+    regimes = {
+        "SOLUSDT": RegimeData(
+            symbol="SOLUSDT", regime=MarketRegime.RANGE, adx=14.0,
+            bb_mid=100.0, bb_upper=105.0, bb_lower=95.0, bb_width=0.10, bb_width_pctl=0.30,
+            kc_upper=103.0, kc_lower=97.0, rsi=50.0, atr=3.0, volume=1000.0, volume_sma=1000.0,
+            is_volatility_compressed=True, is_chop=True, is_trend=False,
+        )
+    }
+
+    engine.manage_positions_on_bar(1700003600000, bars_tp1, regimes)
+
+    pos = engine.open_positions["SOLUSDT"]
+    assert pos.tp1_done is True
+    assert pos.be_activated is True
+    assert pos.current_qty == Decimal("1.0")  # Exactly halved!
+    # Stop loss must be ratcheted to Breakeven (+0.1% buffer): 95.0 * 1.001 = 95.095
+    assert pos.stop_loss > Decimal("95.0")
+    assert pos.stop_loss == Decimal("95.095")
+    assert engine.realized_equity > Decimal("300.0")  # Realized profit banked!
