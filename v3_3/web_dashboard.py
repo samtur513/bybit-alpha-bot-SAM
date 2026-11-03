@@ -471,18 +471,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/universe":
             univ = []
             if GLOBAL_TRADER and hasattr(GLOBAL_TRADER, "screened_universe"):
-                univ = [
-                    {
-                        "symbol": c.symbol,
-                        "turnover24h": float(c.turnover_24h),
-                        "open_interest": float(c.open_interest),
-                        "norm_atr": float(c.norm_atr),
-                        "ker": float(c.ker),
-                        "relative_strength": float(c.relative_strength),
-                        "composite_score": float(c.composite_score),
-                    }
-                    for c in GLOBAL_TRADER.screened_universe
-                ]
+                univ = [c.to_dict() if hasattr(c, "to_dict") else vars(c) for c in GLOBAL_TRADER.screened_universe]
             resp = json.dumps(univ).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
