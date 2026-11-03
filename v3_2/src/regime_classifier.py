@@ -61,8 +61,10 @@ class MarketRegimeClassifier:
 
     def __init__(
         self,
-        adx_trend_threshold: float = 20.0,
+        adx_trend_threshold: float = 18.0,
         bbw_compression_percentile: float = 40.0,
+        max_chop_ker: float = 0.15,
+        min_bandwidth: float = 0.025,
         bb_period: int = 20,
         bb_std_mult: float = 2.0,
         kc_atr_mult: float = 1.5,
@@ -75,6 +77,8 @@ class MarketRegimeClassifier:
     ):
         self.adx_trend_threshold = adx_trend_threshold
         self.bbw_compression_percentile = bbw_compression_percentile
+        self.max_chop_ker = max_chop_ker
+        self.min_bandwidth = min_bandwidth
         self.bb_period = bb_period
         self.bb_std_mult = bb_std_mult
         self.kc_atr_mult = kc_atr_mult
@@ -256,6 +260,7 @@ class MarketRegimeClassifier:
         atr: float,
         volume: float,
         volume_sma: float,
+        ker: float = 0.10,
     ) -> RegimeData:
         """
         Classifies market regime for a single bar at close.
@@ -264,7 +269,7 @@ class MarketRegimeClassifier:
         bb_width = (bb_upper - bb_lower) / bb_mid if bb_mid > 0 else 0.0
         is_compressed = bool(np.isfinite(bb_width_pctl) and bb_width_pctl <= self.bbw_compression_percentile)
 
-        # Trend condition: ADX >= 20 and Volume > 20 SMA
+        # Trend condition: ADX >= 18 and Volume > 20 SMA
         is_trend = bool(
             np.isfinite(adx)
             and adx >= self.adx_trend_threshold
@@ -273,8 +278,14 @@ class MarketRegimeClassifier:
             and volume > volume_sma
         )
 
-        # Chop condition: ADX < 20 OR Volatility Compression
-        is_chop = bool((np.isfinite(adx) and adx < self.adx_trend_threshold) or is_compressed)
+        # Chop condition: ADX < 18 AND KER <= 0.15 (true stationary noise, avoids knife-catching creeping trends)
+        is_chop = bool(
+            np.isfinite(adx)
+            and adx < self.adx_trend_threshold
+            and np.isfinite(ker)
+            and ker <= self.max_chop_ker
+            and (is_compressed or bb_width >= self.min_bandwidth)
+        )
 
         if is_trend:
             regime = MarketRegime.TREND

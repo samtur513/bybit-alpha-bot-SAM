@@ -54,6 +54,10 @@ class RangeActivePosition:
     entry_bar_idx: int
     entry_fees: Decimal
     funding_pnl: Decimal = Decimal("0")
+    tp1_done: bool = False
+    tp1_price: Decimal = Decimal("0")
+    initial_qty: Decimal = Decimal("0")
+    be_activated: bool = False
 
 
 @dataclass
@@ -223,13 +227,14 @@ class RangeMeanReversionEngine:
             next_open = next_open_prices.get(sym, Decimal(str(b["open"])))
 
             filled = False
+            pen_buf = order.atr * Decimal("0.05")  # Minimum 1-2 tick penetration to eliminate optimistic touch fills
             if order.direction == 1:
-                # Buy limit fill condition: price penetrates below limit
-                if next_low < order.price and next_open >= order.price:
+                # Buy limit fill condition: price penetrates below limit by at least 1-2 ticks
+                if next_low <= (order.price - pen_buf) and next_open >= order.price:
                     filled = True
             elif order.direction == -1:
-                # Sell limit fill condition: price penetrates above limit
-                if next_high > order.price and next_open <= order.price:
+                # Sell limit fill condition: price penetrates above limit by at least 1-2 ticks
+                if next_high >= (order.price + pen_buf) and next_open <= order.price:
                     filled = True
 
             if filled:
@@ -242,6 +247,8 @@ class RangeMeanReversionEngine:
                 ):
                     entry_fee = entry_notional * self.maker_fee
                     self.realized_equity -= entry_fee
+                    tp_dist = abs(order.take_profit - order.price)
+                    tp1_p = order.price + (tp_dist * Decimal("0.60") * order.direction)
                     self.open_positions[sym] = RangeActivePosition(
                         symbol=sym,
                         direction=order.direction,
@@ -253,11 +260,17 @@ class RangeMeanReversionEngine:
                         entry_time=order.created_time + 3600000,
                         entry_bar_idx=self.bar_counter,
                         entry_fees=entry_fee,
+                        tp1_done=False,
+                        tp1_price=tp1_p,
+                        initial_qty=order.qty,
+                        be_activated=False,
                     )
                     filled_symbols.append(sym)
                     self.events.append(dict(kind="RANGE_LIMIT_FILL", symbol=sym, dir=order.direction, price=str(order.price), qty=str(order.qty)))
-            # Pending orders refresh every bar
-            del self.pending_orders[sym]
+                    del self.pending_orders[sym]
+            elif (self.bar_counter - order.created_bar_idx) >= 2:
+                # TTL expired after 2 bars
+                del self.pending_orders[sym]
 
         return filled_symbols
 
@@ -302,15 +315,76 @@ class RangeMeanReversionEngine:
             hit_sl = (bar_low <= sl) if direction == 1 else (bar_high >= sl)
             hit_tp = (bar_high > tp) if direction == 1 else (bar_low < tp)
 
-            # Regime handoff check: anomalous breakout and ADX >= 20
+            # 1. Partial TP1 check (50% slice at 60% of distance to SMA20) + Breakeven
+            if not pos.tp1_done and pos.tp1_price > 0:
+                hit_tp1 = (bar_high >= pos.tp1_price) if direction == 1 else (bar_low <= pos.tp1_price)
+                if hit_tp1 and not hit_sl:
+                    slice_qty = pos.current_qty * Decimal("0.5")
+                    rule = self.instrument_rules.get(sym)
+                    qty_step = rule.get("qty_step") if isinstance(rule, dict) else getattr(rule, "qty_step", None)
+                    if qty_step and qty_step > 0:
+                        slice_qty = (slice_qty // qty_step) * qty_step
+                    if slice_qty > 0 and slice_qty < pos.current_qty:
+                        exec_price = pos.tp1_price
+                        slice_fee = slice_qty * exec_price * self.maker_fee
+                        slice_gross = slice_qty * (exec_price - pos.entry_price) * direction
+                        slice_net = slice_gross - slice_fee
+                        self.realized_equity += slice_net
+                        pos.current_qty -= slice_qty
+                        pos.tp1_done = True
+                        pos.be_activated = True
+                        # Ratchet Stop Loss to Breakeven (+0.1% buffer in profit direction)
+                        be_buf = pos.entry_price * Decimal("0.001") * direction
+                        pos.stop_loss = pos.entry_price + be_buf
+                        sl = pos.stop_loss
+                        hit_sl = (bar_low <= sl) if direction == 1 else (bar_high >= sl)
+                        self.events.append(dict(kind="RANGE_TP1_PARTIAL", symbol=sym, pnl=str(round(slice_net, 2)), new_sl=str(round(sl, 4))))
+
+            # 2. Two-stage Regime Handoff check: anomalous breakout and ADX >= 18
             regime_handoff = False
-            if adx_val >= 20.0 and vol_val >= (self.anomalous_vol_mult * vol_sma):
-                # Breakout moving against position
+            if adx_val >= 18.0 and vol_val >= (self.anomalous_vol_mult * vol_sma):
+                # Stage 1: Always protect capital by ratcheting stop to Breakeven
+                if not pos.be_activated:
+                    be_buf = pos.entry_price * Decimal("0.001") * direction
+                    pos.stop_loss = pos.entry_price + be_buf
+                    pos.be_activated = True
+                    sl = pos.stop_loss
+                    hit_sl = (bar_low <= sl) if direction == 1 else (bar_high >= sl)
+                # Stage 2: Breakout moving against position
                 if reg:
                     if direction == 1 and bar_close < Decimal(str(reg.bb_lower)):
                         regime_handoff = True
                     elif direction == -1 and bar_close > Decimal(str(reg.bb_upper)):
                         regime_handoff = True
+
+            # Regime Handoff takes precedence if breakout occurred
+            if regime_handoff:
+                # Exit at close with Taker fee and slippage to hand off to Trend
+                exec_price = bar_close * (Decimal("1") - self.slippage * direction)
+                exit_fee = pos.current_qty * exec_price * self.taker_fee
+                gross_pnl = pos.current_qty * (exec_price - pos.entry_price) * direction
+                net_pnl = gross_pnl - exit_fee + pos.funding_pnl
+                self.realized_equity += net_pnl
+
+                closed = RangeClosedTrade(
+                    symbol=sym,
+                    direction=direction,
+                    entry_time=pos.entry_time,
+                    exit_time=timestamp,
+                    entry_price=pos.entry_price,
+                    exit_price=exec_price,
+                    qty=pos.current_qty,
+                    net_pnl=net_pnl,
+                    exit_reason="REGIME_HANDOFF",
+                    hold_hours=(timestamp - pos.entry_time) / 3600000.0,
+                    fees_paid=pos.entry_fees + exit_fee,
+                    funding_pnl=pos.funding_pnl,
+                )
+                closed_this_bar.append(closed)
+                self.closed_trades.append(closed)
+                del self.open_positions[sym]
+                self.events.append(dict(kind="RANGE_CLOSE", symbol=sym, reason="REGIME_HANDOFF", net=str(net_pnl)))
+                continue
 
             # Intra-bar worst-case collision: Stop Loss triggers first
             if hit_sl and hit_tp:
@@ -372,34 +446,6 @@ class RangeMeanReversionEngine:
                 self.cooldown_tracker[(sym, direction)] = self.bar_counter + 1
                 del self.open_positions[sym]
                 self.events.append(dict(kind="RANGE_CLOSE", symbol=sym, reason="TP", net=str(net_pnl)))
-
-            elif regime_handoff:
-                # Exit at close with Taker fee and slippage to hand off to Trend
-                exec_price = bar_close * (Decimal("1") - self.slippage * direction)
-                exit_fee = pos.current_qty * exec_price * self.taker_fee
-                gross_pnl = pos.current_qty * (exec_price - pos.entry_price) * direction
-                net_pnl = gross_pnl - exit_fee + pos.funding_pnl
-                self.realized_equity += (pos.current_qty * (exec_price - pos.entry_price) * direction - exit_fee)
-
-                closed = RangeClosedTrade(
-                    symbol=sym,
-                    direction=direction,
-                    entry_time=pos.entry_time,
-                    exit_time=timestamp,
-                    entry_price=pos.entry_price,
-                    exit_price=exec_price,
-                    qty=pos.current_qty,
-                    net_pnl=net_pnl,
-                    exit_reason="REGIME_HANDOFF",
-                    hold_hours=(timestamp - pos.entry_time) / 3600000.0,
-                    fees_paid=pos.entry_fees + exit_fee,
-                    funding_pnl=pos.funding_pnl,
-                )
-                self.closed_trades.append(closed)
-                closed_this_bar.append(closed)
-                self.cooldown_tracker[(sym, direction)] = self.bar_counter + self.cooldown_bars
-                del self.open_positions[sym]
-                self.events.append(dict(kind="RANGE_CLOSE", symbol=sym, reason="REGIME_HANDOFF", net=str(net_pnl)))
 
         return closed_this_bar
 

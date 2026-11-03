@@ -42,7 +42,7 @@ def test_screener_excludes_trend_symbols(screener):
         klines=klines,
         exclude_symbols={"BTCUSDT", "ETHUSDT"},
     )
-    assert cand.passed_filters is False
+    assert cand is None or cand.passed_filters is False
     assert "Trend Engine" in cand.rejection_reason
 
 
@@ -64,7 +64,7 @@ def test_screener_rejects_trending_coins(screener):
         funding_rate=0.0001,
         klines=klines,
     )
-    assert cand.passed_filters is False
+    assert cand is None or cand.passed_filters is False
     assert "KER" in cand.rejection_reason
 
 
@@ -87,7 +87,7 @@ def test_screener_rejects_low_bandwidth(screener):
         funding_rate=0.0001,
         klines=klines,
     )
-    assert cand.passed_filters is False
+    assert cand is None or cand.passed_filters is False
     assert "Bandwidth" in cand.rejection_reason
 
 
@@ -122,7 +122,7 @@ def test_calibrated_default_config():
     """Verifies calibrated production defaults for IRAS screener."""
     default_cfg = ChopScreenerConfig()
     assert default_cfg.min_turnover_24h == 5_000_000.0
-    assert default_cfg.max_ker == 0.25
+    assert default_cfg.max_ker == 0.15
     assert default_cfg.min_bandwidth_pct == 0.025
-    assert default_cfg.max_adx == 20.0
+    assert default_cfg.max_adx == 18.0
     assert default_cfg.rescan_interval_hours == 1

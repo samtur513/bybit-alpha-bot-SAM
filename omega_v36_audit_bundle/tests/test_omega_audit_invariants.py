@@ -144,9 +144,9 @@ def test_zf8_circuit_breaker_limp_mode():
     # Still locked at 6.0% DD
     assert tx.get_effective_gear(current_dd=Decimal("6.0")) == 1
 
-    # Recovers at 3.5% DD
+    # Recovers at 3.5% DD -> resets to safe Gear 2 (Base City) to prevent shadow gear jump shock
     recovered = tx.get_effective_gear(current_dd=Decimal("3.5"))
-    assert recovered == 5
+    assert recovered == 2
     assert not tx.is_circuit_breaker_active
 
 

@@ -243,14 +243,17 @@ class RegimeGuard:
         window_after = timedelta(minutes=after_min)
 
         for event_time, name in self._macro_events:
+            # FOMC press conference & Q&A lasts ~60 min after rate release; expand post-window to +90 min
+            is_fomc = "FOMC" in name.upper() or "RATE" in name.upper()
+            after_m = 90 if is_fomc else after_min
             start_window = event_time - window_before
-            end_window = event_time + window_after
+            end_window = event_time + timedelta(minutes=after_m)
             if start_window <= now <= end_window:
                 delta_sec = (now - event_time).total_seconds()
                 delta_min = delta_sec / 60.0
                 return RegimeStatus(
                     block_new_entries=True,
-                    reason=f"Macro blackout: {name} in [-{before_min}m : +{after_min}m] window (delta: {delta_min:+.1f}m)",
+                    reason=f"Macro blackout: {name} in [-{before_min}m : +{after_m}m] window (delta: {delta_min:+.1f}m)",
                     details={
                         "event": name,
                         "event_time": event_time.isoformat(),
@@ -347,8 +350,11 @@ class RegimeGuard:
 
                     # Check floating profit qualification (>= 1.0R)
                     if r_mult >= min_r:
-                        trim_size = pos.size * trim_ratio
+                        is_major_event = any(k in name.upper() for k in ["FOMC", "RATE", "CPI"])
+                        active_trim_ratio = 0.40 if is_major_event else trim_ratio
+                        trim_size = pos.size * active_trim_ratio
                         self._trimmed_macro_events.add(dedup_key)
+                        be_stop = pos.entry_price * (1.002 if pos_side == Side.LONG else 0.998)
 
                         actions.append(
                             PositionAction(
@@ -356,11 +362,11 @@ class RegimeGuard:
                                 symbol=sym,
                                 side=Side.SHORT if pos_side == Side.LONG else Side.LONG,  # reduceOnly direction
                                 size=trim_size,
-                                stop_price=pos.stop_loss,  # Original stop preserved intact!
+                                stop_price=be_stop,  # Ratchet stop to Breakeven (+0.2%)
                                 reason=(
                                     f"MACRO_PRE_TRIM: {name} in {mins_to_event:.1f}m. "
-                                    f"Banked {trim_ratio*100:.0f}% profit at {r_mult:.2f}R. "
-                                    f"Preserving {(1.0-trim_ratio)*100:.0f}% with stop intact at {pos.stop_loss}."
+                                    f"Banked {active_trim_ratio*100:.0f}% profit at {r_mult:.2f}R. "
+                                    f"Preserving {(1.0-active_trim_ratio)*100:.0f}% with SL moved to Breakeven at {be_stop:.4f}."
                                 ),
                                 urgency="HIGH",
                                 created_at=now,

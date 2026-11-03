@@ -23,9 +23,11 @@ logger = logging.getLogger("ChopScreenerV32")
 class ChopScreenerConfig:
     min_turnover_24h: float = 5_000_000.0    # $5,000,000 USDT minimum 24h volume
     min_open_interest: float = 2_000_000.0   # $2,000,000 USDT minimum open interest
-    max_ker: float = 0.25                    # Kaufman Efficiency Ratio <= 0.25 (pure stationary noise)
+    max_ker: float = 0.15                    # Kaufman Efficiency Ratio <= 0.15 (pure stationary noise)
     min_bandwidth_pct: float = 0.025         # Minimum 2.5% Bollinger Bandwidth to beat exchange friction
-    max_adx: float = 20.0                    # Absence of directional trend (< 20)
+    max_adx: float = 18.0                    # Absence of directional trend (< 18.0)
+    min_crossings: int = 3                   # Minimum 3 crossings of SMA20 in last 20 bars (oscillation proof)
+    max_carry_mult: float = 1.8              # Cap funding carry boost to 1.8x
     top_n: int = 10                          # Top-N range coins to monitor
     bb_period: int = 20                      # Bollinger period
     bb_std_mult: float = 2.0                 # 2.0 std dev
@@ -234,9 +236,7 @@ class ChopUniverseScreener:
         sub_c = closes[-self.config.bb_period:]
         crosses = sum(1 for i in range(1, len(sub_c)) if (sub_c[i] - mid) * (sub_c[i - 1] - mid) < 0)
         velocity_mult = 0.5 + (crosses / 10.0)
-
-        # Carry boost from funding
-        carry_mult = 1.0 + (abs(funding_rate) * 200.0)
+        carry_mult = min(1.0 + (abs(funding_rate) * 200.0), self.config.max_carry_mult)
 
         # Gate 3: Stationary Noise (KER <= max_ker)
         if ker > self.config.max_ker:
@@ -246,6 +246,16 @@ class ChopUniverseScreener:
                 bb_mid=mid, bb_upper=up, bb_lower=lo, dist_to_lower_pct=dist_to_lo, dist_to_upper_pct=dist_to_up,
                 crossings=crosses, carry_mult=carry_mult, chop_score=0.0, passed_filters=False,
                 rejection_reason=f"KER {ker:.3f} > {self.config.max_ker:.2f} (Directional drift)",
+            )
+
+        # Gate 4: Oscillation proof (must cross SMA20 at least min_crossings times)
+        if crosses < self.config.min_crossings:
+            return ChopCandidateMetric(
+                symbol=symbol, price=price, turnover_24h=turnover_24h, open_interest=open_interest,
+                funding_rate=funding_rate, bandwidth_pct=bw, ker=ker, adx=adx, atr=atr,
+                bb_mid=mid, bb_upper=up, bb_lower=lo, dist_to_lower_pct=dist_to_lo, dist_to_upper_pct=dist_to_up,
+                crossings=crosses, carry_mult=carry_mult, chop_score=0.0, passed_filters=False,
+                rejection_reason=f"Crossings {crosses} < {self.config.min_crossings} (Insufficient mean-reversion oscillation)",
             )
 
         # Gate 4: Volatility Bandwidth Clearance (bw >= min_bandwidth_pct, e.g. 3.5%)

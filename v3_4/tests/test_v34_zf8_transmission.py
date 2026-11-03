@@ -133,9 +133,9 @@ def test_zf8_circuit_breaker_limp_mode():
     # DD partially recovers to 6.0% -> Still locked in Gear 1 (hysteresis)
     assert trans.get_effective_gear(current_dd=Decimal("6.0")) == 1
 
-    # DD fully recovers to 3.8% (<= 4.0%) -> Resets circuit breaker
+    # DD fully recovers to 3.8% (<= 4.0%) -> Resets circuit breaker to safe Gear 2
     effective_g = trans.get_effective_gear(current_dd=Decimal("3.8"))
-    assert effective_g == 7
+    assert effective_g == 2
     assert trans.is_circuit_breaker_active is False
 
 

@@ -228,9 +228,10 @@ class ZF8Transmission:
             if current_dd <= self.recovery_dd_pct:
                 logger.info(
                     f"ZF8Transmission: Drawdown recovered to {current_dd:.1f}% <= {self.recovery_dd_pct:.1f}%. "
-                    f"Limp Mode RESET -> Restoring transmission to Gear {self.current_gear}."
+                    f"Limp Mode RESET -> Restoring transmission to Gear 2 (Base City) to prevent shadow gear shock."
                 )
                 self.is_circuit_breaker_active = False
+                self.current_gear = 2  # Hard reset to safe Gear 2
             else:
                 return 1
 
@@ -240,7 +241,8 @@ class ZF8Transmission:
         self,
         net_pnl: Decimal,
         initial_risk_usd: Optional[Decimal] = None,
-        current_dd: Decimal = Decimal("0")
+        current_dd: Decimal = Decimal("0"),
+        current_equity: Optional[Decimal] = None,
     ) -> int:
         """
         Processes closed trade outcome with non-linear shift logic:
@@ -252,7 +254,12 @@ class ZF8Transmission:
         - R < -0.7: ABS Rapid Braking (-2 gears)
         """
         self.total_trades_processed += 1
-        risk_base = initial_risk_usd if (initial_risk_usd and initial_risk_usd > 0) else Decimal("3.00")
+        if initial_risk_usd and initial_risk_usd > 0:
+            risk_base = initial_risk_usd
+        elif current_equity and current_equity > 0:
+            risk_base = max(Decimal("1.00"), current_equity * Decimal("0.01"))
+        else:
+            risk_base = Decimal("3.00")
         r_mult = net_pnl / risk_base
         prev_gear = self.current_gear
 
@@ -261,7 +268,11 @@ class ZF8Transmission:
             self.streak_wins += 1
             self.streak_losses = 0
 
-            if r_mult >= Decimal("5.0"):
+            if current_dd > Decimal("3.5"):
+                # Ban kickdown (+2/+3) while in notable drawdown (> 3.5%)
+                shift = 1
+                self.last_shift_reason = f"CAUTIOUS_UPSHIFT (+1G, DD={current_dd:.1f}% > 3.5%, R={r_mult:.1f})"
+            elif r_mult >= Decimal("5.0"):
                 # Mega-Runner (+3 gears)
                 shift = 3
                 self.last_shift_reason = f"MEGA_KICKDOWN (+3G, R={r_mult:.1f})"
@@ -326,14 +337,21 @@ class ZF8Transmission:
         min_order_qty: Decimal,
         min_notional: Decimal,
         current_dd: Decimal = Decimal("0"),
+        active_high_gear_positions: int = 0,
     ) -> TransmissionSizingResult:
         """
         Calculates position size strictly constrained by active transmission gear (1-8).
+        Clamps to Gear 4 if another position is already running on a high gear (G6-G8).
         """
         if equity <= Decimal("0") or price <= Decimal("0") or stop_loss_distance <= Decimal("0"):
             return TransmissionSizingResult(False, Decimal("0"), Decimal("0"), Decimal("0"), 1, "Invalid market inputs")
 
         gear = self.get_effective_gear(current_dd)
+        # Concentration rule: max 1 position in G6-G8 concurrently
+        if active_high_gear_positions >= 1 and gear >= 6:
+            gear = 4
+            logger.info("ZF8Transmission: Max 1 position allowed in G6-G8. Clamping entry to Gear 4 (2.0% risk).")
+
         cfg = GEAR_CONFIGS.get(gear, GEAR_CONFIGS[1])
         risk_pct = cfg.risk_pct
 
