@@ -52,6 +52,22 @@ logging.basicConfig(
 logger = logging.getLogger("ScalperCore_v37")
 
 
+GLOBAL_OMS: Optional[ScalpOMS] = None
+
+
+async def status_export_task(oms: ScalpOMS) -> None:
+    """Периодический сброс живой телеметрии в LIVE_STATUS_FILE."""
+    from v3.src.persistence import atomic_json
+    from v3_7.src.config import LIVE_STATUS_FILE
+    while True:
+        try:
+            status = oms.get_status()
+            atomic_json(LIVE_STATUS_FILE, status)
+        except Exception as e:
+            logger.debug(f"Status export exception: {e}")
+        await asyncio.sleep(2.0)
+
+
 async def gc_guardian_task(oms: ScalpOMS) -> None:
     """Отключает авто-сборку мусора и запускает очистку только при отсутствии позиций."""
     gc.disable()
@@ -170,9 +186,13 @@ async def main() -> None:
     evaluator = ThreeEnginesEvaluate(cfg)
     oms = ScalpOMS(cfg, states)
 
+    global GLOBAL_OMS
+    GLOBAL_OMS = oms
+
     await asyncio.gather(
         position_monitor_task(oms),
         run_public_stream(cfg, states, evaluator, oms),
+        status_export_task(oms),
         gc_guardian_task(oms),
     )
 

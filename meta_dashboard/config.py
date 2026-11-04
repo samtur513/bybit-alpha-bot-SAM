@@ -104,4 +104,14 @@ ENGINES = [
         "strategy": "Dual-Regime Hybrid (ZF-8 Transmission + IRAS Maker + News Guard)",
         "color": "#f59e0b",  # gold / amber
     },
+    {
+        "id": "v37",
+        "name": "v3.7 HFT Scalper",
+        "tag": "15m/M1 L2 Microstructure + Sweep + Lead-Lag",
+        "version": "3.7",
+        "timeframe": "15m/M1",
+        "port": 8090,
+        "strategy": "Orderbook L2 (50 levels) + Sweep Absorption + Lead-Lag Beta + News Guard",
+        "color": "#ec4899",  # hot pink
+    },
 ]

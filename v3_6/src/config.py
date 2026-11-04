@@ -74,6 +74,7 @@ DONCHIAN_WINDOW = 120                  # 120 bars (120 hours / 5 days Donchian c
 INITIAL_CAPITAL = Decimal("300.0")
 MAX_LEVERAGE_CAP = Decimal("4.0")
 PORTFOLIO_LEVERAGE = Decimal("4.0")
+MAX_CONCURRENT_POSITIONS = 4           # Maximum 4 concurrent active positions
 DRAWDOWN_LIMIT_PCT = Decimal("35.0")
 CIRCUIT_BREAKER_DD_PCT = Decimal("8.0") # Drops to Gear 1 (Limp Mode) if DD >= 8.0%
 CIRCUIT_BREAKER_RECOVERY_DD_PCT = Decimal("4.0")

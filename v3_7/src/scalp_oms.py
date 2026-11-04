@@ -15,7 +15,7 @@ import math
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
 try:
     import orjson
@@ -524,3 +524,68 @@ class ScalpOMS:
             st = self.states.get(sym)
             if pos and st and st.mid_price > 0:
                 await self._close_position(pos, st.mid_price, is_maker=False, reason=f"NEWS_EJECT_{reason}")
+
+    # =========================================================================
+    # ЭКСПОРТ ТЕЛЕМЕТРИИ ДЛЯ WEB DASHBOARD И META DASHBOARD
+    # =========================================================================
+    def get_status(self) -> Dict[str, Any]:
+        """Формирует срез состояния системы для веб-мониторинга."""
+        unrealized = 0.0
+        pos_list = []
+        for s, p in self.active_positions.items():
+            st = self.states.get(s)
+            curr_p = st.mid_price if st and st.mid_price > 0 else p.entry_price
+            is_long = p.side == "Buy"
+            gross_pnl = (curr_p - p.entry_price) * p.qty if is_long else (p.entry_price - curr_p) * p.qty
+            unrealized += gross_pnl
+            pos_list.append({
+                "symbol": s,
+                "direction": "LONG" if is_long else "SHORT",
+                "qty": p.qty,
+                "entry_price": p.entry_price,
+                "current_price": curr_p,
+                "stop_loss": p.sl_price,
+                "take_profit_1": p.tp1_price,
+                "take_profit_2": p.tp2_price,
+                "engine_id": p.engine_id,
+                "unrealized_pnl": round(gross_pnl, 4),
+                "opened_ms": p.opened_ms,
+            })
+
+        orders_list = []
+        for s, o in self.pending_orders.items():
+            orders_list.append({
+                "symbol": s,
+                "side": o.side,
+                "price": o.price,
+                "qty": o.qty,
+                "queue_ahead_vol": round(o.queue_ahead_vol, 2),
+                "engine_id": o.engine_id,
+                "placed_ms": o.placed_ms,
+            })
+
+        total_equity = self.cfg.equity_usdt + self.daily_pnl_usdt + unrealized
+
+        return {
+            "version": "3.7.0",
+            "name": "v3.7 HFT Scalper",
+            "mode": "PAPER_TRADING" if self.cfg.paper_trading else "LIVE_REAL",
+            "port": 8090,
+            "timeframe": "15m/M1",
+            "initial_capital": self.cfg.equity_usdt,
+            "capital": round(total_equity, 2),
+            "equity": round(total_equity, 2),
+            "realized_pnl": round(self.daily_pnl_usdt, 4),
+            "unrealized_pnl": round(unrealized, 4),
+            "net_pnl": round(self.daily_pnl_usdt + unrealized, 4),
+            "open_positions": pos_list,
+            "pending_orders": orders_list,
+            "closed_trades": self.closed_trades_history[-50:],
+            "total_trades_count": len(self.closed_trades_history),
+            "monitored_symbols": list(self.states.keys()),
+            "stream_ready": len(self.states) > 0,
+            "news_shield": True,
+            "news_defense_active": True,
+            "circuit_breaker": self.circuit_breaker_tripped,
+            "timestamp": int(time.time() * 1000),
+        }

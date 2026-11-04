@@ -49,12 +49,13 @@ CANDLE_INTERVAL = "240"                # 4-hour candles ("240" in Bybit API)
 BAR_INTERVAL_MS = 4 * 3600 * 1000      # 14,400,000 ms
 DONCHIAN_WINDOW = 30                   # 30 bars (30 * 4h = 120 hours / 5 days Donchian channel)
 
-# Core Risk & Sizing (Champion 2.0% Half-Kelly)
+# Core Risk & Sizing (Champion 1.0% Half-Kelly Scaled for 4 slots)
 INITIAL_CAPITAL = Decimal("300.0")
-BASE_RISK_PCT = Decimal("0.02")        # 2.0% Half-Kelly
-CHOPPY_RISK_PCT = Decimal("0.006")     # 0.6% during Kill-Switch
+BASE_RISK_PCT = Decimal("0.010")        # 1.0% Half-Kelly (proportional for 4 slots)
+CHOPPY_RISK_PCT = Decimal("0.005")     # 0.5% during Kill-Switch
 MAX_LEVERAGE_CAP = Decimal("3.5")      # Hard 3.5x position leverage cap
-PORTFOLIO_LEVERAGE = Decimal("3.5")    # Hard 3.5x aggregate portfolio cap
+PORTFOLIO_LEVERAGE = Decimal("4.0")    # Hard 4.0x aggregate portfolio cap
+MAX_CONCURRENT_POSITIONS = 4           # Maximum 4 concurrent active positions
 SOFT_DRAWDOWN_LIMIT_PCT = Decimal("15.0")  # Halves risk above 15% DD
 DRAWDOWN_LIMIT_PCT = Decimal("30.0")   # Automated trading halt at 30% DD
 ATR_STOP_MULT = Decimal("2.5")         # 2.5x ATR initial stop-loss

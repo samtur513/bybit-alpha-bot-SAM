@@ -56,9 +56,10 @@ DONCHIAN_WINDOW = 120                  # 120 bars (120 hours / 5 days Donchian c
 
 # Core Capital & Risk Baseline
 INITIAL_CAPITAL = Decimal("300.0")
-BASE_RISK_PCT = Decimal("0.015")       # 1.5% initial base risk (Gear 1)
-MOMENTUM_RISK_PCT = Decimal("0.022")   # 2.2% moderate risk (Gear 2)
-TURBO_MAX_RISK_PCT = Decimal("0.032")  # 3.2% maximum aggressive risk (Gear 3)
+BASE_RISK_PCT = Decimal("0.010")       # 1.0% initial base risk (Gear 1, scaled for 4 slots)
+MOMENTUM_RISK_PCT = Decimal("0.016")   # 1.6% moderate risk (Gear 2)
+TURBO_MAX_RISK_PCT = Decimal("0.024")  # 2.4% maximum aggressive risk (Gear 3)
+MAX_CONCURRENT_POSITIONS = 4           # Maximum 4 concurrent active positions
 
 MAX_LEVERAGE_CAP = Decimal("4.0")      # Hard 4.0x position leverage cap
 PORTFOLIO_LEVERAGE = Decimal("4.0")    # Hard 4.0x aggregate portfolio cap

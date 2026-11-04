@@ -6,6 +6,16 @@ v3.7 Bybit Scalper Core Configuration
 import os
 from dataclasses import dataclass
 from decimal import Decimal
+from pathlib import Path
+
+# Paths & Port Configuration
+PORT = int(os.getenv("PORT", "8090"))
+VERSION_NAME = "v3.7 Bybit Scalper (15m/M1)"
+BASE_DIR = Path(__file__).resolve().parent.parent
+REPORTS_DIR = BASE_DIR / "reports"
+PERSISTENT_STATE_FILE = REPORTS_DIR / "BOT_STATE_PERSISTENT_V37.json"
+LIVE_STATUS_FILE = REPORTS_DIR / "PAPER_TRADING_LIVE_V37.json"
+LIVE_MD_FILE = REPORTS_DIR / "PAPER_TRADING_LIVE_V37.md"
 
 
 @dataclass(frozen=True)

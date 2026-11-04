@@ -22,6 +22,7 @@ from v3_1_4.src.config import (
     DONCHIAN_WINDOW,
     INITIAL_CAPITAL,
     BASE_RISK_PCT,
+    MAX_CONCURRENT_POSITIONS,
     ENABLE_NEWS_DEFENSE,
     ENABLE_MACRO_PROFIT_TRIMMING,
     MACRO_LOCKOUT_BEFORE_MINUTES,
@@ -41,7 +42,8 @@ def test_v314_config_invariants():
     assert BAR_INTERVAL_MS == 4 * 3600 * 1000  # 14,400,000 ms
     assert DONCHIAN_WINDOW == 30               # 30 * 4h = 120h = 5 days lookback
     assert INITIAL_CAPITAL == Decimal("300.0")
-    assert BASE_RISK_PCT == Decimal("0.02")
+    assert BASE_RISK_PCT == Decimal("0.010")
+    assert MAX_CONCURRENT_POSITIONS == 4
 
     # News Core v1.2 parameters
     assert ENABLE_NEWS_DEFENSE is True

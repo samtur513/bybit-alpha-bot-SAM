@@ -87,6 +87,7 @@ class CoreV3Engine:
         tp1_ratio: Decimal = Decimal("0.30"),
         tp2_ratio: Decimal = Decimal("0.40"),
         bar_interval_ms: int = BAR_INTERVAL_MS,
+        max_concurrent_positions: int = 4,
     ):
         self.initial_capital = initial_capital
         self.realized_equity = initial_capital
@@ -133,8 +134,9 @@ class CoreV3Engine:
             fee_rate=taker_fee,
             slippage_rate=slippage,
         )
+        self.max_concurrent_positions = max_concurrent_positions
         self.scanner = MultiCoinScanner(
-            max_concurrent_positions=2,
+            max_concurrent_positions=max_concurrent_positions,
             min_adx=min_adx,
             enable_btc_delta_filter=enable_btc_delta_filter,
         )

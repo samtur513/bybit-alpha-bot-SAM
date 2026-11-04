@@ -179,3 +179,24 @@ def test_consecutive_losses_and_circuit_breaker(cfg, meta):
         assert rejected is False
 
     asyncio.run(_run())
+
+
+def test_scalp_oms_get_status_invariant(cfg, meta):
+    """
+    Инвариант №4: get_status формирует корректный срез для веб-мониторинга
+    с сохранением penny-perfect баланса и структуры данных.
+    """
+    state = SymbolMicrostructureState("SOLUSDT", meta)
+    oms = ScalpOMS(cfg, {"SOLUSDT": state})
+    status = oms.get_status()
+
+    assert status["version"] == "3.7.0"
+    assert status["port"] == 8090
+    assert status["initial_capital"] == 300.0
+    assert status["equity"] == 300.0
+    assert status["realized_pnl"] == 0.0
+    assert status["open_positions"] == []
+    assert status["pending_orders"] == []
+    assert status["monitored_symbols"] == ["SOLUSDT"]
+    assert status["news_shield"] is True
+    assert status["stream_ready"] is True

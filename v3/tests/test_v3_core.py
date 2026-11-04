@@ -335,3 +335,56 @@ def test_v3_reentry_cooldown():
 def test_v3_portfolio_leverage_cap():
     """Verify that aggregate gross leverage cannot exceed 3.5x."""
     assert PORTFOLIO_LEVERAGE == Decimal("3.5")
+
+
+def test_v3_max_four_concurrent_positions():
+    """Verify that engine supports up to 4 concurrent positions with 1.0% risk."""
+    rules = {
+        f"COIN{i}USDT": {
+            "minOrderQty": Decimal("0.01"),
+            "qtyStep": Decimal("0.01"),
+            "minNotional": Decimal("5.0"),
+        }
+        for i in range(1, 6)
+    }
+    engine = CoreV3Engine(
+        initial_capital=Decimal("300.0"),
+        instrument_rules=rules,
+        base_risk_pct=Decimal("0.010"),
+        max_concurrent_positions=4,
+    )
+
+    bars = {}
+    opens = {}
+    for i in range(1, 6):
+        sym = f"COIN{i}USDT"
+        bars[sym] = {
+            "high": 102.0,
+            "low": 98.0,
+            "close": 100.0,
+            "upper": 95.0,
+            "lower": 80.0,
+            "ema_fast": 98.0,
+            "ema_slow": 90.0,
+            "atr": 4.0,
+            "volume": 2000.0,
+            "volume_sma": 1000.0,
+            "adx": 25.0,
+        }
+        opens[sym] = Decimal("100.0")
+
+    # Feed 5 consecutive bars: bars 1..4 should open positions, bar 5 must be blocked by limit
+    for bar_i in range(1, 6):
+        engine.process_bar_event(
+            timestamp=1700000000000 + bar_i * 3600000,
+            bars=bars,
+            next_open_prices=opens,
+            btc_bullish=True,
+        )
+
+    # Exactly 4 positions should be opened (COIN1..COIN4), COIN5 blocked by limit
+    assert len(engine.open_positions) == 4
+    assert "COIN5USDT" not in engine.open_positions
+    for sym in engine.open_positions:
+        pos = engine.open_positions[sym]
+        assert pos.current_qty > 0

@@ -66,7 +66,7 @@ PROTECT_PROFITABLE_RUNNERS = True                 # Prevent hysteresis rotation 
 
 # Core Capital & Risk Baseline
 INITIAL_CAPITAL = Decimal("300.0")
-BASE_RISK_PER_LEG_PCT = Decimal("1.5") # 1.5% capital risk per individual leg
+BASE_RISK_PER_LEG_PCT = Decimal("1.0") # 1.0% capital risk per individual leg (proportional for 4 slots)
 MAX_LEVERAGE_PER_LEG = Decimal("1.5")  # Max 1.5x leverage per leg
 MAX_PORTFOLIO_LEVERAGE = Decimal("4.0")# Total portfolio leverage cap (sum of legs <= 4.0x)
 DRAWDOWN_LIMIT_PCT = Decimal("30.0")   # Trading halt threshold
