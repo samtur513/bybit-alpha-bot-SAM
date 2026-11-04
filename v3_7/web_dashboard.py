@@ -783,6 +783,7 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                     "stream_ready": True,
                     "news_shield": True,
                     "news_defense_active": True,
+                    "btc_trend_status": "NEUTRAL",
                 }
             payload = json.dumps(status, default=str).encode("utf-8")
             self._send_payload(payload, "application/json; charset=utf-8")

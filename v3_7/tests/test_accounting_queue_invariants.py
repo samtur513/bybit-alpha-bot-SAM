@@ -200,3 +200,4 @@ def test_scalp_oms_get_status_invariant(cfg, meta):
     assert status["monitored_symbols"] == ["SOLUSDT"]
     assert status["news_shield"] is True
     assert status["stream_ready"] is True
+    assert "btc_trend_status" in status

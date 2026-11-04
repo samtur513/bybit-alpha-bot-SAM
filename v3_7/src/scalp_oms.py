@@ -558,6 +558,20 @@ class ScalpOMS:
                 "placed_ms": o.placed_ms,
             })
 
+        btc_state = self.states.get(self.cfg.leader_symbol)
+        btc_trend = "NEUTRAL"
+        if btc_state and btc_state.mid_price > 0:
+            bm = btc_state.meta
+            if getattr(bm, "vwap_session", 0) > 0 and getattr(bm, "ema9_5m", 0) > 0:
+                if btc_state.mid_price >= bm.vwap_session and bm.ema9_5m >= bm.ema21_5m:
+                    btc_trend = "BULLISH"
+                elif btc_state.mid_price <= bm.vwap_session and bm.ema9_5m <= bm.ema21_5m:
+                    btc_trend = "BEARISH"
+                else:
+                    btc_trend = "NEUTRAL"
+            elif getattr(bm, "ema20_15m", 0) > 0:
+                btc_trend = "BULLISH" if btc_state.mid_price >= bm.ema20_15m else "BEARISH"
+
         total_equity = self.cfg.equity_usdt + self.daily_pnl_usdt + unrealized
 
         return {
@@ -580,6 +594,7 @@ class ScalpOMS:
             "stream_ready": len(self.states) > 0,
             "news_shield": True,
             "news_defense_active": True,
+            "btc_trend_status": btc_trend,
             "circuit_breaker": self.circuit_breaker_tripped,
             "timestamp": int(time.time() * 1000),
         }
