@@ -668,8 +668,11 @@ class PaperTraderV36:
         trend_positions = {}
         for sym, pos in self.trend_engine.open_positions.items():
             curr_p = float(current_prices.get(sym, pos.entry_price))
-            direction_str = "LONG" if pos.direction == 1 else "SHORT"
+            direction_str = "LONG" if getattr(pos, "direction", 1) == 1 else "SHORT"
             unrealized = float((Decimal(str(curr_p)) - pos.entry_price) * Decimal(str(pos.direction)) * pos.current_qty)
+            entry_t = getattr(pos, "entry_time", getattr(pos, "entry_timestamp", server_ts))
+            tp1_hit = getattr(pos, "tp1_taken", getattr(pos, "tp1_hit", False))
+            tp2_hit = getattr(pos, "tp2_taken", getattr(pos, "tp2_hit", False))
             trend_positions[sym] = {
                 "symbol": sym,
                 "direction": direction_str,
@@ -678,27 +681,31 @@ class PaperTraderV36:
                 "current_price": curr_p,
                 "current_stop": float(pos.current_stop),
                 "unrealized_pnl": round(unrealized, 2),
-                "entry_time": pos.entry_timestamp,
-                "is_pyramided": pos.is_pyramided,
-                "tp1_hit": pos.tp1_hit,
-                "tp2_hit": pos.tp2_hit,
+                "entry_time": entry_t,
+                "is_pyramided": getattr(pos, "is_pyramided", False),
+                "tp1_hit": tp1_hit,
+                "tp2_hit": tp2_hit,
                 "mode": "TREND_BREAKOUT",
             }
 
         range_positions = {}
         for sym, pos in self.range_engine.open_positions.items():
             curr_p = float(current_prices.get(sym, pos.entry_price))
-            unrealized = float(pos.compute_unrealized_pnl(Decimal(str(curr_p))))
+            dir_val = getattr(pos, "direction", 1)
+            direction_str = "LONG" if dir_val == 1 else "SHORT"
+            qty = getattr(pos, "current_qty", getattr(pos, "qty", Decimal("0")))
+            unrealized = float((Decimal(str(curr_p)) - pos.entry_price) * Decimal(str(dir_val)) * qty)
+            entry_t = getattr(pos, "entry_time", getattr(pos, "entry_timestamp", server_ts))
             range_positions[sym] = {
                 "symbol": sym,
-                "direction": "LONG" if pos.side.value == "BUY" else "SHORT",
-                "current_qty": float(pos.qty),
+                "direction": direction_str,
+                "current_qty": float(qty),
                 "entry_price": float(pos.entry_price),
                 "current_price": curr_p,
-                "current_stop": float(pos.stop_loss),
-                "take_profit": float(pos.take_profit),
+                "current_stop": float(getattr(pos, "stop_loss", Decimal("0"))),
+                "take_profit": float(getattr(pos, "take_profit", Decimal("0"))),
                 "unrealized_pnl": round(unrealized, 2),
-                "entry_time": pos.entry_timestamp,
+                "entry_time": entry_t,
                 "mode": "IRAS_RANGE_MAKER",
             }
 
@@ -710,12 +717,12 @@ class PaperTraderV36:
         closed_trend_list = [
             {
                 "symbol": t.symbol,
-                "direction": "LONG" if t.direction == 1 else "SHORT",
+                "direction": "LONG" if getattr(t, "direction", 1) == 1 else "SHORT",
                 "entry_price": float(t.entry_price),
                 "exit_price": float(t.exit_price),
                 "net_pnl": float(t.net_pnl),
-                "exit_reason": t.exit_reason,
-                "exit_time": t.exit_timestamp,
+                "exit_reason": getattr(t, "exit_reason", ""),
+                "exit_time": getattr(t, "exit_time", getattr(t, "exit_timestamp", server_ts)),
                 "mode": "TREND",
             }
             for t in self.trend_engine.closed_trades[-30:]
@@ -724,12 +731,12 @@ class PaperTraderV36:
         closed_range_list = [
             {
                 "symbol": t.symbol,
-                "direction": "LONG" if t.side.value == "BUY" else "SHORT",
+                "direction": "LONG" if getattr(t, "direction", 1) == 1 else "SHORT",
                 "entry_price": float(t.entry_price),
                 "exit_price": float(t.exit_price),
                 "net_pnl": float(t.net_pnl),
-                "exit_reason": t.exit_reason,
-                "exit_time": t.exit_timestamp,
+                "exit_reason": getattr(t, "exit_reason", ""),
+                "exit_time": getattr(t, "exit_time", getattr(t, "exit_timestamp", server_ts)),
                 "mode": "RANGE",
             }
             for t in self.range_engine.closed_trades[-30:]
