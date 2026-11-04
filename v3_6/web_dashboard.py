@@ -68,7 +68,11 @@ HTML_PAGE = """<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bybit Multi-Alpha v3.6 Omega | Dual-Regime ZF-8</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🛡️</text></svg>">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
             --bg-dark: #080c14;
@@ -270,6 +274,22 @@ HTML_PAGE = """<!DOCTYPE html>
             </div>
         </div>
 
+        <!-- Performance Equity & PnL Curve Chart -->
+        <div class="card" style="margin-bottom: 24px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <h3 style="font-size: 13px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px;">Динамика эквити и результатов сделок (Live PnL Curve)</h3>
+                    <span class="badge" style="background: rgba(0, 242, 254, 0.15); color: var(--accent-cyan); border-color: rgba(0, 242, 254, 0.3);">LIVE REAL-TIME</span>
+                </div>
+                <div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-muted);">
+                    Старт: <strong style="color: var(--text-main);">$300.00</strong> | Текущее: <strong id="chart-curr-equity" style="color: var(--accent-cyan);">$300.00</strong>
+                </div>
+            </div>
+            <div style="height: 180px; position: relative;">
+                <canvas id="equityChart"></canvas>
+            </div>
+        </div>
+
         <!-- Open Positions Table -->
         <div class="card" style="margin-bottom: 24px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
@@ -293,6 +313,33 @@ HTML_PAGE = """<!DOCTYPE html>
                     </thead>
                     <tbody id="positions-body">
                         <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 20px;">Нет открытых позиций</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Closed Trades History Table -->
+        <div class="card" style="margin-bottom: 24px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <h3 style="font-size: 13px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px;">История закрытых сделок (PnL & Результаты)</h3>
+                <span id="closed-count" style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--accent-cyan);">0 сделок</span>
+            </div>
+            <div style="overflow-x: auto;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Время (UTC)</th>
+                            <th>Символ</th>
+                            <th>Режим</th>
+                            <th>Сторона</th>
+                            <th>Вход</th>
+                            <th>Выход</th>
+                            <th>Чистый PnL</th>
+                            <th>Причина выхода</th>
+                        </tr>
+                    </thead>
+                    <tbody id="closed-body">
+                        <tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 20px;">Нет закрытых сделок</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -436,6 +483,89 @@ HTML_PAGE = """<!DOCTYPE html>
                     });
                 }
 
+                // Render Closed Trades Table
+                const clBody = document.getElementById('closed-body');
+                const closed = data.closed_trades || [];
+                document.getElementById('closed-count').textContent = closed.length + ' сделок';
+                if (closed.length === 0) {
+                    clBody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 20px;">Нет закрытых сделок</td></tr>';
+                } else {
+                    clBody.innerHTML = closed.map(t => {
+                        const pnlVal = Number(t.net_pnl || 0.0);
+                        const pnlClass = pnlVal >= 0 ? 'val-green' : 'val-red';
+                        const dirClass = t.direction === 'LONG' ? 'val-green' : 'val-red';
+                        const modeBadge = t.mode === 'TREND'
+                            ? '<span class="badge" style="background: rgba(245, 158, 11, 0.2); color: #f59e0b;">TREND</span>'
+                            : '<span class="badge" style="background: rgba(16, 185, 129, 0.2); color: #10b981;">IRAS MAKER</span>';
+                        
+                        let timeStr = '--:--:--';
+                        if (t.exit_time) {
+                            try {
+                                timeStr = new Date(t.exit_time).toISOString().substring(11, 19);
+                            } catch (e) {}
+                        }
+
+                        let reasonBadge = `<span class="badge" style="background: rgba(148, 163, 184, 0.15); color: #94a3b8;">${t.exit_reason || 'CLOSE'}</span>`;
+                        if (t.exit_reason === 'FAST_SCRATCH') {
+                            reasonBadge = `<span class="badge" style="background: rgba(56, 189, 248, 0.2); color: #38bdf8;" title="Защитный безубыточный выход при затухании импульса">FAST_SCRATCH</span>`;
+                        } else if (t.exit_reason === 'TAKE_PROFIT' || t.exit_reason === 'TP1' || t.exit_reason === 'TP2') {
+                            reasonBadge = `<span class="badge" style="background: rgba(16, 185, 129, 0.2); color: #10b981;">${t.exit_reason}</span>`;
+                        } else if (t.exit_reason === 'STOP_LOSS') {
+                            reasonBadge = `<span class="badge" style="background: rgba(244, 63, 94, 0.2); color: #f43f5e;">STOP_LOSS</span>`;
+                        }
+
+                        return `
+                            <tr>
+                                <td style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-muted);">${timeStr} UTC</td>
+                                <td style="font-weight: 700;">${t.symbol}</td>
+                                <td>${modeBadge}</td>
+                                <td class="${dirClass}">${t.direction}</td>
+                                <td>$${Number(t.entry_price).toFixed(4)}</td>
+                                <td>$${Number(t.exit_price).toFixed(4)}</td>
+                                <td class="${pnlClass}" style="font-weight: 700;">${pnlVal >= 0 ? '+' : ''}$${pnlVal.toFixed(2)}</td>
+                                <td>${reasonBadge}</td>
+                            </tr>
+                        `;
+                    }).join('');
+                }
+
+                // Render Equity & PnL Curve Chart
+                const chartCurrEl = document.getElementById('chart-curr-equity');
+                if (chartCurrEl) chartCurrEl.textContent = '$' + eq.toFixed(2);
+
+                if (chartInstance) {
+                    const initCap = Number(data.initial_capital || 300.0);
+                    const labels = ['Старт'];
+                    const points = [initCap];
+                    
+                    // Chronological progression of trades
+                    const chronClosed = [...closed].reverse();
+                    let runEquity = initCap;
+                    chronClosed.forEach(t => {
+                        runEquity += Number(t.net_pnl || 0.0);
+                        const label = `${t.symbol} (${t.exit_reason || 'Close'})`;
+                        labels.push(label);
+                        points.push(Number(runEquity.toFixed(2)));
+                    });
+
+                    // Add current live equity point if different from last trade point
+                    if (points.length === 1 || Math.abs(points[points.length - 1] - eq) > 0.001) {
+                        labels.push('Текущее');
+                        points.push(Number(eq.toFixed(2)));
+                    }
+
+                    chartInstance.data.labels = labels;
+                    chartInstance.data.datasets[0].data = points;
+                    
+                    const isProfit = eq >= initCap;
+                    chartInstance.data.datasets[0].borderColor = isProfit ? '#00f2fe' : '#f59e0b';
+                    chartInstance.data.datasets[0].pointBackgroundColor = isProfit ? '#00f2fe' : '#f59e0b';
+                    chartInstance.data.datasets[0].backgroundColor = isProfit ? 'rgba(0, 242, 254, 0.08)' : 'rgba(245, 158, 11, 0.08)';
+                    chartInstance.update();
+                } else if (typeof Chart !== 'undefined') {
+                    initEquityChart();
+                }
+
                 // Render Radar
                 const radarBody = document.getElementById('radar-body');
                 const radar = Object.entries(data.radar || {});
@@ -472,6 +602,68 @@ HTML_PAGE = """<!DOCTYPE html>
             }
         }
 
+        let chartInstance = null;
+        function initEquityChart() {
+            const canvas = document.getElementById('equityChart');
+            if (!canvas || typeof Chart === 'undefined') return;
+            const ctx = canvas.getContext('2d');
+            chartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: ['Старт'],
+                    datasets: [{
+                        label: 'Эквити ($)',
+                        data: [300.0],
+                        borderColor: '#00f2fe',
+                        backgroundColor: 'rgba(0, 242, 254, 0.08)',
+                        borderWidth: 2,
+                        pointRadius: 4,
+                        pointHoverRadius: 6,
+                        pointBackgroundColor: '#00f2fe',
+                        pointBorderColor: '#070a13',
+                        pointBorderWidth: 1.5,
+                        fill: true,
+                        tension: 0.25,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: { duration: 300 },
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: '#0d1322',
+                            titleColor: '#f8fafc',
+                            bodyColor: '#38bdf8',
+                            borderColor: '#1e293b',
+                            borderWidth: 1,
+                            padding: 10,
+                            bodyFont: { family: 'JetBrains Mono', size: 12 },
+                            callbacks: {
+                                label: ctx => ` Эквити: $${Number(ctx.parsed.y).toFixed(2)}`
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: 'rgba(255, 255, 255, 0.03)' },
+                            ticks: { color: '#64748b', font: { family: 'JetBrains Mono', size: 10 } }
+                        },
+                        y: {
+                            grid: { color: 'rgba(255, 255, 255, 0.03)' },
+                            ticks: {
+                                color: '#64748b',
+                                font: { family: 'JetBrains Mono', size: 10 },
+                                callback: val => '$' + Number(val).toFixed(2)
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
         async function updateLogs() {
             try {
                 const res = await fetch('/api/logs');
@@ -490,8 +682,11 @@ HTML_PAGE = """<!DOCTYPE html>
         }, 1000);
 
         renderGearsTrack(1);
-        updateDashboard();
-        updateLogs();
+        window.addEventListener('DOMContentLoaded', () => {
+            initEquityChart();
+            updateDashboard();
+            updateLogs();
+        });
         setInterval(updateDashboard, 2000);
         setInterval(updateLogs, 4000);
     </script>
@@ -512,6 +707,11 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(content)))
             self.end_headers()
             self.wfile.write(content)
+
+        elif path == "/favicon.ico":
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
 
         elif path in ["/api/status", "/api/state"]:
             if GLOBAL_TRADER and getattr(GLOBAL_TRADER, "last_status_cache", None):
