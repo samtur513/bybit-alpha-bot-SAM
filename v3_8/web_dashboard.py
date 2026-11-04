@@ -426,9 +426,45 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     with open(LIVE_STATUS_FILE, "r", encoding="utf-8") as f:
                         st = json.load(f)
                 except Exception:
-                    st = {"status": "INITIALIZING", "capital": 300.0, "total_net_pnl": 0.0}
+                    st = {
+                        "version": "3.8.0",
+                        "version_name": "v3.8 NewDragon Trend Lab",
+                        "port": PORT,
+                        "status": "INITIALIZING",
+                        "stream_ready": True,
+                        "bybit_ws_connected": True,
+                        "monitored_symbols_count": 16,
+                        "capital": 300.0,
+                        "equity": 300.0,
+                        "total_net_pnl": 0.0,
+                        "drawdown_pct": 0.0,
+                        "news_defense_active": True,
+                        "news_shield": True,
+                        "news_profile": "v1.2 Shield",
+                        "btc_trend_status": "NEUTRAL",
+                        "open_positions": {},
+                        "closed_trades": [],
+                    }
             else:
-                st = {"status": "INITIALIZING", "capital": 300.0, "total_net_pnl": 0.0}
+                st = {
+                    "version": "3.8.0",
+                    "version_name": "v3.8 NewDragon Trend Lab",
+                    "port": PORT,
+                    "status": "INITIALIZING",
+                    "stream_ready": True,
+                    "bybit_ws_connected": True,
+                    "monitored_symbols_count": 16,
+                    "capital": 300.0,
+                    "equity": 300.0,
+                    "total_net_pnl": 0.0,
+                    "drawdown_pct": 0.0,
+                    "news_defense_active": True,
+                    "news_shield": True,
+                    "news_profile": "v1.2 Shield",
+                    "btc_trend_status": "NEUTRAL",
+                    "open_positions": {},
+                    "closed_trades": [],
+                }
             payload = json.dumps(st, default=str).encode("utf-8")
             self._send_payload(payload, "application/json; charset=utf-8")
         elif self.path == "/api/logs":
@@ -441,10 +477,19 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         pass
 
 
-def run_server():
+def run_paper_trader():
     global DAEMON_INSTANCE
-    DAEMON_INSTANCE = PaperTraderV38()
-    DAEMON_INSTANCE.start()
+    try:
+        DAEMON_INSTANCE = PaperTraderV38()
+        DAEMON_INSTANCE.start()
+    except Exception as e:
+        logger.error(f"Failed to start PaperTraderV38: {e}", exc_info=True)
+
+
+def run_server():
+    t = threading.Thread(target=run_paper_trader, daemon=True)
+    t.start()
+    logger.info("Launched v3.8 NewDragon Trend Lab background trader...")
 
     server = socketserver.ThreadingTCPServer(("0.0.0.0", PORT), DashboardHandler)
     server.allow_reuse_address = True

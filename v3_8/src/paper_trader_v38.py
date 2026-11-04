@@ -15,6 +15,7 @@ from decimal import Decimal
 import json
 import logging
 from pathlib import Path
+import queue
 import sys
 import threading
 import time
@@ -70,8 +71,9 @@ class PaperTraderV38:
         self.lock = threading.Lock()
         self.api_key = ""
         self.api_secret = ""
-        self.client = BybitClient(testnet=False)
+        self.client = BybitClient(timeout=10, max_retries=3)
         self.instrument_rules: Dict[str, Dict[str, Decimal]] = {}
+        self.bar_interval_ms = BAR_INTERVAL_MS
 
         # Screener setup
         self.screener_config = ScreenerConfig(
@@ -89,7 +91,6 @@ class PaperTraderV38:
                 top_syms = self.screener.get_top_universe(client=self.client)
                 if top_syms:
                     initial_syms = top_syms
-                    self.screened_universe = self.screener.screen_universe(client=self.client)
                     self.last_screener_run_ts = time.time()
                     logger.info(f"Initialized dynamic universe with {len(initial_syms)} coins from Bybit screener.")
             except Exception as e:
@@ -119,6 +120,7 @@ class PaperTraderV38:
         self.last_processed_bar_ts: Dict[str, int] = {s: 0 for s in self.symbols}
         self.prices: Dict[str, Decimal] = {}
         self.price_times: Dict[str, float] = {}
+        self.batches: Dict[int, Dict[str, Any]] = {}
         self.daily_date = ""
         self.ready = False
         self.btc_trend_status = "NEUTRAL"
@@ -137,7 +139,7 @@ class PaperTraderV38:
             info = self.client.get_instruments_info(category="linear")
             for item in info:
                 s = item.get("symbol")
-                if not s:
+                if not s or s not in self.symbols:
                     continue
                 lot = item.get("lotSizeFilter", {})
                 self.instrument_rules[s] = {
@@ -149,6 +151,15 @@ class PaperTraderV38:
             logger.info(f"Loaded contract specifications for {len(self.instrument_rules)} symbols.")
         except Exception as e:
             logger.error(f"Failed to load instrument specifications: {e}")
+
+        for s in self.symbols:
+            if s not in self.instrument_rules:
+                self.instrument_rules[s] = {
+                    "qtyStep": Decimal("0.001"),
+                    "minOrderQty": Decimal("0.001"),
+                    "maxOrderQty": Decimal("1000000"),
+                    "minNotional": Decimal("5.0"),
+                }
 
     def _load_persistent_state(self) -> None:
         """Loads state from STATE_V38.json if present."""
@@ -221,6 +232,111 @@ class PaperTraderV38:
             res["adx"] = 25.0
 
         return res
+
+    def _fetch_history(self) -> Dict[str, pd.DataFrame]:
+        """Fetches historical 1h klines for technical indicators."""
+        buffers = {}
+        now = int(time.time() * 1000)
+        try:
+            now = self.client.get_server_time()
+        except Exception:
+            pass
+
+        for sym in self.symbols:
+            try:
+                raw = self.client.get_kline(sym, interval=CANDLE_INTERVAL, limit=100)
+                records = [
+                    dict(
+                        timestamp=int(k[0]),
+                        **{name: float(k[i]) for i, name in enumerate(("open", "high", "low", "close", "volume", "turnover"), 1)},
+                    )
+                    for k in raw
+                    if int(k[0]) + self.bar_interval_ms <= now
+                ]
+                if not records:
+                    continue
+                df = (
+                    pd.DataFrame(records)
+                    .sort_values("timestamp")
+                    .drop_duplicates("timestamp")
+                    .reset_index(drop=True)
+                )
+                if len(df) >= min(DONCHIAN_WINDOW, 20):
+                    df = self._compute_indicators(df)
+                    buffers[sym] = df
+            except Exception as e:
+                logger.warning(f"Error fetching history for {sym}: {e}")
+        return buffers
+
+    def _on_bar(self, sym: str, bar: Dict[str, Any]) -> None:
+        """Handles confirmed 1h bar from Bybit WebSocket."""
+        ts = int(bar.get("start", 0))
+        previous = self.last_processed_bar_ts.get(sym, 0)
+        if ts <= previous:
+            return
+        record = dict(
+            timestamp=ts,
+            **{k: float(bar[k]) for k in ("open", "high", "low", "close", "volume", "turnover") if k in bar},
+        )
+        df = self.candle_buffers.get(sym)
+        if df is None:
+            return
+        df = pd.concat(
+            [df[["timestamp", "open", "high", "low", "close", "volume", "turnover"]], pd.DataFrame([record])],
+            ignore_index=True,
+        ).tail(200)
+        df = self._compute_indicators(df)
+        self.candle_buffers[sym] = df
+        self.last_processed_bar_ts[sym] = ts
+        self.batches.setdefault(ts, {})[sym] = df.iloc[-1].to_dict()
+
+    def _signals(self) -> None:
+        """Evaluates signals on closed 1h bars."""
+        prices = self.get_live_prices()
+        now_ms = int(time.time() * 1000)
+        for ts, bars in list(self.batches.items()):
+            time_since_close = now_ms - (ts + self.bar_interval_ms)
+            if time_since_close > 180000:
+                del self.batches[ts]
+                continue
+
+            has_all_bars = set(bars) == set(self.symbols)
+            grace_period_expired = time_since_close >= 30000
+            has_quorum = ("BTCUSDT" in bars) and (len(bars) >= max(3, int(len(self.symbols) * 0.70)))
+
+            if self.ready and (has_all_bars or (grace_period_expired and has_quorum)):
+                btc_bar = bars.get("BTCUSDT")
+                btc_bullish = True
+                btc_bearish = True
+                if btc_bar:
+                    c = float(btc_bar["close"])
+                    ef = float(btc_bar.get("ema_fast", 0))
+                    es = float(btc_bar.get("ema_slow", 0))
+                    btc_bullish = ef > es and c > ef
+                    btc_bearish = ef < es and c < ef
+                    self.btc_trend_status = "BULLISH" if btc_bullish else ("BEARISH" if btc_bearish else "NEUTRAL")
+
+                blocked_symbols = set()
+                nc = getattr(self, "news_core", None)
+                if nc:
+                    bar_dt = datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
+                    for s in self.symbols:
+                        st = nc.get_status(s, bar_dt)
+                        if st.get("block_new_entries"):
+                            blocked_symbols.add(s)
+
+                open_prices = {s: prices.get(s, Decimal(str(b["close"]))) for s, b in bars.items()}
+
+                self.engine.process_bar_event(
+                    timestamp=ts,
+                    bars=bars,
+                    next_open_prices=open_prices,
+                    manage_positions=True,
+                    btc_bullish=btc_bullish,
+                    btc_bearish=btc_bearish,
+                    blocked_symbols=blocked_symbols,
+                )
+                del self.batches[ts]
 
     def get_status(self) -> Dict[str, Any]:
         """Provides status dict for Web Dashboard and Meta-Dashboard."""
@@ -304,34 +420,70 @@ class PaperTraderV38:
     def start(self) -> None:
         """Starts background streaming and trading loop."""
         logger.info(f"Starting {VERSION_NAME} daemon on Port {PORT}...")
-        self.stream.start()
 
-        def loop():
+        # Initial history load in background thread to avoid blocking dashboard startup
+        def init_history_and_stream():
+            try:
+                self.candle_buffers = self._fetch_history()
+                for sym, df in self.candle_buffers.items():
+                    if len(df) > 0:
+                        self.last_processed_bar_ts[sym] = int(df.timestamp.iloc[-1])
+                        c = Decimal(str(df.close.iloc[-1]))
+                        self.prices[sym] = c
+                self.ready = True
+                btc_df = self.candle_buffers.get("BTCUSDT")
+                if btc_df is not None and len(btc_df) > 0:
+                    last = btc_df.iloc[-1]
+                    c = float(last["close"])
+                    ef = float(last.get("ema_fast", 0))
+                    es = float(last.get("ema_slow", 0))
+                    if ef > es and c > ef:
+                        self.btc_trend_status = "BULLISH"
+                    elif ef < es and c < ef:
+                        self.btc_trend_status = "BEARISH"
+                    else:
+                        self.btc_trend_status = "NEUTRAL"
+                logger.info(f"Loaded historical candles for {len(self.candle_buffers)} symbols. BTC: {self.btc_trend_status}")
+            except Exception as e:
+                logger.warning(f"History load warning: {e}")
+                self.ready = True
+
+            self.stream.start()
+
             last_export = 0.0
             while True:
                 try:
-                    # Update prices from stream
-                    msg = self.stream.get_next_message(timeout=1.0)
-                    if msg:
-                        data = msg.get("data", [])
-                        for item in data:
-                            sym = item.get("s")
-                            p_str = item.get("c") or item.get("p")
-                            if sym and p_str:
-                                with self.lock:
-                                    self.prices[sym] = Decimal(str(p_str))
-                                    self.ready = True
+                    try:
+                        kind, sym, ts, data, received = self.stream.events.get(timeout=0.2)
+                    except queue.Empty:
+                        kind = None
 
-                    now = time.time()
-                    if now - last_export >= 2.0:
-                        last_export = now
-                        status = self.get_status()
-                        atomic_json(LIVE_STATUS_FILE, status)
-                        self.save_persistent_state()
+                    with self.lock:
+                        if kind == "price":
+                            price = Decimal(str(data))
+                            if price.is_finite() and price > 0:
+                                self.prices[sym] = price
+                                self.price_times[sym] = received
+                                self.engine._observe(self.prices)
+                        elif kind == "bar":
+                            self._on_bar(sym, data)
+                        elif kind == "reset":
+                            self.ready = False
+                            self.candle_buffers = self._fetch_history()
+                            self.ready = True
+
+                        self._signals()
+
+                        now = time.time()
+                        if now - last_export >= 2.0:
+                            last_export = now
+                            status = self.get_status()
+                            atomic_json(LIVE_STATUS_FILE, status)
+                            self.save_persistent_state()
 
                 except Exception as e:
                     logger.debug(f"Stream error: {e}")
-                    time.sleep(1.0)
+                    time.sleep(0.5)
 
-        t = threading.Thread(target=loop, daemon=True)
+        t = threading.Thread(target=init_history_and_stream, daemon=True)
         t.start()
