@@ -60,8 +60,8 @@ ENABLE_CHOP_SCREENER = True
 CHOP_UNIVERSE_TOP_N = 10
 CHOP_MIN_24H_TURNOVER = 5_000_000.0
 CHOP_MIN_OPEN_INTEREST = 2_000_000.0
-CHOP_MAX_KER = 0.15                     # Optimal Calibrated KER <= 0.15 (Pass 4 standard)
-CHOP_MIN_BANDWIDTH_PCT = 0.030         # 3.0% minimum Bollinger Bandwidth
+CHOP_MAX_KER = 0.18                     # Optimal Calibrated KER <= 0.15 (Pass 4 standard)
+CHOP_MIN_BANDWIDTH_PCT = 0.022         # 3.0% minimum Bollinger Bandwidth
 CHOP_MAX_ADX = 18.0                    # ADX < 18.0 = non-trending chop
 CHOP_RESCAN_INTERVAL_HOURS = 1
 
@@ -103,8 +103,8 @@ BB_WIDTH_PERCENTILE_THRESHOLD = 40.0
 
 # News Core v1.2 Defensive Shield
 ENABLE_NEWS_DEFENSE = True
-MACRO_LOCKOUT_BEFORE_MINUTES = 45
-MACRO_LOCKOUT_AFTER_MINUTES = 30
+MACRO_LOCKOUT_BEFORE_MINUTES = 15
+MACRO_LOCKOUT_AFTER_MINUTES = 25
 MACRO_PROFIT_TRIM_PCT = Decimal("0.30")
 
 # Bybit Non-VIP ("Обычный пользователь") с активной скидкой 10% в MNT

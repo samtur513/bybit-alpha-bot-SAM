@@ -558,31 +558,32 @@ class PaperTraderV36:
 
                 open_prices = {s: prices.get(s, Decimal(str(b["close"]))) for s, b in bars.items()}
 
-                # Macro Embargo Gate
-                if not is_embargo:
-                    # 3. Step Range Mean-Reversion Engine (Maker in Chop)
-                    active_trend_syms = list(self.trend_engine.open_positions.keys())
-                    next_bars_mock = {
-                        s: {
-                            "open": float(open_prices[s]),
-                            "high": float(open_prices[s]),
-                            "low": float(open_prices[s]),
-                            "close": float(open_prices[s]),
-                        }
-                        for s, b in bars.items()
+                # 3. Step Range Mean-Reversion Engine (Maker in Chop)
+                # Range maker orders provide liquidity and capture chop even during pre-news compression
+                active_trend_syms = list(self.trend_engine.open_positions.keys())
+                next_bars_mock = {
+                    s: {
+                        "open": float(open_prices[s]),
+                        "high": float(open_prices[s]),
+                        "low": float(open_prices[s]),
+                        "close": float(open_prices[s]),
                     }
-                    self.range_engine.step_bar(
-                        timestamp=ts,
-                        bars=bars,
-                        next_bars=next_bars_mock,
-                        next_open_prices=open_prices,
-                        regimes=regimes_dict,
-                        btc_bullish=btc_bullish,
-                        btc_bearish=btc_bearish,
-                        active_trend_symbols=active_trend_syms,
-                    )
+                    for s, b in bars.items()
+                }
+                self.range_engine.step_bar(
+                    timestamp=ts,
+                    bars=bars,
+                    next_bars=next_bars_mock,
+                    next_open_prices=open_prices,
+                    regimes=regimes_dict,
+                    btc_bullish=btc_bullish,
+                    btc_bearish=btc_bearish,
+                    active_trend_symbols=active_trend_syms,
+                )
 
-                    # 4. Step Trend Engine (only on symbols NOT held by Range)
+                # 4. Step Trend Engine (only on symbols NOT held by Range)
+                # Trend breakouts are blocked during Macro Embargo to prevent false breakout whipsaws
+                if not is_embargo:
                     trend_bars = {
                         s: b for s, b in bars.items()
                         if s not in self.range_engine.open_positions and s not in self.range_engine.pending_orders
@@ -596,7 +597,7 @@ class PaperTraderV36:
                         btc_bearish=btc_bearish,
                     )
                 else:
-                    logger.warning(f"Macro Embargo Active ({embargo_event}): Blocked new entries.")
+                    logger.warning(f"Macro Embargo Active ({embargo_event}): Blocked trend breakout entries. Range Maker active.")
 
                 del self.batches[ts]
                 self.rotate_universe_if_due()

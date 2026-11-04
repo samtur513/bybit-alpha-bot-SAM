@@ -244,16 +244,22 @@ class ThreeEnginesEvaluate:
         r_alt_2500, _, _ = state.get_depletion_and_return(now_ms, 2500)
         tfi_btc, _, _, _, _ = btc_state.get_trade_flow_metrics(now_ms, 2500)
 
+        # Dynamic Adaptive Impulse based on rolling BTC NATR_5m
+        btc_natr = getattr(btc_state.meta, "natr_5m", 0.0025) or 0.0025
+        dyn_impulse = min(self.cfg.e3_btc_impulse_ret, max(0.0006, 0.35 * btc_natr))
+        dyn_min_lag = min(self.cfg.e3_min_lag_spread, max(0.0012, 0.70 * dyn_impulse))
+        dyn_tfi = self.cfg.e3_btc_tfi_threshold
+
         # 1. LONG LEAD-LAG (Бычий импульс BTC)
         if btc_state.mid_price >= btc_state.meta.ema20_15m:
             expected_alt_move = m.beta_btc * r_btc_2500
             lag_spread = expected_alt_move - r_alt_2500
 
             if (
-                r_btc_2500 >= self.cfg.e3_btc_impulse_ret
-                and tfi_btc >= self.cfg.e3_btc_tfi_threshold
+                r_btc_2500 >= dyn_impulse
+                and tfi_btc >= dyn_tfi
                 and r_alt_2500 <= self.cfg.e3_alt_reaction_cap * expected_alt_move
-                and lag_spread >= self.cfg.e3_min_lag_spread
+                and lag_spread >= dyn_min_lag
             ):
                 entry = state.best_bid
                 tp1 = entry * (1.0 + max(0.0065, 0.90 * lag_spread))
@@ -282,10 +288,10 @@ class ThreeEnginesEvaluate:
             lag_spread = expected_alt_drop - actual_alt_drop
 
             if (
-                r_btc_2500 <= -self.cfg.e3_btc_impulse_ret
-                and tfi_btc <= -self.cfg.e3_btc_tfi_threshold
+                r_btc_2500 <= -dyn_impulse
+                and tfi_btc <= -dyn_tfi
                 and actual_alt_drop <= self.cfg.e3_alt_reaction_cap * expected_alt_drop
-                and lag_spread >= self.cfg.e3_min_lag_spread
+                and lag_spread >= dyn_min_lag
             ):
                 entry = state.best_ask
                 tp1 = entry * (1.0 - max(0.0065, 0.90 * lag_spread))
