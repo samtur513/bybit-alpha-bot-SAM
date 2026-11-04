@@ -657,9 +657,9 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
 
 def start_server_and_bot():
     global GLOBAL_TRADER
-    logger.info("Initializing PaperTraderV3 (Pure Quant Mode - No News Defense) on Port 8081...")
+    logger.info("Initializing PaperTraderV3 with News Core v1.2 Defense on Port 8081...")
     GLOBAL_TRADER = PaperTraderV3(
-        enable_news_defense=False,
+        enable_news_defense=True,
         state_file=PERSISTENT_STATE_FILE,
         live_status_file=LIVE_STATUS_FILE,
         live_md_file=LIVE_MD_FILE,

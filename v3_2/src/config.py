@@ -92,5 +92,7 @@ RANGE_COOLDOWN_BARS = 3
 ADX_REGIME_THRESHOLD = 20.0
 BB_WIDTH_PERCENTILE_THRESHOLD = 40.0        # <= 40th percentile = compression
 
-# News Core Defense: DISABLED for Pure Dual-Regime test
-ENABLE_NEWS_DEFENSE = False
+# News Core Defensive Shield: ENABLED (News Core v1.2 Regime Guard)
+ENABLE_NEWS_DEFENSE = True
+MACRO_LOCKOUT_BEFORE_MINUTES = 45
+MACRO_LOCKOUT_AFTER_MINUTES = 30

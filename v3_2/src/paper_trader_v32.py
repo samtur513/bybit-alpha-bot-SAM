@@ -31,6 +31,8 @@ from v3.src.persistence import atomic_json
 from v3.src.telegram_notifier import TelegramNotifier
 from v3.src.universe_screener import UniverseScreener, ScreenerConfig, ScreenedAsset
 from v3.src.core_v3 import CoreV3Engine, ActivePosition, ClosedTrade, PortfolioSnapshot
+from v3.src.news_core.news_config import NewsConfig
+from v3.src.news_core.regime_guard import RegimeGuard
 
 from .chop_screener import ChopUniverseScreener, ChopScreenerConfig, ChopCandidateMetric
 from .config import (
@@ -78,6 +80,9 @@ from .config import (
     RANGE_COOLDOWN_BARS,
     ADX_REGIME_THRESHOLD,
     BB_WIDTH_PERCENTILE_THRESHOLD,
+    ENABLE_NEWS_DEFENSE,
+    MACRO_LOCKOUT_BEFORE_MINUTES,
+    MACRO_LOCKOUT_AFTER_MINUTES,
     PERSISTENT_STATE_FILE,
     LIVE_STATUS_FILE,
     LIVE_MD_FILE,
@@ -128,6 +133,7 @@ class PaperTraderV32:
         state_file: Optional[Path] = None,
         live_status_file: Optional[Path] = None,
         live_md_file: Optional[Path] = None,
+        enable_news_defense: bool = ENABLE_NEWS_DEFENSE,
     ):
         self.initial_capital = initial_capital
         self.poll_interval = poll_interval_seconds
@@ -138,6 +144,16 @@ class PaperTraderV32:
         self.live_md_file = live_md_file or LIVE_MD_FILE
         self.lock = threading.RLock()
         self.instrument_rules: Dict[str, Dict[str, Decimal]] = {}
+        self.enable_news_defense = enable_news_defense
+
+        # News Core v1.2 Defensive Shield
+        self.news_config = NewsConfig(
+            macro_lockout_before_minutes=MACRO_LOCKOUT_BEFORE_MINUTES,
+            macro_lockout_after_minutes=MACRO_LOCKOUT_AFTER_MINUTES,
+        )
+        self.regime_guard = RegimeGuard(self.news_config) if enable_news_defense else None
+        self.macro_blackout_active = False
+        self.macro_event_name = ""
 
         # Screener: Dual-Alpha Architecture (Trend Momentum + IRAS Chop)
         self.screener_config = ScreenerConfig(
@@ -455,6 +471,14 @@ class PaperTraderV32:
         self.last_processed_bar_ts[sym] = ts
         self.batches.setdefault(ts, {})[sym] = df.iloc[-1].to_dict()
 
+    def _check_macro_embargo(self, current_time: datetime) -> Tuple[bool, str]:
+        if not self.enable_news_defense or not self.regime_guard:
+            return False, ""
+        status = self.regime_guard.check_status("BTCUSDT", current_time=current_time)
+        if status.block_new_entries:
+            return True, status.reason or "Macro Lockout"
+        return False, ""
+
     def _signals(self) -> None:
         prices = self.get_live_prices()
         now_ms = int(time.time() * 1000)
@@ -511,41 +535,50 @@ class PaperTraderV32:
                 # 3. Resilient price map
                 open_prices = {s: prices.get(s, Decimal(str(b["close"]))) for s, b in bars.items()}
 
-                # 4. Step Range Mean-Reversion Engine (Maker in Chop)
-                active_trend_syms = list(self.trend_engine.open_positions.keys())
-                next_bars_mock = {
-                    s: {
-                        "open": float(open_prices[s]),
-                        "high": float(open_prices[s]),
-                        "low": float(open_prices[s]),
-                        "close": float(open_prices[s]),
-                    }
-                    for s, b in bars.items()
-                }
-                self.range_engine.step_bar(
-                    timestamp=ts,
-                    bars=bars,
-                    next_bars=next_bars_mock,
-                    next_open_prices=open_prices,
-                    regimes=regimes_dict,
-                    btc_bullish=btc_bullish,
-                    btc_bearish=btc_bearish,
-                    active_trend_symbols=active_trend_syms,
-                )
+                # Macro Embargo Check (News Core v1.2)
+                now_dt = datetime.now(timezone.utc)
+                is_embargo, embargo_event = self._check_macro_embargo(now_dt)
+                self.macro_blackout_active = is_embargo
+                self.macro_event_name = embargo_event
 
-                # 5. Step Trend Engine (only on symbols NOT held by Range)
-                trend_bars = {
-                    s: b for s, b in bars.items()
-                    if s not in self.range_engine.open_positions and s not in self.range_engine.pending_orders
-                }
-                self.trend_engine.process_bar_event(
-                    timestamp=ts,
-                    bars=trend_bars,
-                    next_open_prices=open_prices,
-                    manage_positions=False,
-                    btc_bullish=btc_bullish,
-                    btc_bearish=btc_bearish,
-                )
+                if not is_embargo:
+                    # 4. Step Range Mean-Reversion Engine (Maker in Chop)
+                    active_trend_syms = list(self.trend_engine.open_positions.keys())
+                    next_bars_mock = {
+                        s: {
+                            "open": float(open_prices[s]),
+                            "high": float(open_prices[s]),
+                            "low": float(open_prices[s]),
+                            "close": float(open_prices[s]),
+                        }
+                        for s, b in bars.items()
+                    }
+                    self.range_engine.step_bar(
+                        timestamp=ts,
+                        bars=bars,
+                        next_bars=next_bars_mock,
+                        next_open_prices=open_prices,
+                        regimes=regimes_dict,
+                        btc_bullish=btc_bullish,
+                        btc_bearish=btc_bearish,
+                        active_trend_symbols=active_trend_syms,
+                    )
+
+                    # 5. Step Trend Engine (only on symbols NOT held by Range)
+                    trend_bars = {
+                        s: b for s, b in bars.items()
+                        if s not in self.range_engine.open_positions and s not in self.range_engine.pending_orders
+                    }
+                    self.trend_engine.process_bar_event(
+                        timestamp=ts,
+                        bars=trend_bars,
+                        next_open_prices=open_prices,
+                        manage_positions=False,
+                        btc_bullish=btc_bullish,
+                        btc_bearish=btc_bearish,
+                    )
+                else:
+                    logger.warning(f"Macro Embargo Active ({embargo_event}): Blocked new entries.")
 
                 del self.batches[ts]
                 self.rotate_universe_if_due()
@@ -738,10 +771,16 @@ class PaperTraderV32:
             "drawdown_pct": round(float(self.trend_engine.max_drawdown_pct), 2),
             "total_trades": tot_trades,
             "win_rate_pct": round(win_rate, 2),
+            "open_positions": trend_pos + range_pos,
+            "total_open_positions": len(trend_pos) + len(range_pos),
             "trend_open_positions": trend_pos,
             "range_open_positions": range_pos,
             "range_pending_orders": range_orders,
             "closed_trades": all_closed[:50],
+            "news_core_status": "v1.2 Shield" if self.enable_news_defense else "Disabled",
+            "news_defense_active": bool(self.enable_news_defense),
+            "news_shield": bool(self.enable_news_defense),
+            "macro_blackout_active": self.macro_blackout_active,
             "market_radar": radar,
             "screened_universe": [
                 {

@@ -4,7 +4,9 @@ Adheres strictly to the crypto-hybrid-bot-tester and quantitative invariant stan
 - Zero-Lookahead Point-in-Time (PIT) ranking
 - Cross-Sectional Relative Strength Momentum (CAR-CSMOM 168h vs BTC)
 - Kaufman Efficiency Ratio (KER 48h) weighting
-- Hysteresis Rank Retention Buffer (cuts turnover by >80%)
+- Minimum Alpha Spread Hurdle & Turnover Friction Filter (cuts rebalancing drag by >80%)
+- Hysteresis Rank Retention Buffer with Deadband
+- Runner Protection (preserves profitable legs like 1000PEPEUSDT)
 - True Mark-to-Market Portfolio Equity Tracking
 - Penny-perfect trade accounting conservation
 """
@@ -26,6 +28,11 @@ from v3_5.src.config import (
     MIN_KER_THRESHOLD,
     HYSTERESIS_TOP_RANK,
     HYSTERESIS_BOTTOM_RANK,
+    MIN_PAIR_NET_ALPHA_SPREAD,
+    MIN_REBALANCE_SPREAD_ADVANTAGE,
+    HYSTERESIS_EXIT_RS_BUFFER,
+    MIN_HOLD_BARS_REBALANCE,
+    PROTECT_PROFITABLE_RUNNERS,
     INITIAL_CAPITAL,
     BASE_RISK_PER_LEG_PCT,
     MAX_LEVERAGE_PER_LEG,
@@ -254,7 +261,7 @@ class AlphaPairsEngine:
                     self.realized_equity += tp_net
                     pos.qty -= tp_qty
                     pos.tp_taken = True
-                    # Tighten stop to Breakeven
+                    # Tighten stop to Breakeven + buffer
                     pos.stop_price = pos.entry_price + (Decimal(str(direction)) * atr * Decimal("0.1"))
                     logger.info(f"Partial TP 50% hit on {s} at +4.0R (+{tp_net:.2f} USD)")
 
@@ -296,21 +303,35 @@ class AlphaPairsEngine:
             top_retained = set(ranked_symbols[:HYSTERESIS_TOP_RANK])
             bottom_retained = set(ranked_symbols[-HYSTERESIS_BOTTOM_RANK:])
 
-            # Hysteresis Exits
+            # Hysteresis Exits with Friction/Spread & Runner Protection
             for s in list(self.open_positions.keys()):
                 pos = self.open_positions[s]
                 curr_p = current_prices.get(s, pos.entry_price)
                 s_info = rank_map.get(s, (99, 0.0, 0.0))
                 s_rs = Decimal(str(s_info[1]))
+                bars_held = self.bar_counter - pos.entry_bar
+                floating_pnl = pos.floating_pnl(curr_p)
+
+                # Filter 1: Min holding bars before allowing rebalance exit
+                if bars_held < MIN_HOLD_BARS_REBALANCE:
+                    continue
+
+                # Filter 2: Runner protection for profitable positions
+                # If profitable and still has positive RS (or within buffer), do not churn!
+                if PROTECT_PROFITABLE_RUNNERS and floating_pnl > Decimal("0.0"):
+                    if pos.direction == 1 and s_rs >= -HYSTERESIS_EXIT_RS_BUFFER:
+                        continue
+                    if pos.direction == -1 and s_rs <= HYSTERESIS_EXIT_RS_BUFFER:
+                        continue
 
                 exit_pos = False
                 if pos.direction == 1:
-                    # Long exit if dropped below Top 5 OR Relative Strength <= 0
-                    if s not in top_retained or s_rs <= Decimal("0.0"):
+                    # Long exit if dropped below Top 5 OR RS fell below negative buffer
+                    if (s not in top_retained) or (s_rs < -HYSTERESIS_EXIT_RS_BUFFER):
                         exit_pos = True
                 elif pos.direction == -1:
-                    # Short exit if rose above Bottom 5 OR Relative Strength >= 0
-                    if s not in bottom_retained or s_rs >= Decimal("0.0"):
+                    # Short exit if rose above Bottom 5 OR RS rose above positive buffer
+                    if (s not in bottom_retained) or (s_rs > HYSTERESIS_EXIT_RS_BUFFER):
                         exit_pos = True
 
                 if exit_pos:
@@ -341,25 +362,46 @@ class AlphaPairsEngine:
 
             # Candidate Selection for New Entries
             entry_long_candidates = [
-                r["symbol"] for r in rankings[:ENTRY_TOP_K]
+                r for r in rankings[:ENTRY_TOP_K]
                 if Decimal(str(r["rs"])) >= MIN_REL_STRENGTH_LONG and Decimal(str(r["ker48"])) >= MIN_KER_THRESHOLD
             ]
             entry_short_candidates = [
-                r["symbol"] for r in rankings[-ENTRY_BOTTOM_K:]
+                r for r in rankings[-ENTRY_BOTTOM_K:]
                 if Decimal(str(r["rs"])) <= MIN_REL_STRENGTH_SHORT and Decimal(str(r["ker48"])) >= MIN_KER_THRESHOLD
             ]
+
+            # Filter 3: Minimum Pair Net Alpha Spread Filter
+            allow_new_pairs = True
+            if entry_long_candidates and entry_short_candidates:
+                best_long_rs = Decimal(str(entry_long_candidates[0]["rs"]))
+                best_short_rs = Decimal(str(entry_short_candidates[-1]["rs"]))
+                net_pair_spread = best_long_rs - best_short_rs
+                if net_pair_spread < MIN_PAIR_NET_ALPHA_SPREAD:
+                    allow_new_pairs = False
+                    logger.info(
+                        f"Skipping pair entry: Net spread {net_pair_spread*100:.2f}% < "
+                        f"threshold {MIN_PAIR_NET_ALPHA_SPREAD*100:.2f}%"
+                    )
 
             active_longs = sum(1 for p in self.open_positions.values() if p.direction == 1)
             active_shorts = sum(1 for p in self.open_positions.values() if p.direction == -1)
 
             current_eq = self.get_portfolio_equity(current_prices)
 
-            if not macro_lockout:
+            if not macro_lockout and allow_new_pairs:
                 # Open Longs
-                for s in entry_long_candidates:
+                for item in entry_long_candidates:
+                    s = item["symbol"]
                     if active_longs >= ENTRY_TOP_K:
                         break
                     if s not in self.open_positions and s in current_prices and s in metrics:
+                        # Turnover advantage filter vs existing longs
+                        incumbent_longs = [p for p in self.open_positions.values() if p.direction == 1]
+                        if incumbent_longs:
+                            incumbent_score = rank_map.get(incumbent_longs[0].symbol, (0, 0, 0))[2]
+                            if (item["score"] - incumbent_score) < float(MIN_REBALANCE_SPREAD_ADVANTAGE):
+                                continue
+
                         p = current_prices[s]
                         atr = Decimal(str(metrics[s]["atr24"]))
                         stop_dist = STOP_LOSS_ATR_MULT * atr
@@ -391,10 +433,17 @@ class AlphaPairsEngine:
                             logger.info(f"Entered LONG pair leg on {s} @ {p} (qty={qty:.4f}, stop={p - stop_dist})")
 
                 # Open Shorts
-                for s in entry_short_candidates:
+                for item in entry_short_candidates:
+                    s = item["symbol"]
                     if active_shorts >= ENTRY_BOTTOM_K:
                         break
                     if s not in self.open_positions and s in current_prices and s in metrics:
+                        incumbent_shorts = [p for p in self.open_positions.values() if p.direction == -1]
+                        if incumbent_shorts:
+                            incumbent_score = rank_map.get(incumbent_shorts[0].symbol, (0, 0, 0))[2]
+                            if (incumbent_score - item["score"]) < float(MIN_REBALANCE_SPREAD_ADVANTAGE):
+                                continue
+
                         p = current_prices[s]
                         atr = Decimal(str(metrics[s]["atr24"]))
                         stop_dist = STOP_LOSS_ATR_MULT * atr

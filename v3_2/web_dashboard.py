@@ -673,12 +673,13 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 def start_server_and_bot():
     global GLOBAL_TRADER
 
-    logger.info("Initializing PaperTraderV32 Dual-Regime daemon...")
+    logger.info("Initializing PaperTraderV32 Dual-Regime daemon with News Core v1.2 Shield...")
     GLOBAL_TRADER = PaperTraderV32(
         initial_capital=Decimal("300.0"),
         state_file=PERSISTENT_STATE_FILE,
         live_status_file=LIVE_STATUS_FILE,
         live_md_file=LIVE_MD_FILE,
+        enable_news_defense=True,
     )
 
     t = threading.Thread(target=GLOBAL_TRADER.run_daemon, daemon=True)

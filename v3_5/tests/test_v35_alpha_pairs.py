@@ -216,3 +216,77 @@ def test_accounting_invariants_conservation():
     closed = engine.closed_trades[0]
     expected_realized = Decimal("300.0") + closed.net_pnl
     assert engine.realized_equity == expected_realized
+
+
+def test_runner_protection_preserves_profitable_1000pepe():
+    """
+    Ensure profitable positions (like 1000PEPEUSDT) are NOT exited during
+    rebalancing cycles, protecting floating profit and avoiding turnover fee drag.
+    """
+    engine = AlphaPairsEngine(initial_capital=Decimal("300.0"))
+
+    # Active LONG in 1000PEPEUSDT entered at 0.004865, now at 0.005003 (+3.40 USD profit)
+    pepe_pos = ActivePairPosition(
+        symbol="1000PEPEUSDT",
+        direction=1,
+        qty=Decimal("25000.0"),
+        entry_price=Decimal("0.004865"),
+        stop_price=Decimal("0.004500"),
+        initial_risk_dist=Decimal("0.000365"),
+        initial_atr=Decimal("0.000150"),
+        highest_p=Decimal("0.005003"),
+        lowest_p=Decimal("0.004865"),
+        entry_bar=1,
+        entry_ts=1700000000000,
+    )
+    engine.open_positions["1000PEPEUSDT"] = pepe_pos
+
+    # Advance to rebalance bar (12)
+    engine.bar_counter = 11
+
+    # Simulate market where PEPE slipped to rank 6, but is still in solid profit
+    universe = {
+        "BTCUSDT": make_dummy_kline(0.1, n_bars=180, base_p=60000.0),
+        "SOLUSDT": make_dummy_kline(0.5, n_bars=180, base_p=100.0),
+        "SUIUSDT": make_dummy_kline(0.4, n_bars=180, base_p=2.0),
+        "APTUSDT": make_dummy_kline(0.3, n_bars=180, base_p=10.0),
+        "NEARUSDT": make_dummy_kline(0.2, n_bars=180, base_p=5.0),
+        "DOGEUSDT": make_dummy_kline(0.15, n_bars=180, base_p=0.15),
+        "1000PEPEUSDT": make_dummy_kline(0.12, n_bars=180, base_p=0.005),
+        "ARBUSDT": make_dummy_kline(-0.2, n_bars=180, base_p=1.0),
+        "OPUSDT": make_dummy_kline(-0.4, n_bars=180, base_p=2.0),
+    }
+    current_prices = {
+        s: Decimal(str(universe[s][-1]["close"])) for s in universe
+    }
+    current_prices["1000PEPEUSDT"] = Decimal("0.005003")  # In profit!
+
+    engine.process_bar(universe, current_prices, bar_ts=1700000000000 + 12 * 3600000)
+
+    # 1000PEPEUSDT MUST NOT be exited! It is a profitable runner!
+    assert "1000PEPEUSDT" in engine.open_positions
+    assert len(engine.closed_trades) == 0
+
+
+def test_minimum_net_pair_spread_filter():
+    """
+    Ensure new pairs are NOT entered if the relative strength spread between
+    leaders and laggards is compressed (< 5.0%), preventing fee erosion.
+    """
+    engine = AlphaPairsEngine(initial_capital=Decimal("300.0"))
+
+    # Flat market with almost zero dispersion:
+    # Leaders +0.02%, Laggards -0.02% -> Net spread = 0.04% (< 5.0% threshold)
+    universe = {
+        "BTCUSDT": make_dummy_kline(0.0, n_bars=180, base_p=60000.0),
+        "SOLUSDT": make_dummy_kline(0.0002, n_bars=180, base_p=100.0),
+        "SUIUSDT": make_dummy_kline(0.0001, n_bars=180, base_p=2.0),
+        "ARBUSDT": make_dummy_kline(-0.0001, n_bars=180, base_p=1.0),
+        "OPUSDT": make_dummy_kline(-0.0002, n_bars=180, base_p=2.0),
+    }
+    current_prices = {s: Decimal(str(universe[s][-1]["close"])) for s in universe}
+
+    engine.process_bar(universe, current_prices, bar_ts=1700000000000 + 3600000)
+
+    # Because spread < 5.0%, no new pairs should be opened!
+    assert len(engine.open_positions) == 0

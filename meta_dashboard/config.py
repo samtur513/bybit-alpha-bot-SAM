@@ -27,11 +27,11 @@ ENGINES = [
     {
         "id": "v21",
         "name": "v2.1 Static 4h",
-        "tag": "4h Breakout + News v1.1",
+        "tag": "4h Breakout + News v1.2",
         "version": "2.1",
         "timeframe": "4h",
         "port": 8081,
-        "strategy": "Donchian 30 bars (Static 18 Coins) + News Core v1.1",
+        "strategy": "Donchian 30 bars (Static 18 Coins) + News Core v1.2",
         "color": "#38bdf8",  # sky blue
     },
     {
@@ -47,11 +47,11 @@ ENGINES = [
     {
         "id": "v32",
         "name": "v3.2 Dual-Regime",
-        "tag": "Dual Trend + IRAS Range Maker",
+        "tag": "Dual Trend + IRAS Range Maker + News v1.2",
         "version": "3.2",
         "timeframe": "1h",
         "port": 8083,
-        "strategy": "Dual-Regime Hybrid (Donchian Trend + Calibrated IRAS Maker)",
+        "strategy": "Dual-Regime Hybrid (Donchian Trend + Calibrated IRAS Maker + News Shield)",
         "color": "#f59e0b",  # amber
     },
     {

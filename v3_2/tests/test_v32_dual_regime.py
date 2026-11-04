@@ -300,3 +300,33 @@ def test_range_engine_persistence_roundtrip():
     assert restored.open_positions["BTCUSDT"].entry_price == Decimal("65000.0")
     assert "SOLUSDT" in restored.pending_orders
     assert restored.pending_orders["SOLUSDT"].price == Decimal("160.0")
+
+
+def test_v32_news_defense_integration():
+    from v3_2.src.paper_trader_v32 import PaperTraderV32
+    from datetime import datetime, timezone
+
+    pt = PaperTraderV32(
+        symbols=["BTCUSDT", "ETHUSDT"],
+        initial_capital=Decimal("300.0"),
+        enable_news_defense=True,
+    )
+    assert pt.enable_news_defense is True
+    assert pt.regime_guard is not None
+
+    # Normal time: no macro blackout
+    normal_dt = datetime(2024, 3, 15, 12, 0, tzinfo=timezone.utc)
+    is_embargo, reason = pt._check_macro_embargo(normal_dt)
+    assert not is_embargo
+
+    # Macro FOMC time: 2024-03-20 18:00 UTC -> Embargo active!
+    fomc_dt = datetime(2024, 3, 20, 18, 0, tzinfo=timezone.utc)
+    is_embargo, reason = pt._check_macro_embargo(fomc_dt)
+    assert is_embargo
+    assert "FOMC" in reason or "Macro" in reason
+
+    # Test status export
+    status = pt.poll_cycle()
+    assert status["news_defense_active"] is True
+    assert status["news_shield"] is True
+    assert "open_positions" in status

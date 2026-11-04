@@ -57,6 +57,13 @@ MIN_KER_THRESHOLD = Decimal("0.0")         # Softly weighted in composite rank s
 HYSTERESIS_TOP_RANK = 5                # Keep existing Long while in Top 5 and RS > 0
 HYSTERESIS_BOTTOM_RANK = 5             # Keep existing Short while in Bottom 5 and RS < 0
 
+# Minimum Alpha Spread & Rebalance Friction Filters
+MIN_PAIR_NET_ALPHA_SPREAD = Decimal("0.050")       # 5.0% min spread between candidate Long RS and Short RS (RS_L - RS_S >= 5.0%)
+MIN_REBALANCE_SPREAD_ADVANTAGE = Decimal("0.020") # 2.0% alpha score advantage required for candidate to replace held asset
+HYSTERESIS_EXIT_RS_BUFFER = Decimal("0.015")      # 1.5% negative deadband buffer before hysteresis exit (RS < -1.5% for Long)
+MIN_HOLD_BARS_REBALANCE = 6                       # Minimum 6 hours hold before allowing hysteresis exit
+PROTECT_PROFITABLE_RUNNERS = True                 # Prevent hysteresis rotation if position is profitable (unrealized > 0)
+
 # Core Capital & Risk Baseline
 INITIAL_CAPITAL = Decimal("300.0")
 BASE_RISK_PER_LEG_PCT = Decimal("1.5") # 1.5% capital risk per individual leg
