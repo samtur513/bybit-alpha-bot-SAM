@@ -11,7 +11,7 @@ import asyncio
 import gc
 import logging
 import time
-from typing import Dict
+from typing import Dict, Optional
 
 try:
     import orjson
