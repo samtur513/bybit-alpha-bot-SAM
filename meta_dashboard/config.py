@@ -114,4 +114,24 @@ ENGINES = [
         "strategy": "Orderbook L2 (50 levels) + Sweep Absorption + Lead-Lag Beta + News Guard",
         "color": "#ec4899",  # hot pink
     },
+    {
+        "id": "v38",
+        "name": "v3.8 NewDragon Trend",
+        "tag": "1h Trend + 400+ Dynamic Universe + NewDragon v4",
+        "version": "3.8",
+        "timeframe": "1h",
+        "port": 8091,
+        "strategy": "True 1R Sizer + 4-Stage Exit FSM (Maker TP 60% + Fast Scratch) + News v1.2",
+        "color": "#6366f1",  # indigo
+    },
+    {
+        "id": "v39",
+        "name": "v3.9 NewDragon Scalp",
+        "tag": "15m/M1 L2 Microstructure + OFI Scratch + Micro-Router",
+        "version": "3.9",
+        "timeframe": "15m/M1",
+        "port": 8092,
+        "strategy": "Micro-Account Router (minNotional) + Order Flow Imbalance Z_OFI Scratch + NewDragon v4",
+        "color": "#8b5cf6",  # violet
+    },
 ]
