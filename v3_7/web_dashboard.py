@@ -70,7 +70,11 @@ HTML_PAGE = """<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bybit Multi-Alpha v3.7 Scalper | HFT Microstructure</title>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+    <noscript><link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet"></noscript>
     <style>
         :root {
             --bg-dark: #080c14;
@@ -343,6 +347,15 @@ HTML_PAGE = """<!DOCTYPE html>
     </div>
 
     <script>
+        function escapeHtml(text) {
+            return String(text)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
         async function updateDashboard() {
             try {
                 const res = await fetch('/api/status');
@@ -369,6 +382,10 @@ HTML_PAGE = """<!DOCTYPE html>
                 document.getElementById('trading-mode').innerText = data.mode || "PAPER";
                 document.getElementById('coins-count').innerText = (data.monitored_symbols || []).length;
                 document.getElementById('circuit-status').innerText = data.circuit_breaker ? "TRIPPED" : "HEALTHY";
+                
+                const isOnline = data.stream_ready !== false;
+                document.getElementById('connection-status').innerText = isOnline ? '● WEBSOCKET L2 ONLINE' : '● WEBSOCKET RECONNECTING...';
+                document.getElementById('connection-status').style.color = isOnline ? 'var(--accent-green)' : 'var(--accent-gold)';
                 document.getElementById('last-updated').innerText = new Date().toISOString().substring(11, 19) + ' UTC';
 
                 // Render positions
@@ -376,16 +393,16 @@ HTML_PAGE = """<!DOCTYPE html>
                 if (data.open_positions && data.open_positions.length > 0) {
                     posBody.innerHTML = data.open_positions.map(p => `
                         <tr>
-                            <td><strong>${p.symbol}</strong></td>
-                            <td><span style="color: var(--accent-pink); font-weight:700;">${p.engine_id}</span></td>
-                            <td><span class="pos-badge ${p.direction === 'LONG' ? 'pos-long' : 'pos-short'}">${p.direction}</span></td>
+                            <td><strong>${escapeHtml(p.symbol)}</strong></td>
+                            <td><span style="color: var(--accent-pink); font-weight:700;">${escapeHtml(p.engine_id || 'E1_OBI')}</span></td>
+                            <td><span class="pos-badge ${p.direction === 'LONG' || p.direction === 1 ? 'pos-long' : 'pos-short'}">${p.direction === 1 ? 'LONG' : (p.direction === -1 ? 'SHORT' : escapeHtml(p.direction))}</span></td>
                             <td>${p.qty}</td>
-                            <td>${p.entry_price.toFixed(4)}</td>
-                            <td>${p.current_price.toFixed(4)}</td>
-                            <td class="color-red">${p.stop_loss ? p.stop_loss.toFixed(4) : '-'}</td>
-                            <td class="color-green">${p.take_profit_1 ? p.take_profit_1.toFixed(4) : '-'}</td>
-                            <td class="color-green">${p.take_profit_2 ? p.take_profit_2.toFixed(4) : '-'}</td>
-                            <td class="${p.unrealized_pnl >= 0 ? 'color-green' : 'color-red'}"><strong>${(p.unrealized_pnl >= 0 ? '+' : '') + p.unrealized_pnl.toFixed(4)} USDT</strong></td>
+                            <td>${Number(p.entry_price || 0).toFixed(4)}</td>
+                            <td>${Number(p.current_price || 0).toFixed(4)}</td>
+                            <td class="color-red">${p.stop_loss ? Number(p.stop_loss).toFixed(4) : '-'}</td>
+                            <td class="color-green">${p.take_profit_1 ? Number(p.take_profit_1).toFixed(4) : '-'}</td>
+                            <td class="color-green">${p.take_profit_2 ? Number(p.take_profit_2).toFixed(4) : '-'}</td>
+                            <td class="${(p.unrealized_pnl || 0) >= 0 ? 'color-green' : 'color-red'}"><strong>${((p.unrealized_pnl || 0) >= 0 ? '+' : '') + Number(p.unrealized_pnl || 0).toFixed(4)} USDT</strong></td>
                         </tr>
                     `).join('');
                 } else {
@@ -397,18 +414,19 @@ HTML_PAGE = """<!DOCTYPE html>
                 if (data.pending_orders && data.pending_orders.length > 0) {
                     ordBody.innerHTML = data.pending_orders.map(o => `
                         <tr>
-                            <td><strong>${o.symbol}</strong></td>
-                            <td><span style="color: var(--accent-blue); font-weight:700;">${o.engine_id}</span></td>
-                            <td><span class="pos-badge ${o.side === 'Buy' ? 'pos-long' : 'pos-short'}">${o.side.toUpperCase()}</span></td>
+                            <td><strong>${escapeHtml(o.symbol)}</strong></td>
+                            <td><span style="color: var(--accent-blue); font-weight:700;">${escapeHtml(o.engine_id || 'OMS')}</span></td>
+                            <td><span class="pos-badge ${o.side === 'Buy' ? 'pos-long' : 'pos-short'}">${escapeHtml((o.side || 'BUY').toUpperCase())}</span></td>
                             <td>${o.qty}</td>
-                            <td>${o.price.toFixed(4)}</td>
-                            <td style="color: var(--accent-gold); font-weight: 700;">${o.queue_ahead_vol}</td>
+                            <td>${Number(o.price || 0).toFixed(4)}</td>
+                            <td style="color: var(--accent-gold); font-weight: 700;">${o.queue_ahead_vol || 0}</td>
                         </tr>
                     `).join('');
                 } else {
                     ordBody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 18px;">Очередь пуста.</td></tr>`;
                 }
             } catch (e) {
+                console.error("updateDashboard error:", e);
                 document.getElementById('connection-status').innerText = '● DISCONNECTED';
                 document.getElementById('connection-status').style.color = 'var(--accent-red)';
             }
@@ -420,16 +438,22 @@ HTML_PAGE = """<!DOCTYPE html>
                 if (res.ok) {
                     const logs = await res.json();
                     const consoleEl = document.getElementById('log-console');
-                    consoleEl.innerHTML = logs.map(l => `<div class="log-entry">${l}</div>`).join('');
-                    consoleEl.scrollTop = consoleEl.scrollHeight;
+                    if (Array.isArray(logs) && logs.length > 0) {
+                        consoleEl.innerHTML = logs.map(l => `<div class="log-entry">${escapeHtml(l)}</div>`).join('');
+                        consoleEl.scrollTop = consoleEl.scrollHeight;
+                    }
                 }
-            } catch (e) {}
+            } catch (e) {
+                console.error("fetchLogs error:", e);
+            }
         }
 
-        setInterval(updateDashboard, 1000);
-        setInterval(fetchLogs, 2500);
-        updateDashboard();
-        fetchLogs();
+        window.addEventListener('DOMContentLoaded', () => {
+            updateDashboard();
+            fetchLogs();
+            setInterval(updateDashboard, 1500);
+            setInterval(fetchLogs, 2500);
+        });
     </script>
 </body>
 </html>
@@ -437,21 +461,26 @@ HTML_PAGE = """<!DOCTYPE html>
 
 
 class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
+    def _send_payload(self, payload: bytes, content_type: str = "text/html; charset=utf-8", status: int = 200):
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(payload)
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
 
         if path in ("/", "/index.html"):
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(HTML_PAGE.encode("utf-8"))
+            self._send_payload(HTML_PAGE.encode("utf-8"), "text/html; charset=utf-8")
+
+        elif path == "/favicon.ico":
+            self._send_payload(b"", "image/x-icon", 204)
 
         elif path == "/api/status":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.end_headers()
-
             if core_scalper.GLOBAL_OMS is not None:
                 status = core_scalper.GLOBAL_OMS.get_status()
             elif LIVE_STATUS_FILE.exists():
@@ -479,28 +508,24 @@ class DashboardHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                     "news_shield": True,
                     "news_defense_active": True,
                 }
-            self.wfile.write(json.dumps(status, default=str).encode("utf-8"))
+            payload = json.dumps(status, default=str).encode("utf-8")
+            self._send_payload(payload, "application/json; charset=utf-8")
 
         elif path == "/api/state":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.end_headers()
             if core_scalper.GLOBAL_OMS is not None:
                 st = core_scalper.GLOBAL_OMS.get_status()
             else:
                 st = {}
-            self.wfile.write(json.dumps(st, default=str).encode("utf-8"))
+            payload = json.dumps(st, default=str).encode("utf-8")
+            self._send_payload(payload, "application/json; charset=utf-8")
 
         elif path == "/api/logs":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.end_headers()
             logs = list(LOG_BUFFER)
-            self.wfile.write(json.dumps(logs).encode("utf-8"))
+            payload = json.dumps(logs).encode("utf-8")
+            self._send_payload(payload, "application/json; charset=utf-8")
 
         else:
-            self.send_response(404)
-            self.end_headers()
+            self._send_payload(b"Not Found", "text/plain", 404)
 
     def log_message(self, format, *args):
         return

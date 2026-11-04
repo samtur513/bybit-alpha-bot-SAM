@@ -56,13 +56,24 @@ GLOBAL_OMS: Optional[ScalpOMS] = None
 
 
 async def status_export_task(oms: ScalpOMS) -> None:
-    """Периодический сброс живой телеметрии в LIVE_STATUS_FILE."""
+    """Периодический сброс живой телеметрии в LIVE_STATUS_FILE и отправка логов активности."""
     from v3.src.persistence import atomic_json
     from v3_7.src.config import LIVE_STATUS_FILE
+    last_heartbeat = 0.0
     while True:
         try:
             status = oms.get_status()
             atomic_json(LIVE_STATUS_FILE, status)
+            now = time.time()
+            if now - last_heartbeat >= 30.0:
+                last_heartbeat = now
+                syms = list(oms.states.keys()) if hasattr(oms, "states") else []
+                pos_cnt = len(oms.active_positions)
+                ord_cnt = len(oms.pending_orders)
+                logger.info(
+                    f"[L2 MONITOR 25ms] Мониторинг {len(syms)} тикеров: {syms} | "
+                    f"Очередь: {ord_cnt} лимитов | В рынке: {pos_cnt} поз. | OBI/Sweep/Lead-Lag активны"
+                )
         except Exception as e:
             logger.debug(f"Status export exception: {e}")
         await asyncio.sleep(2.0)
@@ -98,63 +109,75 @@ async def run_public_stream(
 
     while True:
         try:
-            async with websockets.connect(cfg.ws_public_url, ping_interval=15, max_queue=4096) as ws:
+            async with websockets.connect(cfg.ws_public_url, ping_interval=20, ping_timeout=20, max_queue=4096) as ws:
                 await ws.send(orjson.dumps({"op": "subscribe", "args": topics}).decode("utf-8"))
                 logger.info(f"Подписка активна на {len(states)} инструментов: {list(states.keys())}")
 
-                async for raw in ws:
-                    msg = orjson.loads(raw)
-                    topic = msg.get("topic", "")
-                    if not topic:
-                        continue
+                async def ping_bybit():
+                    while True:
+                        try:
+                            await asyncio.sleep(20.0)
+                            await ws.send(orjson.dumps({"op": "ping"}).decode("utf-8"))
+                        except Exception:
+                            break
 
-                    now_ms = int(msg.get("ts", time.time() * 1000))
-                    parts = topic.split(".")
-                    sym = parts[-1]
-                    st = states.get(sym)
-                    if not st:
-                        continue
+                ping_task = asyncio.create_task(ping_bybit())
+                try:
+                    async for raw in ws:
+                        msg = orjson.loads(raw)
+                        topic = msg.get("topic", "")
+                        if not topic:
+                            continue
 
-                    if topic.startswith("orderbook"):
-                        st.apply_orderbook(msg.get("type", "delta"), msg.get("data", {}), now_ms)
-                    elif topic.startswith("publicTrade"):
-                        trade_data = msg.get("data", [])
-                        st.apply_trades(trade_data)
-                        # Обновление очереди лимитных ордеров
-                        for tr in trade_data:
-                            is_buy = tr.get("S") == "Buy" or tr.get("side") == "Buy"
-                            price = float(tr.get("p", tr.get("price", 0.0)))
-                            qty = float(tr.get("v", tr.get("size", 0.0)))
-                            oms.on_market_trade(sym, is_buy, price, qty)
+                        now_ms = int(msg.get("ts", time.time() * 1000))
+                        parts = topic.split(".")
+                        sym = parts[-1]
+                        st = states.get(sym)
+                        if not st:
+                            continue
 
-                    btc_state = states[cfg.leader_symbol]
+                        if topic.startswith("orderbook"):
+                            st.apply_orderbook(msg.get("type", "delta"), msg.get("data", {}), now_ms)
+                        elif topic.startswith("publicTrade"):
+                            trade_data = msg.get("data", [])
+                            st.apply_trades(trade_data)
+                            # Обновление очереди лимитных ордеров
+                            for tr in trade_data:
+                                is_buy = tr.get("S") == "Buy" or tr.get("side") == "Buy"
+                                price = float(tr.get("p", tr.get("price", 0.0)))
+                                qty = float(tr.get("v", tr.get("size", 0.0)))
+                                oms.on_market_trade(sym, is_buy, price, qty)
 
-                    # 1. Если обновился BTCUSDT -> проверяем Движок 3 (Lead-Lag) по всем альтам
-                    if sym == cfg.leader_symbol:
-                        for alt_sym, alt_st in states.items():
-                            if alt_sym == cfg.leader_symbol:
+                        btc_state = states[cfg.leader_symbol]
+
+                        # 1. Если обновился BTCUSDT -> проверяем Движок 3 (Lead-Lag) по всем альтам
+                        if sym == cfg.leader_symbol:
+                            for alt_sym, alt_st in states.items():
+                                if alt_sym == cfg.leader_symbol:
+                                    continue
+                                sig3 = evaluator.evaluate_engine3_lead_lag(alt_st, btc_state, now_ms)
+                                if sig3:
+                                    await oms.submit_signal(sig3)
+                        else:
+                            # 2. По альткоину проверяем сигналы в порядке приоритета
+                            # Приоритет 1: Движок 2 (Liquidity Sweep & Absorption)
+                            sig2 = evaluator.evaluate_engine2_liquidity_sweep(st, btc_state, now_ms)
+                            if sig2:
+                                await oms.submit_signal(sig2)
                                 continue
-                            sig3 = evaluator.evaluate_engine3_lead_lag(alt_st, btc_state, now_ms)
+
+                            # Приоритет 2: Движок 3 (Lead-Lag)
+                            sig3 = evaluator.evaluate_engine3_lead_lag(st, btc_state, now_ms)
                             if sig3:
                                 await oms.submit_signal(sig3)
-                    else:
-                        # 2. По альткоину проверяем сигналы в порядке приоритета
-                        # Приоритет 1: Движок 2 (Liquidity Sweep & Absorption)
-                        sig2 = evaluator.evaluate_engine2_liquidity_sweep(st, btc_state, now_ms)
-                        if sig2:
-                            await oms.submit_signal(sig2)
-                            continue
+                                continue
 
-                        # Приоритет 2: Движок 3 (Lead-Lag)
-                        sig3 = evaluator.evaluate_engine3_lead_lag(st, btc_state, now_ms)
-                        if sig3:
-                            await oms.submit_signal(sig3)
-                            continue
-
-                        # Приоритет 3: Движок 1 (OBI Breakout)
-                        sig1 = evaluator.evaluate_engine1_obi_breakout(st, now_ms)
-                        if sig1:
-                            await oms.submit_signal(sig1)
+                            # Приоритет 3: Движок 1 (OBI Breakout)
+                            sig1 = evaluator.evaluate_engine1_obi_breakout(st, now_ms)
+                            if sig1:
+                                await oms.submit_signal(sig1)
+                finally:
+                    ping_task.cancel()
 
         except Exception as e:
             logger.error(f"Сбой WebSocket потока данных: {e}. Переподключение через 1.0 сек...")
