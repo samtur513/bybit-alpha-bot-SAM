@@ -69,7 +69,7 @@ class ThreeEnginesEvaluate:
             and buy_2s >= self.cfg.e1_volume_surge_mult * avg_buy_2s
             and dr_ask_400ms >= self.cfg.e1_depletion_threshold
         ):
-            entry = state.best_bid
+            entry = state.best_bid + state.meta.tick_size if state.spread_ticks >= 2.0 else state.best_bid
             tp1 = entry * (1.0 + max(0.0065, 0.85 * natr))
             tp2 = entry * (1.0 + max(0.0140, 1.80 * natr))
             sl = entry * (1.0 - max(0.0040, 0.55 * natr))
@@ -100,7 +100,7 @@ class ThreeEnginesEvaluate:
             and sell_2s >= self.cfg.e1_volume_surge_mult * avg_sell_2s
             and dr_bid_400ms >= self.cfg.e1_depletion_threshold
         ):
-            entry = state.best_ask
+            entry = state.best_ask - state.meta.tick_size if state.spread_ticks >= 2.0 else state.best_ask
             tp1 = entry * (1.0 - max(0.0065, 0.85 * natr))
             tp2 = entry * (1.0 - max(0.0140, 1.80 * natr))
             sl = entry * (1.0 + max(0.0040, 0.55 * natr))
@@ -272,7 +272,7 @@ class ThreeEnginesEvaluate:
                 and r_alt <= self.cfg.e3_alt_reaction_cap * expected_alt_move
                 and lag_spread >= dyn_min_lag
             ):
-                entry = state.best_bid
+                entry = state.best_bid + state.meta.tick_size if state.spread_ticks >= 2.0 else state.best_bid
                 tp1 = entry * (1.0 + max(0.0065, 0.90 * lag_spread))
                 tp2 = entry * (1.0 + max(0.0140, 1.80 * lag_spread))
                 sl = entry * (1.0 - max(0.0040, 0.50 * lag_spread))
@@ -304,7 +304,7 @@ class ThreeEnginesEvaluate:
                 and actual_alt_drop <= self.cfg.e3_alt_reaction_cap * expected_alt_drop
                 and lag_spread >= dyn_min_lag
             ):
-                entry = state.best_ask
+                entry = state.best_ask - state.meta.tick_size if state.spread_ticks >= 2.0 else state.best_ask
                 tp1 = entry * (1.0 - max(0.0065, 0.90 * lag_spread))
                 tp2 = entry * (1.0 - max(0.0140, 1.80 * lag_spread))
                 sl = entry * (1.0 + max(0.0040, 0.50 * lag_spread))

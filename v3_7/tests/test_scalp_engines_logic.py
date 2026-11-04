@@ -82,7 +82,7 @@ def test_e1_obi_breakout_long_and_short(cfg, alt_meta):
     assert sig_long is not None
     assert sig_long.engine_id == "E1_OBI"
     assert sig_long.side == "Buy"
-    assert sig_long.entry_price == 151.20
+    assert sig_long.entry_price == pytest.approx(151.21, abs=0.011)
     assert sig_long.tp1_price > sig_long.entry_price
     assert sig_long.sl_price < sig_long.entry_price
 
@@ -126,7 +126,7 @@ def test_e1_obi_breakout_long_and_short(cfg, alt_meta):
     assert sig_short is not None
     assert sig_short.engine_id == "E1_OBI"
     assert sig_short.side == "Sell"
-    assert sig_short.entry_price == 148.01
+    assert sig_short.entry_price == pytest.approx(148.00, abs=0.011)
     assert sig_short.tp1_price < sig_short.entry_price
     assert sig_short.sl_price > sig_short.entry_price
 

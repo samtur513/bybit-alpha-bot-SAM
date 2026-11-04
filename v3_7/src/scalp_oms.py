@@ -174,10 +174,15 @@ class ScalpOMS:
 
         # Оценка объема очереди перед нами (FIFO)
         if intent.side == "Buy":
-            # Берем объем лучшего бида, если цена совпадает
-            queue_vol = state.bids.get(intent.entry_price, state.sorted_bids[0][1] if state.sorted_bids else 0.0)
+            if intent.entry_price > state.best_bid:
+                queue_vol = 0.0
+            else:
+                queue_vol = state.bids.get(intent.entry_price, state.sorted_bids[0][1] if state.sorted_bids else 0.0)
         else:
-            queue_vol = state.asks.get(intent.entry_price, state.sorted_asks[0][1] if state.sorted_asks else 0.0)
+            if intent.entry_price < state.best_ask:
+                queue_vol = 0.0
+            else:
+                queue_vol = state.asks.get(intent.entry_price, state.sorted_asks[0][1] if state.sorted_asks else 0.0)
 
         pending = PendingLimitOrder(
             symbol=intent.symbol,
@@ -318,24 +323,27 @@ class ScalpOMS:
                 new_price = st.best_ask
 
             if price_ran_away and age_ms >= 200:
-                if pending.amend_count < 2:
-                    # Подтягивание цены (Order Chasing)
+                if pending.amend_count < 3:
+                    # Подтягивание цены (Order Chasing с приоритетом внутри спрэда)
                     pending.amend_count += 1
-                    pending.price = new_price
+                    if pending.side == "Buy":
+                        new_p = st.best_bid + st.meta.tick_size if st.spread_ticks >= 2.0 else st.best_bid
+                        q_vol = 0.0 if st.spread_ticks >= 2.0 else (st.sorted_bids[0][1] if st.sorted_bids else 0.0)
+                    else:
+                        new_p = st.best_ask - st.meta.tick_size if st.spread_ticks >= 2.0 else st.best_ask
+                        q_vol = 0.0 if st.spread_ticks >= 2.0 else (st.sorted_asks[0][1] if st.sorted_asks else 0.0)
+
+                    pending.price = new_p
                     pending.placed_ms = now_ms
-                    pending.queue_ahead_vol = (
-                        st.sorted_bids[0][1] if pending.side == "Buy" and st.sorted_bids else (
-                            st.sorted_asks[0][1] if st.sorted_asks else 0.0
-                        )
-                    )
-                    logger.info(f"[ORDER_CHASE] {sym} #{pending.amend_count} -> New Price={new_price:.5f}")
+                    pending.queue_ahead_vol = q_vol
+                    logger.info(f"[ORDER_CHASE] {sym} #{pending.amend_count} -> New Price={new_p:.5f} (QueueAhead={q_vol:.1f})")
 
                     if not self.cfg.paper_trading and self.ws_trade:
                         amend_args = {
                             "category": "linear",
                             "symbol": sym,
                             "orderLinkId": pending.order_link_id,
-                            "price": f"{new_price:.8f}".rstrip("0").rstrip("."),
+                            "price": f"{new_p:.8f}".rstrip("0").rstrip("."),
                         }
                         frame = self._build_trade_order_frame("order.amend", amend_args)
                         await self.ws_trade.send(frame.decode("utf-8"))
@@ -348,10 +356,10 @@ class ScalpOMS:
                         frame = self._build_trade_order_frame("order.cancel", cancel_args)
                         await self.ws_trade.send(frame.decode("utf-8"))
 
-            # Жесткий таймаут ожидания исполнения (1.5 сек)
-            elif age_ms >= 1500:
+            # Жесткий таймаут ожидания исполнения (3.5 сек)
+            elif age_ms >= 3500:
                 self.pending_orders.pop(sym, None)
-                logger.info(f"[ORDER_TIMEOUT] {sym} отменен по таймауту 1.5 с")
+                logger.info(f"[ORDER_TIMEOUT] {sym} отменен по таймауту 3.5 с")
 
         # ---------------------------------------------------------------------
         # 2. ОБСЛУЖИВАНИЕ АКТИВНЫХ ПОЗИЦИЙ
