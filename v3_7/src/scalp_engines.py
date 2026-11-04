@@ -36,19 +36,28 @@ class ThreeEnginesEvaluate:
     # ДВИЖОК 1: OBI + FLOW TOXICITY BREAKOUT (LONG & SHORT)
     # =========================================================================
     def evaluate_engine1_obi_breakout(
-        self, state: SymbolMicrostructureState, now_ms: int
+        self, state: SymbolMicrostructureState, now_ms: int, btc_state: Optional[SymbolMicrostructureState] = None
     ) -> Optional[SignalIntent]:
         m = state.meta
         if state.mid_price <= 0 or state.spread_ticks > self.cfg.e1_max_spread_ticks:
             return None
 
+        # Проверка макро-тренда BTC если передан btc_state
+        btc_bull = True
+        btc_bear = True
+        if btc_state and btc_state.mid_price > 0:
+            bm = btc_state.meta
+            btc_bull = (btc_state.mid_price >= bm.vwap_session) and (bm.ema9_5m >= bm.ema21_5m)
+            btc_bear = (btc_state.mid_price <= bm.vwap_session) and (bm.ema9_5m <= bm.ema21_5m)
+
         natr = max(m.natr_5m, self.cfg.e1_min_natr_5m)
         tfi_2s, buy_2s, sell_2s, avg_buy_2s, avg_sell_2s = state.get_trade_flow_metrics(now_ms, 2000)
         _, dr_ask_400ms, dr_bid_400ms = state.get_depletion_and_return(now_ms, 400)
 
-        # 1. LONG УСЛОВИЯ
+        # 1. LONG УСЛОВИЯ (строго по тренду BTC и альткоина)
         long_trend_ok = (
-            state.mid_price > m.vwap_session
+            btc_bull
+            and state.mid_price > m.vwap_session
             and m.ema9_5m > m.ema21_5m
             and m.er_15m >= 0.38
         )
@@ -61,9 +70,9 @@ class ThreeEnginesEvaluate:
             and dr_ask_400ms >= self.cfg.e1_depletion_threshold
         ):
             entry = state.best_bid
-            tp1 = entry * (1.0 + max(0.0042, 0.60 * natr))
-            tp2 = entry * (1.0 + max(0.0080, 1.25 * natr))
-            sl = entry * (1.0 - min(0.0028, 0.35 * natr))
+            tp1 = entry * (1.0 + max(0.0065, 0.85 * natr))
+            tp2 = entry * (1.0 + max(0.0140, 1.80 * natr))
+            sl = entry * (1.0 - max(0.0040, 0.55 * natr))
 
             return SignalIntent(
                 engine_id="E1_OBI",
@@ -78,9 +87,10 @@ class ThreeEnginesEvaluate:
                 reason=f"LONG OBI={state.obi:.2f} TFI={tfi_2s:.2f} DR_ask={dr_ask_400ms:.2f}",
             )
 
-        # 2. SHORT УСЛОВИЯ
+        # 2. SHORT УСЛОВИЯ (строго по нисходящему тренду BTC и альткоина)
         short_trend_ok = (
-            state.mid_price < m.vwap_session
+            btc_bear
+            and state.mid_price < m.vwap_session
             and m.ema9_5m < m.ema21_5m
             and m.er_15m >= 0.38
         )
@@ -93,9 +103,9 @@ class ThreeEnginesEvaluate:
             and dr_bid_400ms >= self.cfg.e1_depletion_threshold
         ):
             entry = state.best_ask
-            tp1 = entry * (1.0 - max(0.0042, 0.60 * natr))
-            tp2 = entry * (1.0 - max(0.0080, 1.25 * natr))
-            sl = entry * (1.0 + min(0.0028, 0.35 * natr))
+            tp1 = entry * (1.0 - max(0.0065, 0.85 * natr))
+            tp2 = entry * (1.0 - max(0.0140, 1.80 * natr))
+            sl = entry * (1.0 + max(0.0040, 0.55 * natr))
 
             return SignalIntent(
                 engine_id="E1_OBI",
@@ -217,7 +227,7 @@ class ThreeEnginesEvaluate:
         return None
 
     # =========================================================================
-    # ДВИЖОК 3: LEAD-LAG BETA-CATCHUP TO BTC (LONG & SHORT)
+    # ДВИЖОК 3: LEAD-LAG BETA-CATCHUP TO BTC (LONG & SHORT) - ВЫСШИЙ ПРИОРИТЕТ
     # =========================================================================
     def evaluate_engine3_lead_lag(
         self, state: SymbolMicrostructureState, btc_state: SymbolMicrostructureState, now_ms: int
@@ -246,9 +256,9 @@ class ThreeEnginesEvaluate:
                 and lag_spread >= self.cfg.e3_min_lag_spread
             ):
                 entry = state.best_bid
-                tp1 = entry * (1.0 + max(0.0038, 0.80 * lag_spread))
-                tp2 = entry * (1.0 + max(0.0065, 1.15 * lag_spread))
-                sl = entry * (1.0 - 0.0025)
+                tp1 = entry * (1.0 + max(0.0065, 0.90 * lag_spread))
+                tp2 = entry * (1.0 + max(0.0140, 1.80 * lag_spread))
+                sl = entry * (1.0 - max(0.0040, 0.50 * lag_spread))
 
                 return SignalIntent(
                     engine_id="E3_LEADLAG",
@@ -278,9 +288,9 @@ class ThreeEnginesEvaluate:
                 and lag_spread >= self.cfg.e3_min_lag_spread
             ):
                 entry = state.best_ask
-                tp1 = entry * (1.0 - max(0.0038, 0.80 * lag_spread))
-                tp2 = entry * (1.0 - max(0.0065, 1.15 * lag_spread))
-                sl = entry * (1.0 + 0.0025)
+                tp1 = entry * (1.0 - max(0.0065, 0.90 * lag_spread))
+                tp2 = entry * (1.0 - max(0.0140, 1.80 * lag_spread))
+                sl = entry * (1.0 + max(0.0040, 0.50 * lag_spread))
 
                 return SignalIntent(
                     engine_id="E3_LEADLAG",

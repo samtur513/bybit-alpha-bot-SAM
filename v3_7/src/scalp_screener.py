@@ -34,11 +34,18 @@ from v3_7.src.microstructure import InstrumentMeta
 
 logger = logging.getLogger("ScalpUniverseScreener")
 
-NON_CRYPTO_SYMBOLS = {
+TIER1_INSTITUTIONAL_SYMBOLS = [
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "DOGEUSDT", "XRPUSDT",
+    "NEARUSDT", "SUIUSDT", "1000PEPEUSDT", "AVAXUSDT", "LINKUSDT",
+    "ADAUSDT", "BNBUSDT", "APTUSDT"
+]
+
+NON_CRYPTO_OR_TOXIC_SYMBOLS = {
     "CLUSDT", "XAUUSDT", "XAGUSDT", "SOXLUSDT", "SOXSUSDT", "SPCXUSDT", "MSTRUSDT",
     "SKHYNIXUSDT", "SNDKUSDT", "MUUSDT", "KORUUSDT", "NVDAUSDT", "TSLAUSDT", "AAPLUSDT",
     "AMZNUSDT", "GOOGLUSDT", "METAUSDT", "MSFTUSDT", "PLTRUSDT", "COINUSDT", "INTCUSDT",
-    "SKHYUSDT", "AMDUSDT", "BABAUSDT", "BIDUUSDT", "PDDUSDT", "TCEHYUSDT"
+    "SKHYUSDT", "AMDUSDT", "BABAUSDT", "BIDUUSDT", "PDDUSDT", "TCEHYUSDT",
+    "CLANKERUSDT", "PUMPFUNUSDT", "ACTUSDT", "FARTCOINUSDT"
 }
 
 
@@ -87,15 +94,19 @@ class UniverseScreener:
             candidates = []
             for t in tick_data.get("result", {}).get("list", []):
                 sym = t["symbol"]
-                if sym in NON_CRYPTO_SYMBOLS or sym not in spec_map:
+                if sym in NON_CRYPTO_OR_TOXIC_SYMBOLS or sym not in spec_map:
                     continue
                 turnover = float(t.get("turnover24h", 0.0))
                 last_p = float(t.get("lastPrice", 0.0))
-                if turnover >= 35_000_000 and last_p > 0:
+                # Институциональные монеты отбираются приоритетно; динамические - с оборотом от $60M
+                is_tier1 = sym in TIER1_INSTITUTIONAL_SYMBOLS
+                if (is_tier1 or turnover >= 60_000_000) and last_p > 0:
                     tick_sz = spec_map[sym][0]
                     rel_tick = tick_sz / last_p
                     if 0.00004 <= rel_tick <= 0.00100 or sym == self.cfg.leader_symbol:
-                        candidates.append((sym, turnover))
+                        # Приоритет институциональным тикерам с высоким оборотом
+                        score = turnover * (3.0 if is_tier1 else 1.0)
+                        candidates.append((sym, score))
 
             candidates.sort(key=lambda x: x[1], reverse=True)
             selected_syms = [self.cfg.leader_symbol] + [

@@ -389,16 +389,10 @@ class ScalpOMS:
                     continue
 
             # -----------------------------------------------------------------
-            # В. Проверка Microstructure Flip Exit для Движка 1 (E1_OBI)
+            # В. Защита от спуфинга: OBI_FLIP_EXIT отключен для предотвращения
+            # ложных срабатываний при снятии заявок маркет-мейкерами (Spoof Trap)
+            # Позиция управляется строго через TP1/TP2, SL и Time-Stop.
             # -----------------------------------------------------------------
-            if pos.engine_id == "E1_OBI" and hold_sec <= 15.0 and not pos.tp1_filled:
-                tfi_1s, _, _, _, _ = st.get_trade_flow_metrics(now_ms, 1000)
-                if is_long and st.obi <= -0.35 and tfi_1s <= -0.50:
-                    await self._close_position(pos, st.best_ask, is_maker=True, reason="OBI_FLIP_EXIT")
-                    continue
-                elif not is_long and st.obi >= 0.35 and tfi_1s >= 0.50:
-                    await self._close_position(pos, st.best_bid, is_maker=True, reason="OBI_FLIP_EXIT")
-                    continue
 
             # -----------------------------------------------------------------
             # Г. Проверка Take-Profit 1 (Penny-Perfect 50% фиксация + SL в БУ)

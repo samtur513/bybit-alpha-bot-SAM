@@ -245,6 +245,7 @@ HTML_PAGE = """<!DOCTYPE html>
                 <div class="card-label">Эквити портфеля <span>$300 База</span></div>
                 <div class="card-value" id="val-equity">$300.00</div>
                 <div class="val-sub val-green" id="val-pnl">+0.00 (+0.0%)</div>
+                <div style="font-size: 11px; color: var(--text-muted); margin-top: 6px;" id="val-trades-info">Сделок: 0 | Винрейт: 0.0%</div>
             </div>
 
             <div class="card">
@@ -487,6 +488,20 @@ HTML_PAGE = """<!DOCTYPE html>
                 const clBody = document.getElementById('closed-body');
                 const closed = data.closed_trades || [];
                 document.getElementById('closed-count').textContent = closed.length + ' сделок';
+
+                let wins = 0;
+                let losses = 0;
+                closed.forEach(t => {
+                    const pnl = Number(t.net_pnl || 0.0);
+                    if (pnl > 0) wins++;
+                    else if (pnl < 0) losses++;
+                });
+                const wr = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : '0.0';
+                const tradesEl = document.getElementById('val-trades-info');
+                if (tradesEl) {
+                    tradesEl.innerHTML = `Сделок: <strong style="color: var(--accent-cyan);">${closed.length}</strong> (W: ${wins} / L: ${losses}) | WinRate: <strong>${wr}%</strong>`;
+                }
+
                 if (closed.length === 0) {
                     clBody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 20px;">Нет закрытых сделок</td></tr>';
                 } else {
