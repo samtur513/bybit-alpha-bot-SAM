@@ -75,6 +75,7 @@ HTML_PAGE = """<!DOCTYPE html>
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
     <noscript><link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet"></noscript>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
             --bg-dark: #080c14;
@@ -213,6 +214,9 @@ HTML_PAGE = """<!DOCTYPE html>
         }
         .pos-long { background: rgba(16, 185, 129, 0.2); color: var(--accent-green); border: 1px solid rgba(16, 185, 129, 0.4); }
         .pos-short { background: rgba(244, 63, 94, 0.2); color: var(--accent-red); border: 1px solid rgba(244, 63, 94, 0.4); }
+        .badge-win { background: rgba(16, 185, 129, 0.2); color: var(--accent-green); border: 1px solid rgba(16, 185, 129, 0.4); }
+        .badge-loss { background: rgba(244, 63, 94, 0.2); color: var(--accent-red); border: 1px solid rgba(244, 63, 94, 0.4); }
+        .badge-reason { padding: 3px 8px; border-radius: 4px; font-weight: 700; font-size: 10px; font-family: 'JetBrains Mono', monospace; }
 
         .log-box {
             background: #040711;
@@ -266,21 +270,37 @@ HTML_PAGE = """<!DOCTYPE html>
             </div>
 
             <div class="card">
-                <div class="card-label">Активность <span>L2 Queue</span></div>
-                <div class="card-value color-blue" id="active-positions-count">0</div>
+                <div class="card-label">Винрейт и результативность <span>Win Rate</span></div>
+                <div class="card-value color-green" id="win-rate">0.0%</div>
                 <div class="card-sub">
-                    <span>Лимиты в стакане: <strong id="pending-orders-count">0</strong></span>
-                    <span>Режим: <strong id="trading-mode" class="color-gold">PAPER</strong></span>
+                    <span>Побед / Потерь: <strong id="wins-losses">0 / 0</strong></span>
+                    <span>Всего сделок: <strong id="trades-count">0</strong></span>
                 </div>
             </div>
 
             <div class="card">
-                <div class="card-label">Защитный щит <span>News Shield</span></div>
-                <div class="card-value color-green" id="news-status">V1.2 ACTIVE</div>
+                <div class="card-label">Активность и Щит <span>L2 Queue</span></div>
+                <div class="card-value color-blue" id="limits-pos-display">0 поз / 0 лим</div>
                 <div class="card-sub">
-                    <span>Circuit Breaker: <strong id="circuit-status">OK</strong></span>
-                    <span>Монет в пуле: <strong id="coins-count">8</strong></span>
+                    <span>Монет в пуле: <strong id="coins-count">16</strong></span>
+                    <span>Режим: <strong id="trading-mode" class="color-gold">PAPER</strong></span>
                 </div>
+            </div>
+        </div>
+
+        <!-- Performance Equity & PnL Curve Chart -->
+        <div class="card" style="margin-bottom: 24px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <div class="section-title" style="margin-bottom: 0;">📈 Динамика депозита и результатов сделок (Live Scalp Curve)</div>
+                    <span class="badge" style="background: rgba(0, 242, 254, 0.15); color: var(--accent-cyan); border: 1px solid rgba(0, 242, 254, 0.3);">LIVE REAL-TIME</span>
+                </div>
+                <div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-muted);">
+                    Депозит старт: <strong style="color: var(--text-main);">$300.00</strong> | Текущее эквити: <strong id="chart-curr-equity" style="color: var(--accent-cyan);">$300.00</strong>
+                </div>
+            </div>
+            <div style="height: 190px; position: relative;">
+                <canvas id="equityChart"></canvas>
             </div>
         </div>
 
@@ -338,6 +358,37 @@ HTML_PAGE = """<!DOCTYPE html>
             </div>
         </div>
 
+        <div style="margin-bottom: 24px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <div class="section-title" style="margin-bottom: 0;">📜 История закрытых сделок (PnL & Результаты исполнения)</div>
+                <span id="closed-count-badge" style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--accent-cyan); font-weight: 700;">0 сделок</span>
+            </div>
+            <div class="card" style="padding: 0; overflow-x: auto;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Время (UTC)</th>
+                            <th>Символ</th>
+                            <th>Движок</th>
+                            <th>Сторона</th>
+                            <th>Вход</th>
+                            <th>Выход</th>
+                            <th>Объем</th>
+                            <th>Чистый PnL</th>
+                            <th>Причина выхода</th>
+                        </tr>
+                    </thead>
+                    <tbody id="closed-trades-body">
+                        <tr>
+                            <td colspan="9" style="text-align: center; color: var(--text-muted); padding: 24px;">
+                                Нет закрытых сделок. Накопление торговой истории...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
         <div>
             <div class="section-title">📜 Журнал событий и исполнения (25 мс)</div>
             <div class="log-box" id="log-console">
@@ -347,6 +398,8 @@ HTML_PAGE = """<!DOCTYPE html>
     </div>
 
     <script>
+        let chartInstance = null;
+
         function escapeHtml(text) {
             return String(text)
                 .replace(/&/g, "&amp;")
@@ -356,17 +409,67 @@ HTML_PAGE = """<!DOCTYPE html>
                 .replace(/'/g, "&#039;");
         }
 
+        function initEquityChart() {
+            const ctx = document.getElementById('equityChart');
+            if (!ctx || typeof Chart === 'undefined') return;
+            chartInstance = new Chart(ctx.getContext('2d'), {
+                type: 'line',
+                data: {
+                    labels: ['Старт'],
+                    datasets: [{
+                        label: 'Эквити ($)',
+                        data: [300.0],
+                        borderColor: '#00f2fe',
+                        backgroundColor: 'rgba(0, 242, 254, 0.08)',
+                        fill: true,
+                        tension: 0.25,
+                        pointRadius: 4,
+                        pointHoverRadius: 6,
+                        borderWidth: 2,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: (c) => ` Эквити: $${Number(c.parsed.y).toFixed(2)}`
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: 'rgba(255, 255, 255, 0.04)' },
+                            ticks: { color: '#64748b', font: { family: "'JetBrains Mono', monospace", size: 10 } }
+                        },
+                        y: {
+                            grid: { color: 'rgba(255, 255, 255, 0.04)' },
+                            ticks: {
+                                color: '#94a3b8',
+                                font: { family: "'JetBrains Mono', monospace", size: 11 },
+                                callback: (v) => '$' + Number(v).toFixed(2)
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
         async function updateDashboard() {
             try {
                 const res = await fetch('/api/status');
                 if (!res.ok) throw new Error("HTTP " + res.status);
                 const data = await res.json();
 
-                document.getElementById('total-equity').innerText = '$' + (data.equity || 300.0).toFixed(2);
-                document.getElementById('initial-capital').innerText = '$' + (data.initial_capital || 300.0).toFixed(2);
+                const initCap = Number(data.initial_capital || 300.0);
+                const currEq = Number(data.equity || 300.0);
+                document.getElementById('total-equity').innerText = '$' + currEq.toFixed(2);
+                document.getElementById('initial-capital').innerText = '$' + initCap.toFixed(2);
                 
                 const netPnl = data.net_pnl || 0.0;
-                const pnlPct = ((netPnl / (data.initial_capital || 300.0)) * 100);
+                const pnlPct = ((netPnl / initCap) * 100);
                 const pnlEl = document.getElementById('pnl-percent');
                 pnlEl.innerText = (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%';
                 pnlEl.className = pnlPct >= 0 ? 'color-green' : 'color-red';
@@ -376,17 +479,41 @@ HTML_PAGE = """<!DOCTYPE html>
                 rPnlEl.className = 'card-value ' + (data.realized_pnl >= 0 ? 'color-green' : 'color-red');
 
                 document.getElementById('unrealized-pnl').innerText = '$' + (data.unrealized_pnl || 0).toFixed(2);
-                document.getElementById('trades-count').innerText = data.total_trades_count || 0;
-                document.getElementById('active-positions-count').innerText = (data.open_positions || []).length;
-                document.getElementById('pending-orders-count').innerText = (data.pending_orders || []).length;
+
+                // Closed trades & Win Rate calculation
+                const closed = data.closed_trades || [];
+                let wins = 0;
+                let losses = 0;
+                closed.forEach(t => {
+                    const pnlVal = Number(t.net_pnl_usdt !== undefined ? t.net_pnl_usdt : (t.net_pnl || 0.0));
+                    if (pnlVal > 0) wins++;
+                    else if (pnlVal < 0) losses++;
+                });
+                const totalClosed = closed.length;
+                const winRate = totalClosed > 0 ? ((wins / totalClosed) * 100) : 0.0;
+                
+                document.getElementById('win-rate').innerText = winRate.toFixed(1) + '%';
+                document.getElementById('wins-losses').innerText = `${wins} / ${losses}`;
+                document.getElementById('trades-count').innerText = totalClosed;
+
+                const openPosCount = (data.open_positions || []).length;
+                const pendingOrdersCount = (data.pending_orders || []).length;
+                const limitsPosEl = document.getElementById('limits-pos-display');
+                if (limitsPosEl) limitsPosEl.innerText = `${openPosCount} поз / ${pendingOrdersCount} лим`;
+
                 document.getElementById('trading-mode').innerText = data.mode || "PAPER";
                 document.getElementById('coins-count').innerText = (data.monitored_symbols || []).length;
-                document.getElementById('circuit-status').innerText = data.circuit_breaker ? "TRIPPED" : "HEALTHY";
                 
                 const isOnline = data.stream_ready !== false;
                 document.getElementById('connection-status').innerText = isOnline ? '● WEBSOCKET L2 ONLINE' : '● WEBSOCKET RECONNECTING...';
                 document.getElementById('connection-status').style.color = isOnline ? 'var(--accent-green)' : 'var(--accent-gold)';
                 document.getElementById('last-updated').innerText = new Date().toISOString().substring(11, 19) + ' UTC';
+
+                const chartCurrEl = document.getElementById('chart-curr-equity');
+                if (chartCurrEl) chartCurrEl.innerText = '$' + currEq.toFixed(2);
+
+                const closedCountBadge = document.getElementById('closed-count-badge');
+                if (closedCountBadge) closedCountBadge.innerText = `${totalClosed} сделок`;
 
                 // Render positions
                 const posBody = document.getElementById('positions-table-body');
@@ -425,6 +552,92 @@ HTML_PAGE = """<!DOCTYPE html>
                 } else {
                     ordBody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 18px;">Очередь пуста.</td></tr>`;
                 }
+
+                // Render Closed Trades Table (newest first)
+                const closedBody = document.getElementById('closed-trades-body');
+                if (closedBody) {
+                    if (totalClosed === 0) {
+                        closedBody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 24px;">Нет закрытых сделок. Накопление торговой истории...</td></tr>`;
+                    } else {
+                        const reversedClosed = [...closed].reverse();
+                        closedBody.innerHTML = reversedClosed.map(t => {
+                            const pnl = Number(t.net_pnl_usdt !== undefined ? t.net_pnl_usdt : (t.net_pnl || 0.0));
+                            const pnlClass = pnl >= 0 ? 'color-green' : 'color-red';
+                            const side = (t.side || 'BUY').toUpperCase();
+                            const isBuy = side === 'BUY';
+                            const sideBadge = `<span class="pos-badge ${isBuy ? 'pos-long' : 'pos-short'}">${side}</span>`;
+                            const engBadge = `<span style="color: var(--accent-pink); font-weight:700;">${escapeHtml(t.engine_id || 'SCALP')}</span>`;
+                            
+                            let timeStr = '--:--:--';
+                            if (t.timestamp) {
+                                try {
+                                    timeStr = new Date(t.timestamp * 1000).toISOString().substring(11, 19);
+                                } catch (e) {}
+                            }
+
+                            let reasonBadge = `<span class="badge-reason" style="background: rgba(148, 163, 184, 0.15); color: #94a3b8;">${escapeHtml(t.reason || 'CLOSE')}</span>`;
+                            if (t.reason && t.reason.includes('TP2')) {
+                                reasonBadge = `<span class="badge-reason badge-win">TP2_TARGET</span>`;
+                            } else if (t.reason && t.reason.includes('TP1')) {
+                                reasonBadge = `<span class="badge-reason" style="background: rgba(0, 242, 254, 0.2); color: #00f2fe;">TP1_FILLED</span>`;
+                            } else if (t.reason && t.reason.includes('STOP_LOSS')) {
+                                reasonBadge = `<span class="badge-reason badge-loss">STOP_LOSS</span>`;
+                            } else if (t.reason && t.reason.includes('TIME_STOP')) {
+                                reasonBadge = `<span class="badge-reason" style="background: rgba(56, 189, 248, 0.2); color: #38bdf8;">TIME_STOP</span>`;
+                            } else if (t.reason && t.reason.includes('OBI_FLIP')) {
+                                reasonBadge = `<span class="badge-reason" style="background: rgba(245, 158, 11, 0.2); color: #f59e0b;">OBI_FLIP</span>`;
+                            } else if (t.reason && t.reason.includes('REVERSAL')) {
+                                reasonBadge = `<span class="badge-reason" style="background: rgba(236, 72, 153, 0.2); color: #ec4899;">LEADER_REVERSAL</span>`;
+                            }
+
+                            return `
+                                <tr>
+                                    <td style="color: var(--text-muted);">${timeStr} UTC</td>
+                                    <td><strong>${escapeHtml(t.symbol)}</strong></td>
+                                    <td>${engBadge}</td>
+                                    <td>${sideBadge}</td>
+                                    <td>${Number(t.entry_price || 0).toFixed(4)}</td>
+                                    <td>${Number(t.exit_price || 0).toFixed(4)}</td>
+                                    <td>${Number(t.initial_qty || t.remaining_qty || 0).toFixed(4)}</td>
+                                    <td class="${pnlClass}" style="font-weight: 700;">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(4)}</td>
+                                    <td>${reasonBadge}</td>
+                                </tr>
+                            `;
+                        }).join('');
+                    }
+                }
+
+                // Update Equity & PnL Curve Chart
+                if (chartInstance) {
+                    const labels = ['Старт'];
+                    const points = [initCap];
+                    let runningEq = initCap;
+                    
+                    closed.forEach((t, idx) => {
+                        const pnl = Number(t.net_pnl_usdt !== undefined ? t.net_pnl_usdt : (t.net_pnl || 0.0));
+                        runningEq += pnl;
+                        labels.push(`#${idx + 1} ${t.symbol}`);
+                        points.push(Number(runningEq.toFixed(2)));
+                    });
+
+                    // Add current live equity point if different from last trade point
+                    if (points.length === 1 || Math.abs(points[points.length - 1] - currEq) > 0.001) {
+                        labels.push('Текущее');
+                        points.push(Number(currEq.toFixed(2)));
+                    }
+
+                    chartInstance.data.labels = labels;
+                    chartInstance.data.datasets[0].data = points;
+                    
+                    const isProfit = currEq >= initCap;
+                    chartInstance.data.datasets[0].borderColor = isProfit ? '#00f2fe' : '#f43f5e';
+                    chartInstance.data.datasets[0].pointBackgroundColor = isProfit ? '#00f2fe' : '#f43f5e';
+                    chartInstance.data.datasets[0].backgroundColor = isProfit ? 'rgba(0, 242, 254, 0.08)' : 'rgba(244, 63, 94, 0.08)';
+                    chartInstance.update();
+                } else if (typeof Chart !== 'undefined') {
+                    initEquityChart();
+                }
+
             } catch (e) {
                 console.error("updateDashboard error:", e);
                 document.getElementById('connection-status').innerText = '● DISCONNECTED';
@@ -449,6 +662,7 @@ HTML_PAGE = """<!DOCTYPE html>
         }
 
         window.addEventListener('DOMContentLoaded', () => {
+            initEquityChart();
             updateDashboard();
             fetchLogs();
             setInterval(updateDashboard, 1500);
