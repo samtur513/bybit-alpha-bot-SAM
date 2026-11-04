@@ -288,32 +288,37 @@ HTML_PAGE = """<!DOCTYPE html>
                 if (!res.ok) return;
                 const data = await res.json();
 
-                document.getElementById('equityVal').textContent = '$' + (data.equity_usdt || 300).toFixed(2);
-                const pnl = data.daily_pnl_usdt || 0;
+                document.getElementById('equityVal').textContent = '$' + (data.capital || data.equity || 300).toFixed(2);
+                const pnl = data.realized_pnl !== undefined ? data.realized_pnl : (data.daily_pnl_usdt || 0);
                 const pnlEl = document.getElementById('pnlVal');
                 pnlEl.textContent = (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toFixed(2);
                 pnlEl.style.color = pnl > 0 ? 'var(--accent-green)' : (pnl < 0 ? 'var(--accent-red)' : 'var(--text-muted)');
 
-                const posCnt = data.active_positions_count || 0;
-                const ordCnt = data.pending_orders_count || 0;
+                const posCnt = (data.open_positions && Array.isArray(data.open_positions)) ? data.open_positions.length : (data.active_positions_count || 0);
+                const ordCnt = (data.pending_orders && Array.isArray(data.pending_orders)) ? data.pending_orders.length : (data.pending_orders_count || 0);
                 document.getElementById('posCount').textContent = posCnt + ' / ' + ordCnt;
                 document.getElementById('scratchCount').textContent = data.scratch_count || 0;
-                document.getElementById('winRateVal').textContent = (data.win_rate_pct || 0).toFixed(0) + '% (' + (data.closed_trades_count || 0) + ')';
+                
+                const closedTrades = data.closed_trades || [];
+                const winCount = closedTrades.filter(t => (t.net_pnl_usdt !== undefined ? t.net_pnl_usdt : (t.net_pnl || 0)) > 0).length;
+                const winRate = closedTrades.length > 0 ? (winCount / closedTrades.length * 100) : 0;
+                document.getElementById('winRateVal').textContent = winRate.toFixed(0) + '% (' + closedTrades.length + ')';
 
                 // Radar Z_OFI
-                const zOfiMap = data.z_ofi_radar || {};
+                const radarData = data.radar || {};
                 const radarBody = document.getElementById('radarTableBody');
-                const symbols = Object.keys(zOfiMap);
+                const symbols = Object.keys(radarData);
                 if (symbols.length > 0) {
                     radarBody.innerHTML = symbols.map(sym => {
-                        const z = zOfiMap[sym] || 0.0;
+                        const item = radarData[sym] || {};
+                        const z = item.z_ofi !== undefined ? item.z_ofi : 0.0;
                         const zColor = z > 1.5 ? 'var(--accent-green)' : (z < -1.5 ? 'var(--accent-red)' : 'var(--text-muted)');
                         const flowDesc = z > 2.0 ? 'Агрессивные покупки (+Flow)' : (z < -2.0 ? 'Агрессивные продажи (-Flow)' : 'Нейтральный баланс');
                         return `<tr>
                             <td style="font-weight:700;">${sym}</td>
-                            <td>$${(data.current_prices && data.current_prices[sym] ? data.current_prices[sym] : 0).toFixed(4)}</td>
-                            <td>1.0</td>
-                            <td>+0.15</td>
+                            <td>$${Number(item.mid_price || 0).toFixed(4)}</td>
+                            <td>${item.spread_ticks || 1.0}</td>
+                            <td>${(item.obi > 0 ? '+' : '')}${Number(item.obi || 0).toFixed(3)}</td>
                             <td style="color:${zColor}; font-weight:700;">${z > 0 ? '+' : ''}${z.toFixed(2)}</td>
                             <td><span style="font-size:11px; color:#cbd5e1;">${flowDesc}</span></td>
                         </tr>`;
@@ -322,22 +327,22 @@ HTML_PAGE = """<!DOCTYPE html>
 
                 // Positions
                 const posBody = document.getElementById('posTableBody');
-                const positions = Object.values(data.active_positions || {});
+                const positions = Array.isArray(data.open_positions) ? data.open_positions : Object.values(data.open_positions || {});
                 if (positions.length === 0) {
                     posBody.innerHTML = '<tr><td colspan="9" style="text-align:center; color: var(--text-muted);">Нет открытых позиций</td></tr>';
                 } else {
                     posBody.innerHTML = positions.map(p => {
-                        const isLong = p.side === 'Buy';
+                        const isLong = p.direction === 'LONG' || p.side === 'Buy';
                         return `<tr>
                             <td style="font-weight:700;">${p.symbol}</td>
-                            <td><span style="background:rgba(139,92,246,0.2); padding:2px 6px; border-radius:4px; font-size:11px;">${p.engine_id}</span></td>
+                            <td><span style="background:rgba(139,92,246,0.2); padding:2px 6px; border-radius:4px; font-size:11px;">${p.engine_id || 'OMS'}</span></td>
                             <td style="color:${isLong ? 'var(--accent-green)' : 'var(--accent-red)'}; font-weight:700;">${isLong ? 'LONG' : 'SHORT'}</td>
                             <td>${p.qty}</td>
-                            <td>$${p.entry_price.toFixed(4)}</td>
-                            <td>$${(p.entry_price).toFixed(4)}</td>
-                            <td style="color:var(--accent-red);">$${p.sl_price.toFixed(4)}</td>
-                            <td style="color:var(--accent-cyan);">$${p.tp1_price.toFixed(4)}</td>
-                            <td>${((Date.now() - p.opened_ms)/1000).toFixed(1)}с</td>
+                            <td>$${Number(p.entry_price || 0).toFixed(4)}</td>
+                            <td>$${Number(p.current_price || p.entry_price || 0).toFixed(4)}</td>
+                            <td style="color:var(--accent-red);">$${Number(p.stop_loss || p.sl_price || 0).toFixed(4)}</td>
+                            <td style="color:var(--accent-cyan);">$${Number(p.take_profit_1 || p.tp1_price || 0).toFixed(4)}</td>
+                            <td>${p.opened_ms ? ((Date.now() - p.opened_ms)/1000).toFixed(1) : '0'}с</td>
                         </tr>`;
                     }).join('');
                 }
@@ -348,17 +353,19 @@ HTML_PAGE = """<!DOCTYPE html>
                 if (trades.length === 0) {
                     tradeBody.innerHTML = '<tr><td colspan="8" style="text-align:center; color: var(--text-muted);">История сделок пуста</td></tr>';
                 } else {
-                    tradeBody.innerHTML = trades.slice(0, 15).map(t => {
-                        const isProfit = t.net_pnl_usdt >= 0;
+                    tradeBody.innerHTML = trades.slice(0, 15).reverse().map(t => {
+                        const pnl = Number(t.net_pnl_usdt !== undefined ? t.net_pnl_usdt : (t.net_pnl || 0.0));
+                        const isProfit = pnl >= 0;
+                        const isLong = t.side === 'Buy' || t.direction === 'LONG';
                         return `<tr>
                             <td style="font-weight:700;">${t.symbol}</td>
-                            <td><span style="font-size:11px; color:#cbd5e1;">${t.engine_id}</span></td>
-                            <td style="color:${t.side === 'Buy' ? 'var(--accent-green)' : 'var(--accent-red)'};">${t.side === 'Buy' ? 'LONG' : 'SHORT'}</td>
-                            <td>$${t.entry_price.toFixed(4)}</td>
-                            <td>$${t.exit_price.toFixed(4)}</td>
-                            <td>${t.qty}</td>
-                            <td><span style="font-size:11px; color:#cbd5e1;">${t.exit_reason}</span></td>
-                            <td style="color:${isProfit ? 'var(--accent-green)' : 'var(--accent-red)'}; font-weight:700;">${isProfit ? '+' : ''}$${t.net_pnl_usdt.toFixed(3)}</td>
+                            <td><span style="font-size:11px; color:#cbd5e1;">${t.engine_id || 'OMS'}</span></td>
+                            <td style="color:${isLong ? 'var(--accent-green)' : 'var(--accent-red)'};">${isLong ? 'LONG' : 'SHORT'}</td>
+                            <td>$${Number(t.entry_price || 0).toFixed(4)}</td>
+                            <td>$${Number(t.exit_price || 0).toFixed(4)}</td>
+                            <td>${Number(t.qty || t.initial_qty || 0).toFixed(2)}</td>
+                            <td><span style="font-size:11px; color:#cbd5e1;">${t.exit_reason || t.reason || 'CLOSE'}</span></td>
+                            <td style="color:${isProfit ? 'var(--accent-green)' : 'var(--accent-red)'}; font-weight:700;">${isProfit ? '+' : ''}$${pnl.toFixed(3)}</td>
                         </tr>`;
                     }).join('');
                 }
@@ -388,16 +395,21 @@ HTML_PAGE = """<!DOCTYPE html>
 
 
 class DashboardHandler(http.server.BaseHTTPRequestHandler):
+    def _send_payload(self, payload: bytes, content_type: str = "text/html; charset=utf-8", status: int = 200):
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(payload)
+
     def do_GET(self):
-        if self.path == "/" or self.path.startswith("/?"):
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(HTML_PAGE.encode("utf-8"))
-        elif self.path == "/api/status" or self.path == "/api/state":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.end_headers()
+        if self.path in ("/", "/index.html") or self.path.startswith("/?"):
+            self._send_payload(HTML_PAGE.encode("utf-8"), "text/html; charset=utf-8")
+        elif self.path == "/favicon.ico":
+            self._send_payload(b"", "image/x-icon", 204)
+        elif self.path in ("/api/status", "/api/state"):
             if core_scalper_v39.GLOBAL_OMS is not None:
                 st = core_scalper_v39.GLOBAL_OMS.get_status()
             elif LIVE_STATUS_FILE.exists():
@@ -405,18 +417,16 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     with open(LIVE_STATUS_FILE, "r", encoding="utf-8") as f:
                         st = json.load(f)
                 except Exception:
-                    st = {"status": "INITIALIZING"}
+                    st = {"status": "INITIALIZING", "equity": 300.0, "capital": 300.0}
             else:
-                st = {"status": "INITIALIZING", "equity_usdt": 300.0, "daily_pnl_usdt": 0.0}
-            self.wfile.write(json.dumps(st).encode("utf-8"))
+                st = {"status": "INITIALIZING", "equity": 300.0, "capital": 300.0}
+            payload = json.dumps(st, default=str).encode("utf-8")
+            self._send_payload(payload, "application/json; charset=utf-8")
         elif self.path == "/api/logs":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(json.dumps(list(LOG_BUFFER)).encode("utf-8"))
+            payload = json.dumps(list(LOG_BUFFER)).encode("utf-8")
+            self._send_payload(payload, "application/json; charset=utf-8")
         else:
-            self.send_response(404)
-            self.end_headers()
+            self._send_payload(b"Not Found", "text/plain", 404)
 
     def log_message(self, format, *args):
         pass

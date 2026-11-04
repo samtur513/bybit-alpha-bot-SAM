@@ -404,16 +404,21 @@ HTML_PAGE = """<!DOCTYPE html>
 
 
 class DashboardHandler(http.server.BaseHTTPRequestHandler):
+    def _send_payload(self, payload: bytes, content_type: str = "text/html; charset=utf-8", status: int = 200):
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(payload)
+
     def do_GET(self):
-        if self.path == "/" or self.path.startswith("/?"):
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(HTML_PAGE.encode("utf-8"))
-        elif self.path == "/api/status" or self.path == "/api/state":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.end_headers()
+        if self.path in ("/", "/index.html") or self.path.startswith("/?"):
+            self._send_payload(HTML_PAGE.encode("utf-8"), "text/html; charset=utf-8")
+        elif self.path == "/favicon.ico":
+            self._send_payload(b"", "image/x-icon", 204)
+        elif self.path in ("/api/status", "/api/state"):
             if DAEMON_INSTANCE is not None:
                 st = DAEMON_INSTANCE.get_status()
             elif LIVE_STATUS_FILE.exists():
@@ -421,18 +426,16 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     with open(LIVE_STATUS_FILE, "r", encoding="utf-8") as f:
                         st = json.load(f)
                 except Exception:
-                    st = {"status": "INITIALIZING"}
+                    st = {"status": "INITIALIZING", "capital": 300.0, "total_net_pnl": 0.0}
             else:
                 st = {"status": "INITIALIZING", "capital": 300.0, "total_net_pnl": 0.0}
-            self.wfile.write(json.dumps(st).encode("utf-8"))
+            payload = json.dumps(st, default=str).encode("utf-8")
+            self._send_payload(payload, "application/json; charset=utf-8")
         elif self.path == "/api/logs":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(json.dumps(list(LOG_BUFFER)).encode("utf-8"))
+            payload = json.dumps(list(LOG_BUFFER)).encode("utf-8")
+            self._send_payload(payload, "application/json; charset=utf-8")
         else:
-            self.send_response(404)
-            self.end_headers()
+            self._send_payload(b"Not Found", "text/plain", 404)
 
     def log_message(self, format, *args):
         pass

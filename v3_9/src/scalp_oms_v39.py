@@ -203,11 +203,22 @@ class ScalpOMSV39(ScalpOMS):
         base_status["version_name"] = "v3.9 NewDragon Scalp Lab"
         base_status["port"] = 8092
         base_status["scratch_count"] = self.scratch_count
+        base_status["active_positions_count"] = len(self.active_positions)
+        base_status["pending_orders_count"] = len(self.pending_orders)
+        base_status["closed_trades_count"] = len(self.closed_trades_history)
 
-        # Include live Z_OFI per monitored symbol
+        # Include live microstructure radar per monitored symbol
+        radar_map = {}
         z_ofi_map = {}
         for sym, st in self.states.items():
-            if hasattr(st, "get_z_ofi"):
-                z_ofi_map[sym] = round(st.get_z_ofi(), 2)
+            z = round(st.get_z_ofi(), 2) if hasattr(st, "get_z_ofi") else 0.0
+            z_ofi_map[sym] = z
+            radar_map[sym] = {
+                "mid_price": getattr(st, "mid_price", 0.0),
+                "spread_ticks": round(getattr(st, "spread_ticks", 0.0), 1),
+                "obi": round(getattr(st, "obi", 0.0), 3),
+                "z_ofi": z,
+            }
+        base_status["radar"] = radar_map
         base_status["z_ofi_radar"] = z_ofi_map
         return base_status
