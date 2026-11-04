@@ -1,0 +1,29 @@
+[Unit]
+Description=Bybit V5 Multi-Engine Low-Latency Scalper Core (v3.7)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/bybit-bot/v3_7
+ExecStart=/usr/bin/python3 -O src/core_scalper.py
+Restart=always
+RestartSec=2
+
+# Приоритет реального времени (FIFO scheduler) и вытеснение фоновых процессов
+Nice=-15
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=50
+
+# Лимиты системных ресурсов
+LimitNOFILE=65535
+LimitMEMLOCK=infinity
+
+# Переменные окружения
+Environment=PYTHONUNBUFFERED=1
+Environment=PAPER_TRADING=true
+Environment=USE_MNT_DISCOUNT=true
+
+[Install]
+WantedBy=multi-user.target
