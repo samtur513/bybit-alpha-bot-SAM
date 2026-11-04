@@ -77,7 +77,7 @@ class MetaAggregator:
                 # Positions & Orders Extraction
                 normalized_positions = []
                 
-                # Format 1: dict or list open_positions (v2.0, v2.1, v3.1.1, v3.1.4, v3.3, v3.4, v3.5)
+                # Format 1: dict or list open_positions (v2.0, v2.1, v3.1.1, v3.1.4, v3.2, v3.3, v3.4, v3.5, v3.6, v3.7)
                 raw_open_pos = data.get("open_positions")
                 if isinstance(raw_open_pos, dict):
                     for sym, pos in raw_open_pos.items():
@@ -92,18 +92,18 @@ class MetaAggregator:
                             "port": port,
                             "symbol": sym,
                             "direction": dir_str,
-                            "module": "ALPHA_PAIRS" if engine["id"] == "v35" else "TREND",
+                            "module": pos.get("module", "ALPHA_PAIRS" if engine["id"] == "v35" else "TREND"),
                             "qty": float(pos.get("qty", 0.0)),
                             "entry_price": entry_p,
                             "current_price": curr_p,
-                            "stop_loss": float(pos.get("current_stop", pos.get("stop_price", 0.0))),
-                            "take_profit": None,
+                            "stop_loss": float(pos.get("current_stop", pos.get("stop_loss", pos.get("stop_price", 0.0)))),
+                            "take_profit": float(pos.get("take_profit", 0.0)) if pos.get("take_profit") else None,
                             "unrealized_pnl": unr_pnl,
                             "unrealized_pct": unr_pct,
                             "is_pyramided": bool(pos.get("is_pyramided", False)),
                             "is_breakeven_set": bool(pos.get("is_breakeven_set", False)),
                         })
-                elif isinstance(raw_open_pos, list):
+                elif isinstance(raw_open_pos, list) and len(raw_open_pos) > 0:
                     for pos in raw_open_pos:
                         sym = pos.get("symbol", "")
                         entry_p = float(pos.get("entry_price", 0.0))
@@ -117,69 +117,79 @@ class MetaAggregator:
                             "port": port,
                             "symbol": sym,
                             "direction": dir_str,
-                            "module": "ALPHA_PAIRS" if engine["id"] == "v35" else "TREND",
+                            "module": pos.get("module", "ALPHA_PAIRS" if engine["id"] == "v35" else "TREND"),
                             "qty": float(pos.get("qty", 0.0)),
                             "entry_price": entry_p,
                             "current_price": curr_p,
-                            "stop_loss": float(pos.get("current_stop", pos.get("stop_price", 0.0))),
-                            "take_profit": None,
+                            "stop_loss": float(pos.get("current_stop", pos.get("stop_loss", pos.get("stop_price", 0.0)))),
+                            "take_profit": float(pos.get("take_profit", 0.0)) if pos.get("take_profit") else None,
                             "unrealized_pnl": unr_pnl,
                             "unrealized_pct": unr_pct,
                             "is_pyramided": bool(pos.get("is_pyramided", False)),
                             "is_breakeven_set": bool(pos.get("is_breakeven_set", False)),
                         })
-                
-                # Format 2: list trend_open_positions (v3.2)
-                if isinstance(data.get("trend_open_positions"), list):
-                    for pos in data["trend_open_positions"]:
-                        entry_p = float(pos.get("entry_price", 0.0))
-                        curr_p = float(pos.get("current_price", entry_p))
-                        dir_str = str(pos.get("direction", "LONG")).upper()
-                        unr_pnl = float(pos.get("unrealized_pnl", 0.0))
-                        unr_pct = round(((curr_p - entry_p) / entry_p * 100.0) if dir_str == "LONG" else ((entry_p - curr_p) / entry_p * 100.0), 2) if entry_p > 0 else 0.0
-                        normalized_positions.append({
-                            "engine_id": engine["id"],
-                            "engine_name": engine["name"],
-                            "port": port,
-                            "symbol": pos.get("symbol", ""),
-                            "direction": dir_str,
-                            "module": "TREND",
-                            "qty": float(pos.get("qty", 0.0)),
-                            "entry_price": entry_p,
-                            "current_price": curr_p,
-                            "stop_loss": float(pos.get("stop_loss", 0.0)),
-                            "take_profit": None,
-                            "unrealized_pnl": unr_pnl,
-                            "unrealized_pct": unr_pct,
-                            "is_pyramided": bool(pos.get("is_pyramided", False)),
-                            "is_breakeven_set": False,
-                        })
+                else:
+                    # Fallback Format 2: list trend_open_positions (v3.2)
+                    if isinstance(data.get("trend_open_positions"), list):
+                        for pos in data["trend_open_positions"]:
+                            entry_p = float(pos.get("entry_price", 0.0))
+                            curr_p = float(pos.get("current_price", entry_p))
+                            dir_str = str(pos.get("direction", "LONG")).upper()
+                            unr_pnl = float(pos.get("unrealized_pnl", 0.0))
+                            unr_pct = round(((curr_p - entry_p) / entry_p * 100.0) if dir_str == "LONG" else ((entry_p - curr_p) / entry_p * 100.0), 2) if entry_p > 0 else 0.0
+                            normalized_positions.append({
+                                "engine_id": engine["id"],
+                                "engine_name": engine["name"],
+                                "port": port,
+                                "symbol": pos.get("symbol", ""),
+                                "direction": dir_str,
+                                "module": "TREND",
+                                "qty": float(pos.get("qty", 0.0)),
+                                "entry_price": entry_p,
+                                "current_price": curr_p,
+                                "stop_loss": float(pos.get("stop_loss", 0.0)),
+                                "take_profit": None,
+                                "unrealized_pnl": unr_pnl,
+                                "unrealized_pct": unr_pct,
+                                "is_pyramided": bool(pos.get("is_pyramided", False)),
+                                "is_breakeven_set": False,
+                            })
 
-                # Format 3: list range_open_positions (v3.2)
-                if isinstance(data.get("range_open_positions"), list):
-                    for pos in data["range_open_positions"]:
-                        entry_p = float(pos.get("entry_price", 0.0))
-                        curr_p = float(pos.get("current_price", entry_p))
-                        dir_str = str(pos.get("direction", "LONG")).upper()
-                        unr_pnl = float(pos.get("unrealized_pnl", 0.0))
-                        unr_pct = round(((curr_p - entry_p) / entry_p * 100.0) if dir_str == "LONG" else ((entry_p - curr_p) / entry_p * 100.0), 2) if entry_p > 0 else 0.0
-                        normalized_positions.append({
-                            "engine_id": engine["id"],
-                            "engine_name": engine["name"],
-                            "port": port,
-                            "symbol": pos.get("symbol", ""),
-                            "direction": dir_str,
-                            "module": "RANGE_MAKER",
-                            "qty": float(pos.get("qty", 0.0)),
-                            "entry_price": entry_p,
-                            "current_price": curr_p,
-                            "stop_loss": float(pos.get("stop_loss", 0.0)),
-                            "take_profit": float(pos.get("take_profit", 0.0)) if pos.get("take_profit") else None,
-                            "unrealized_pnl": unr_pnl,
-                            "unrealized_pct": unr_pct,
-                            "is_pyramided": False,
-                            "is_breakeven_set": False,
-                        })
+                    # Fallback Format 3: list range_open_positions (v3.2)
+                    if isinstance(data.get("range_open_positions"), list):
+                        for pos in data["range_open_positions"]:
+                            entry_p = float(pos.get("entry_price", 0.0))
+                            curr_p = float(pos.get("current_price", entry_p))
+                            dir_str = str(pos.get("direction", "LONG")).upper()
+                            unr_pnl = float(pos.get("unrealized_pnl", 0.0))
+                            unr_pct = round(((curr_p - entry_p) / entry_p * 100.0) if dir_str == "LONG" else ((entry_p - curr_p) / entry_p * 100.0), 2) if entry_p > 0 else 0.0
+                            normalized_positions.append({
+                                "engine_id": engine["id"],
+                                "engine_name": engine["name"],
+                                "port": port,
+                                "symbol": pos.get("symbol", ""),
+                                "direction": dir_str,
+                                "module": "RANGE_MAKER",
+                                "qty": float(pos.get("qty", 0.0)),
+                                "entry_price": entry_p,
+                                "current_price": curr_p,
+                                "stop_loss": float(pos.get("stop_loss", 0.0)),
+                                "take_profit": float(pos.get("take_profit", 0.0)) if pos.get("take_profit") else None,
+                                "unrealized_pnl": unr_pnl,
+                                "unrealized_pct": unr_pct,
+                                "is_pyramided": False,
+                                "is_breakeven_set": False,
+                            })
+
+                # Deduplicate by (symbol, direction, module)
+                deduped = []
+                seen_pos = set()
+                for p in normalized_positions:
+                    key = (p["symbol"], p["direction"], p["module"])
+                    if key not in seen_pos:
+                        seen_pos.add(key)
+                        deduped.append(p)
+                normalized_positions = deduped
 
                 # Pending Orders (v3.2)
                 normalized_orders = []

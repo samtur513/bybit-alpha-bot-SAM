@@ -235,8 +235,9 @@ HTML_PAGE = """<!DOCTYPE html>
                     <span class="pulse-dot"></span>
                     <span>WEBSOCKET LIVE</span>
                 </div>
-                <div class="badge pure">
-                    <span>NEWS SHIELD: OFF (PURE QUANT)</span>
+                <div class="badge active" id="badge-news">
+                    <span class="pulse-dot"></span>
+                    <span>NEWS SHIELD: v1.2 ACTIVE</span>
                 </div>
             </div>
         </header>
@@ -446,6 +447,19 @@ HTML_PAGE = """<!DOCTYPE html>
 
                 document.getElementById('metric-dd').innerText = `${(data.drawdown_pct || 0).toFixed(2)}%`;
                 document.getElementById('metric-peak-sub').innerText = `Пик: $${(data.peak_equity || 300.0).toFixed(2)}`;
+
+                // News Shield Badge
+                const newsBadge = document.getElementById('badge-news');
+                if (newsBadge) {
+                    const isNewsOn = data.news_defense_active || data.news_shield;
+                    if (isNewsOn) {
+                        newsBadge.className = 'badge active';
+                        newsBadge.innerHTML = '<span class="pulse-dot"></span><span>NEWS SHIELD: v1.2 ACTIVE</span>';
+                    } else {
+                        newsBadge.className = 'badge pure';
+                        newsBadge.innerHTML = '<span>NEWS SHIELD: OFF (PURE QUANT)</span>';
+                    }
+                }
 
                 // Positions
                 const tPos = data.trend_open_positions || [];
