@@ -102,7 +102,8 @@ class PaperTraderV35:
 
     @property
     def is_macro_blackout(self) -> bool:
-        return time.time() < getattr(self, "macro_blackout_until", 0.0)
+        # Market-neutral pairs are inherently immune to market-wide beta macro shocks
+        return False
 
     def _load_persistent_state(self) -> None:
         with self.lock:
@@ -295,10 +296,10 @@ class PaperTraderV35:
                 "ping_ms": self.last_ping_ms,
                 "btc_regime": "MARKET_NEUTRAL (BETA ~ 0)",
                 "btc_trend_status": "NEUTRAL",
-                "news_core_status": "v1.2 Shield" if self.enable_news_defense else "Disabled",
+                "news_core_status": "Beta ~ 0 (Macro Neutral)" if self.enable_news_defense else "Disabled",
                 "news_defense_active": self.enable_news_defense,
                 "news_shield": self.enable_news_defense,
-                "news_profile": "v1.2 Shield" if self.enable_news_defense else "Disabled",
+                "news_profile": "Beta ~ 0 (Exploit Guard Only)",
                 "latest_rankings": self.engine.latest_rankings,
                 "last_update_ts": int(time.time() * 1000),
             }
@@ -346,8 +347,8 @@ class PaperTraderV35:
                     logger.warning(f"Ticker update warning: {ex}")
                 self.last_ping_ms = round((time.time() - t0) * 1000.0, 1)
 
-                # Check if news blackout is active
-                is_blackout = self.is_macro_blackout
+                # Check if news blackout is active (disabled for beta-neutral pairs)
+                is_blackout = self.is_macro_blackout()
 
                 # Process Bar if new hour or interval or initial empty start
                 now_ts = int(time.time() * 1000)

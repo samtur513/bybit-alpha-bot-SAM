@@ -196,6 +196,51 @@ class AlphaPairsEngine:
         self.latest_rankings = rank_list
         return rank_list
 
+    def _enter_leg(
+        self,
+        symbol: str,
+        direction: int,
+        current_prices: Dict[str, Decimal],
+        metrics: Dict[str, Dict[str, Any]],
+        current_eq: Decimal,
+        bar_ts: int,
+    ) -> bool:
+        p = current_prices.get(symbol)
+        if not p or symbol not in metrics:
+            return False
+        atr = Decimal(str(metrics[symbol]["atr24"]))
+        stop_dist = STOP_LOSS_ATR_MULT * atr
+        if stop_dist <= Decimal("0.0"):
+            return False
+
+        risk_usd = current_eq * (BASE_RISK_PER_LEG_PCT / Decimal("100.0"))
+        qty = risk_usd / stop_dist
+        notional = qty * p
+        max_notional = current_eq * MAX_LEVERAGE_PER_LEG
+        if notional > max_notional:
+            qty = max_notional / p
+            notional = max_notional
+
+        fee = notional * self.fee_rate
+        self.realized_equity -= fee
+        stop_price = p - stop_dist if direction == 1 else p + stop_dist
+        self.open_positions[symbol] = ActivePairPosition(
+            symbol=symbol,
+            direction=direction,
+            qty=qty,
+            entry_price=p,
+            stop_price=stop_price,
+            initial_risk_dist=stop_dist,
+            initial_atr=atr,
+            highest_p=p,
+            lowest_p=p,
+            entry_bar=self.bar_counter,
+            entry_ts=bar_ts,
+        )
+        side_str = "LONG" if direction == 1 else "SHORT"
+        logger.info(f"Entered {side_str} pair leg on {symbol} @ {p} (qty={qty:.4f}, stop={stop_price})")
+        return True
+
     def process_bar(
         self,
         prices_series: Dict[str, List[Dict[str, float]]],
@@ -236,19 +281,6 @@ class AlphaPairsEngine:
                     trail_stop = pos.lowest_p + (TRAILING_DISTANCE_ATR * atr)
                     if trail_stop < pos.stop_price:
                         pos.stop_price = trail_stop
-
-            # News Core Macro Lockout Trimming (30% trim at >= 1.0 ATR profit)
-            if macro_lockout and not pos.macro_trimmed:
-                dist = (curr_p - pos.entry_price) * Decimal(str(direction))
-                if dist >= atr * Decimal("1.0"):
-                    trim_qty = pos.qty * Decimal("0.30")
-                    trim_gross = trim_qty * (curr_p - pos.entry_price) * Decimal(str(direction))
-                    trim_fee = trim_qty * curr_p * self.fee_rate
-                    trim_net = trim_gross - trim_fee
-                    self.realized_equity += trim_net
-                    pos.qty -= trim_qty
-                    pos.macro_trimmed = True
-                    logger.info(f"News Core Macro Trim 30% on {s} (+{trim_net:.2f} USD)")
 
             # Partial Take Profit at +4.0R (50% trim)
             if not pos.tp_taken:
@@ -360,119 +392,59 @@ class AlphaPairsEngine:
                     del self.open_positions[s]
                     logger.info(f"Hysteresis exit for {s} (rank={s_info[0]}, RS={s_rs:.3f}, net_pnl={net_pnl:.2f})")
 
-            # Candidate Selection for New Entries
+            # Candidate Selection for New Entries (eligible unheld symbols)
             entry_long_candidates = [
                 r for r in rankings[:ENTRY_TOP_K]
                 if Decimal(str(r["rs"])) >= MIN_REL_STRENGTH_LONG and Decimal(str(r["ker48"])) >= MIN_KER_THRESHOLD
+                and r["symbol"] not in self.open_positions and r["symbol"] in current_prices and r["symbol"] in metrics
             ]
             entry_short_candidates = [
                 r for r in rankings[-ENTRY_BOTTOM_K:]
                 if Decimal(str(r["rs"])) <= MIN_REL_STRENGTH_SHORT and Decimal(str(r["ker48"])) >= MIN_KER_THRESHOLD
+                and r["symbol"] not in self.open_positions and r["symbol"] in current_prices and r["symbol"] in metrics
             ]
-
-            # Filter 3: Minimum Pair Net Alpha Spread Filter
-            allow_new_pairs = True
-            if entry_long_candidates and entry_short_candidates:
-                best_long_rs = Decimal(str(entry_long_candidates[0]["rs"]))
-                best_short_rs = Decimal(str(entry_short_candidates[-1]["rs"]))
-                net_pair_spread = best_long_rs - best_short_rs
-                if net_pair_spread < MIN_PAIR_NET_ALPHA_SPREAD:
-                    allow_new_pairs = False
-                    logger.info(
-                        f"Skipping pair entry: Net spread {net_pair_spread*100:.2f}% < "
-                        f"threshold {MIN_PAIR_NET_ALPHA_SPREAD*100:.2f}%"
-                    )
 
             active_longs = sum(1 for p in self.open_positions.values() if p.direction == 1)
             active_shorts = sum(1 for p in self.open_positions.values() if p.direction == -1)
-
             current_eq = self.get_portfolio_equity(current_prices)
 
-            if not macro_lockout and allow_new_pairs:
-                # Open Longs
-                for item in entry_long_candidates:
-                    s = item["symbol"]
-                    if active_longs >= ENTRY_TOP_K:
-                        break
-                    if s not in self.open_positions and s in current_prices and s in metrics:
-                        # Turnover advantage filter vs existing longs
-                        incumbent_longs = [p for p in self.open_positions.values() if p.direction == 1]
-                        if incumbent_longs:
-                            incumbent_score = rank_map.get(incumbent_longs[0].symbol, (0, 0, 0))[2]
-                            if (item["score"] - incumbent_score) < float(MIN_REBALANCE_SPREAD_ADVANTAGE):
-                                continue
-
-                        p = current_prices[s]
-                        atr = Decimal(str(metrics[s]["atr24"]))
-                        stop_dist = STOP_LOSS_ATR_MULT * atr
-                        if stop_dist > Decimal("0.0"):
-                            risk_usd = current_eq * (BASE_RISK_PER_LEG_PCT / Decimal("100.0"))
-                            qty = risk_usd / stop_dist
-                            notional = qty * p
-                            max_notional = current_eq * MAX_LEVERAGE_PER_LEG
-                            if notional > max_notional:
-                                qty = max_notional / p
-                                notional = max_notional
-
-                            fee = notional * self.fee_rate
-                            self.realized_equity -= fee
-                            self.open_positions[s] = ActivePairPosition(
-                                symbol=s,
-                                direction=1,
-                                qty=qty,
-                                entry_price=p,
-                                stop_price=p - stop_dist,
-                                initial_risk_dist=stop_dist,
-                                initial_atr=atr,
-                                highest_p=p,
-                                lowest_p=p,
-                                entry_bar=self.bar_counter,
-                                entry_ts=bar_ts,
+            # Strict Pair-Wise Execution (Matched Long + Short pairs to guarantee Beta ~ 0.0)
+            if not macro_lockout:
+                # Case 1: Balanced state -> enter matched Long + Short pairs simultaneously
+                if active_longs == active_shorts and active_longs < ENTRY_TOP_K:
+                    for l_item, s_item in zip(entry_long_candidates, entry_short_candidates):
+                        if active_longs >= ENTRY_TOP_K or active_shorts >= ENTRY_BOTTOM_K:
+                            break
+                        l_rs = Decimal(str(l_item["rs"]))
+                        s_rs = Decimal(str(s_item["rs"]))
+                        net_spread = l_rs - s_rs
+                        if net_spread < MIN_PAIR_NET_ALPHA_SPREAD:
+                            logger.info(
+                                f"Skipping pair entry {l_item['symbol']}/{s_item['symbol']}: "
+                                f"Net spread {net_spread*100:.2f}% < threshold {MIN_PAIR_NET_ALPHA_SPREAD*100:.2f}%"
                             )
+                            continue
+
+                        # Enter both legs in lockstep
+                        if self._enter_leg(l_item["symbol"], 1, current_prices, metrics, current_eq, bar_ts):
                             active_longs += 1
-                            logger.info(f"Entered LONG pair leg on {s} @ {p} (qty={qty:.4f}, stop={p - stop_dist})")
-
-                # Open Shorts
-                for item in entry_short_candidates:
-                    s = item["symbol"]
-                    if active_shorts >= ENTRY_BOTTOM_K:
-                        break
-                    if s not in self.open_positions and s in current_prices and s in metrics:
-                        incumbent_shorts = [p for p in self.open_positions.values() if p.direction == -1]
-                        if incumbent_shorts:
-                            incumbent_score = rank_map.get(incumbent_shorts[0].symbol, (0, 0, 0))[2]
-                            if (incumbent_score - item["score"]) < float(MIN_REBALANCE_SPREAD_ADVANTAGE):
-                                continue
-
-                        p = current_prices[s]
-                        atr = Decimal(str(metrics[s]["atr24"]))
-                        stop_dist = STOP_LOSS_ATR_MULT * atr
-                        if stop_dist > Decimal("0.0"):
-                            risk_usd = current_eq * (BASE_RISK_PER_LEG_PCT / Decimal("100.0"))
-                            qty = risk_usd / stop_dist
-                            notional = qty * p
-                            max_notional = current_eq * MAX_LEVERAGE_PER_LEG
-                            if notional > max_notional:
-                                qty = max_notional / p
-                                notional = max_notional
-
-                            fee = notional * self.fee_rate
-                            self.realized_equity -= fee
-                            self.open_positions[s] = ActivePairPosition(
-                                symbol=s,
-                                direction=-1,
-                                qty=qty,
-                                entry_price=p,
-                                stop_price=p + stop_dist,
-                                initial_risk_dist=stop_dist,
-                                initial_atr=atr,
-                                highest_p=p,
-                                lowest_p=p,
-                                entry_bar=self.bar_counter,
-                                entry_ts=bar_ts,
-                            )
+                        if self._enter_leg(s_item["symbol"], -1, current_prices, metrics, current_eq, bar_ts):
                             active_shorts += 1
-                            logger.info(f"Entered SHORT pair leg on {s} @ {p} (qty={qty:.4f}, stop={p + stop_dist})")
+
+                # Case 2: Imbalance recovery (e.g. one leg stopped out) -> Restore balance
+                elif active_longs < active_shorts and entry_long_candidates:
+                    for l_item in entry_long_candidates:
+                        if active_longs >= active_shorts or active_longs >= ENTRY_TOP_K:
+                            break
+                        if self._enter_leg(l_item["symbol"], 1, current_prices, metrics, current_eq, bar_ts):
+                            active_longs += 1
+
+                elif active_shorts < active_longs and entry_short_candidates:
+                    for s_item in entry_short_candidates:
+                        if active_shorts >= active_longs or active_shorts >= ENTRY_BOTTOM_K:
+                            break
+                        if self._enter_leg(s_item["symbol"], -1, current_prices, metrics, current_eq, bar_ts):
+                            active_shorts += 1
 
         # 3. Update Drawdown & Equity Peaks
         total_eq = self.get_portfolio_equity(current_prices)

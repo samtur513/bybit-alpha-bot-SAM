@@ -2,17 +2,20 @@
 v3.7 Scalp Universe Screener:
 Отбор ликвидных инструментов Standard Crypto (исключение Innovation Zone),
 расчет Беты и корреляции к BTCUSDT, показателя Херста, Kaufman ER и уровней свинг-ликвидности.
+Использует стандартную библиотеку urllib.request (zero external dependency).
 """
 
-from typing import Dict, Optional
+import asyncio
+import json
+import logging
+import urllib.request
+from typing import Dict, Optional, Tuple
 
-import aiohttp
 import numpy as np
+
 try:
     import orjson
 except ImportError:
-    import json
-
     class _OrjsonFallback:
         @staticmethod
         def dumps(obj, *args, **kwargs) -> bytes:
@@ -29,6 +32,15 @@ except ImportError:
 from v3_7.src.config import ScalperConfig
 from v3_7.src.microstructure import InstrumentMeta
 
+logger = logging.getLogger("ScalpUniverseScreener")
+
+
+def _http_get_json(url: str, timeout: float = 10.0) -> dict:
+    """Безопасный HTTP GET запрос через стандартную библиотеку urllib."""
+    req = urllib.request.Request(url, headers={"User-Agent": "BybitScalper/3.7"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return orjson.loads(resp.read())
+
 
 class UniverseScreener:
     def __init__(self, cfg: ScalperConfig):
@@ -43,55 +55,45 @@ class UniverseScreener:
         poly = np.polyfit(np.log(list(lags)), np.log(tau), 1)
         return float(poly[0])
 
-    async def build_active_universe(
-        self, session: Optional[aiohttp.ClientSession] = None
-    ) -> Dict[str, InstrumentMeta]:
+    def _build_active_universe_sync(self) -> Dict[str, InstrumentMeta]:
         metas: Dict[str, InstrumentMeta] = {}
-        close_session = False
-        if session is None:
-            session = aiohttp.ClientSession()
-            close_session = True
 
         try:
             # 1. Спецификации инструментов
-            async with session.get(
-                f"{self.cfg.rest_base_url}/v5/market/instruments-info?category=linear&limit=1000"
-            ) as resp:
-                info_data = orjson.loads(await resp.read())
-                spec_map = {}
-                for item in info_data.get("result", {}).get("list", []):
-                    if item.get("status") != "Trading" or item.get("quoteCoin") != "USDT":
-                        continue
-                    if item.get("contractType") != "LinearPerpetual":
-                        continue
-                    sym = item["symbol"]
-                    tick = float(item["priceFilter"]["tickSize"])
-                    q_step = float(item["lotSizeFilter"]["qtyStep"])
-                    min_q = float(item["lotSizeFilter"]["minOrderQty"])
-                    spec_map[sym] = (tick, q_step, min_q)
+            info_url = f"{self.cfg.rest_base_url}/v5/market/instruments-info?category=linear&limit=1000"
+            info_data = _http_get_json(info_url)
+            spec_map: Dict[str, Tuple[float, float, float]] = {}
+            for item in info_data.get("result", {}).get("list", []):
+                if item.get("status") != "Trading" or item.get("quoteCoin") != "USDT":
+                    continue
+                if item.get("contractType") != "LinearPerpetual":
+                    continue
+                sym = item["symbol"]
+                tick = float(item["priceFilter"]["tickSize"])
+                q_step = float(item["lotSizeFilter"]["qtyStep"])
+                min_q = float(item["lotSizeFilter"]["minOrderQty"])
+                spec_map[sym] = (tick, q_step, min_q)
 
             # 2. Суточный оборот тикеров
-            async with session.get(
-                f"{self.cfg.rest_base_url}/v5/market/tickers?category=linear"
-            ) as resp:
-                tick_data = orjson.loads(await resp.read())
-                candidates = []
-                for t in tick_data.get("result", {}).get("list", []):
-                    sym = t["symbol"]
-                    if sym not in spec_map:
-                        continue
-                    turnover = float(t.get("turnover24h", 0.0))
-                    last_p = float(t.get("lastPrice", 0.0))
-                    if turnover >= 120_000_000 and last_p > 0:
-                        tick_sz = spec_map[sym][0]
-                        rel_tick = tick_sz / last_p
-                        if 0.00010 <= rel_tick <= 0.00060 or sym == self.cfg.leader_symbol:
-                            candidates.append((sym, turnover))
+            tick_url = f"{self.cfg.rest_base_url}/v5/market/tickers?category=linear"
+            tick_data = _http_get_json(tick_url)
+            candidates = []
+            for t in tick_data.get("result", {}).get("list", []):
+                sym = t["symbol"]
+                if sym not in spec_map:
+                    continue
+                turnover = float(t.get("turnover24h", 0.0))
+                last_p = float(t.get("lastPrice", 0.0))
+                if turnover >= 120_000_000 and last_p > 0:
+                    tick_sz = spec_map[sym][0]
+                    rel_tick = tick_sz / last_p
+                    if 0.00010 <= rel_tick <= 0.00060 or sym == self.cfg.leader_symbol:
+                        candidates.append((sym, turnover))
 
-                candidates.sort(key=lambda x: x[1], reverse=True)
-                selected_syms = [self.cfg.leader_symbol] + [
-                    s for s, _ in candidates if s != self.cfg.leader_symbol
-                ][: self.cfg.max_active_symbols * 2]
+            candidates.sort(key=lambda x: x[1], reverse=True)
+            selected_syms = [self.cfg.leader_symbol] + [
+                s for s, _ in candidates if s != self.cfg.leader_symbol
+            ][: self.cfg.max_active_symbols * 2]
 
             # 3. Загрузка 5-минутных свечей для расчета индикаторов и Беты
             btc_rets: Optional[np.ndarray] = None
@@ -99,8 +101,8 @@ class UniverseScreener:
                 if len(metas) >= self.cfg.max_active_symbols + 1:
                     break
                 url = f"{self.cfg.rest_base_url}/v5/market/kline?category=linear&symbol={sym}&interval=5&limit=120"
-                async with session.get(url) as k_resp:
-                    k_json = orjson.loads(await k_resp.read())
+                try:
+                    k_json = _http_get_json(url)
                     rows = k_json.get("result", {}).get("list", [])
                     if len(rows) < 60:
                         continue
@@ -157,8 +159,15 @@ class UniverseScreener:
                         beta_btc=beta_btc,
                         corr_btc=corr_btc,
                     )
-        finally:
-            if close_session:
-                await session.close()
+                except Exception as ex:
+                    logger.warning(f"Ошибка загрузки свечей для {sym}: {ex}")
+                    continue
+
+        except Exception as e:
+            logger.error(f"Сбой скринера: {e}")
 
         return metas
+
+    async def build_active_universe(self, session=None) -> Dict[str, InstrumentMeta]:
+        """Асинхронная обертка для построения пула монет без блокировки event loop."""
+        return await asyncio.to_thread(self._build_active_universe_sync)

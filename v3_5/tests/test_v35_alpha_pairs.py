@@ -290,3 +290,39 @@ def test_minimum_net_pair_spread_filter():
 
     # Because spread < 5.0%, no new pairs should be opened!
     assert len(engine.open_positions) == 0
+
+
+def test_strictly_coupled_pairs_execution():
+    """
+    Ensure engine NEVER enters a naked unhedged single leg.
+    Every new pair entry must be balanced (1 Long + 1 Short) to maintain Beta ~ 0.0.
+    """
+    engine = AlphaPairsEngine(initial_capital=Decimal("300.0"))
+
+    # Case 1: Only Long qualifies (SOL is +10% vs BTC), but no alt is <= -2.5% vs BTC
+    universe_only_long = {
+        "BTCUSDT": make_dummy_kline(0.0, n_bars=180, base_p=60000.0),
+        "SOLUSDT": make_dummy_kline(0.5, n_bars=180, base_p=100.0),  # Strong Long
+        "NEARUSDT": make_dummy_kline(0.0, n_bars=180, base_p=5.0),   # Flat
+        "ARBUSDT": make_dummy_kline(0.0, n_bars=180, base_p=1.0),    # Flat
+    }
+    prices_1 = {s: Decimal(str(universe_only_long[s][-1]["close"])) for s in universe_only_long}
+    engine.process_bar(universe_only_long, prices_1, bar_ts=1700000000000 + 3600000)
+
+    # Must NOT open a naked Long without a short hedge!
+    assert len(engine.open_positions) == 0
+
+    # Case 2: Both Long and Short qualify (SOL is +10%, OP is -10%)
+    universe_both = {
+        "BTCUSDT": make_dummy_kline(0.0, n_bars=180, base_p=60000.0),
+        "SOLUSDT": make_dummy_kline(0.5, n_bars=180, base_p=100.0),   # Strong Long
+        "NEARUSDT": make_dummy_kline(0.0, n_bars=180, base_p=5.0),    # Flat
+        "OPUSDT": make_dummy_kline(-0.2, n_bars=180, base_p=100.0),   # Strong Short
+    }
+    prices_2 = {s: Decimal(str(universe_both[s][-1]["close"])) for s in universe_both}
+    engine.process_bar(universe_both, prices_2, bar_ts=1700000000000 + 7200000)
+
+    # Exactly 2 positions: 1 Long (SOL) and 1 Short (OP)
+    assert len(engine.open_positions) == 2
+    assert engine.open_positions["SOLUSDT"].direction == 1
+    assert engine.open_positions["OPUSDT"].direction == -1
