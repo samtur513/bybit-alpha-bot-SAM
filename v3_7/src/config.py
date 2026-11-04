@@ -67,30 +67,30 @@ class ScalperConfig:
     max_active_symbols: int = 8
 
     # 6. Пороги Движка 1 (OBI + Flow Toxicity Breakout)
-    e1_obi_threshold: float = 0.52
-    e1_tfi_threshold: float = 0.65
-    e1_volume_surge_mult: float = 4.5
-    e1_depletion_threshold: float = 0.45
-    e1_min_natr_5m: float = 0.0045
-    e1_max_spread_ticks: float = 2.5
+    e1_obi_threshold: float = 0.45
+    e1_tfi_threshold: float = 0.55
+    e1_volume_surge_mult: float = 3.5
+    e1_depletion_threshold: float = 0.40
+    e1_min_natr_5m: float = 0.0035
+    e1_max_spread_ticks: float = 3.0
     e1_max_hold_sec: float = 40.0
 
     # 7. Пороги Движка 2 (Liquidity Sweep & Absorption Reversion)
-    e2_min_depth_pct: float = 0.0018
-    e2_max_depth_atr_mult: float = 0.75
-    e2_k_abs_threshold: float = 3.2
+    e2_min_depth_pct: float = 0.0015
+    e2_max_depth_atr_mult: float = 0.85
+    e2_k_abs_threshold: float = 2.4
     e2_max_sweep_time_sec: float = 90.0
-    e2_max_risk_pct: float = 0.0055
-    e2_min_risk_pct: float = 0.0010
+    e2_max_risk_pct: float = 0.0060
+    e2_min_risk_pct: float = 0.0008
     e2_max_hold_sec: float = 180.0
 
     # 8. Пороги Движка 3 (Lead-Lag Beta-Catchup)
-    e3_btc_impulse_ret: float = 0.0022
-    e3_btc_tfi_threshold: float = 0.60
-    e3_alt_reaction_cap: float = 0.30
-    e3_min_lag_spread: float = 0.0042
-    e3_min_beta: float = 1.45
-    e3_min_corr: float = 0.78
-    e3_max_spread_ticks: float = 2.0
+    e3_btc_impulse_ret: float = 0.0015
+    e3_btc_tfi_threshold: float = 0.55
+    e3_alt_reaction_cap: float = 0.35
+    e3_min_lag_spread: float = 0.0035
+    e3_min_beta: float = 1.25
+    e3_min_corr: float = 0.65
+    e3_max_spread_ticks: float = 2.5
     e3_max_hold_sec: float = 18.0
     e3_leader_reversal_threshold: float = 0.45

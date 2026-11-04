@@ -184,6 +184,18 @@ async def run_public_stream(
             await asyncio.sleep(1.0)
 
 
+async def periodic_metrics_update_task(screener: UniverseScreener, states: Dict[str, SymbolMicrostructureState]) -> None:
+    """Периодическое (каждые 15 минут) обновление свинг-уровней и индикаторов инструментов."""
+    while True:
+        try:
+            await asyncio.sleep(900.0)
+            metas = {sym: st.meta for sym, st in states.items()}
+            await screener.refresh_instrument_metrics(metas)
+            logger.info(f"[METRICS_REFRESH] Обновлены свинг-уровни и индикаторы для {len(metas)} инструментов")
+        except Exception as e:
+            logger.warning(f"Ошибка при обновлении метрик инструментов: {e}")
+
+
 async def main() -> None:
     cfg = ScalperConfig()
     logger.info(
@@ -216,6 +228,7 @@ async def main() -> None:
         position_monitor_task(oms),
         run_public_stream(cfg, states, evaluator, oms),
         status_export_task(oms),
+        periodic_metrics_update_task(screener, states),
         gc_guardian_task(oms),
     )
 

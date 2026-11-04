@@ -34,6 +34,12 @@ from v3_7.src.microstructure import InstrumentMeta
 
 logger = logging.getLogger("ScalpUniverseScreener")
 
+NON_CRYPTO_SYMBOLS = {
+    "CLUSDT", "XAUUSDT", "XAGUSDT", "SOXLUSDT", "SOXSUSDT", "SPCXUSDT", "MSTRUSDT",
+    "SKHYNIXUSDT", "SNDKUSDT", "MUUSDT", "KORUUSDT", "NVDAUSDT", "TSLAUSDT", "AAPLUSDT",
+    "AMZNUSDT", "GOOGLUSDT", "METAUSDT", "MSFTUSDT", "PLTRUSDT", "COINUSDT"
+}
+
 
 def _http_get_json(url: str, timeout: float = 10.0) -> dict:
     """Безопасный HTTP GET запрос через стандартную библиотеку urllib."""
@@ -80,14 +86,14 @@ class UniverseScreener:
             candidates = []
             for t in tick_data.get("result", {}).get("list", []):
                 sym = t["symbol"]
-                if sym not in spec_map:
+                if sym in NON_CRYPTO_SYMBOLS or sym not in spec_map:
                     continue
                 turnover = float(t.get("turnover24h", 0.0))
                 last_p = float(t.get("lastPrice", 0.0))
-                if turnover >= 120_000_000 and last_p > 0:
+                if turnover >= 35_000_000 and last_p > 0:
                     tick_sz = spec_map[sym][0]
                     rel_tick = tick_sz / last_p
-                    if 0.00010 <= rel_tick <= 0.00060 or sym == self.cfg.leader_symbol:
+                    if 0.00004 <= rel_tick <= 0.00100 or sym == self.cfg.leader_symbol:
                         candidates.append((sym, turnover))
 
             candidates.sort(key=lambda x: x[1], reverse=True)
@@ -123,7 +129,7 @@ class UniverseScreener:
                     atr_5m = float(np.mean(tr[-14:]))
                     natr_5m = atr_5m / closes[-1]
 
-                    if sym != self.cfg.leader_symbol and natr_5m < 0.0040:
+                    if sym != self.cfg.leader_symbol and natr_5m < 0.0035:
                         continue
 
                     corr_btc, beta_btc = 1.0, 1.0
@@ -171,3 +177,78 @@ class UniverseScreener:
     async def build_active_universe(self, session=None) -> Dict[str, InstrumentMeta]:
         """Асинхронная обертка для построения пула монет без блокировки event loop."""
         return await asyncio.to_thread(self._build_active_universe_sync)
+
+    def _refresh_instrument_metrics_sync(self, metas: Dict[str, InstrumentMeta]) -> None:
+        """Обновляет индикаторы, свинг-уровни и бету активных инструментов без перезапуска стрима."""
+        btc_rets: Optional[np.ndarray] = None
+        # Сначала BTC для беты
+        if self.cfg.leader_symbol in metas:
+            url_btc = f"{self.cfg.rest_base_url}/v5/market/kline?category=linear&symbol={self.cfg.leader_symbol}&interval=5&limit=120"
+            try:
+                k_json = _http_get_json(url_btc)
+                rows = k_json.get("result", {}).get("list", [])
+                if len(rows) >= 60:
+                    rows.reverse()
+                    closes = np.array([float(r[4]) for r in rows])
+                    btc_rets = np.diff(np.log(closes))
+                    m = metas[self.cfg.leader_symbol]
+                    highs = np.array([float(r[2]) for r in rows])
+                    lows = np.array([float(r[3]) for r in rows])
+                    vols = np.array([float(r[5]) for r in rows])
+                    m.swing_low_1h = float(np.min(lows[-36:-2]))
+                    m.swing_high_1h = float(np.max(highs[-36:-2]))
+                    m.vwap_session = float(np.sum(closes[-48:] * vols[-48:]) / max(np.sum(vols[-48:]), 1e-9))
+                    m.ema20_15m = float(np.mean(closes[-60:]))
+            except Exception as e:
+                logger.debug(f"Refresh BTC kline error: {e}")
+
+        for sym, m in metas.items():
+            if sym == self.cfg.leader_symbol:
+                continue
+            url = f"{self.cfg.rest_base_url}/v5/market/kline?category=linear&symbol={sym}&interval=5&limit=120"
+            try:
+                k_json = _http_get_json(url)
+                rows = k_json.get("result", {}).get("list", [])
+                if len(rows) < 60:
+                    continue
+                rows.reverse()
+                highs = np.array([float(r[2]) for r in rows])
+                lows = np.array([float(r[3]) for r in rows])
+                closes = np.array([float(r[4]) for r in rows])
+                vols = np.array([float(r[5]) for r in rows])
+                log_rets = np.diff(np.log(closes))
+
+                tr = np.maximum(
+                    highs[1:] - lows[1:],
+                    np.maximum(np.abs(highs[1:] - closes[:-1]), np.abs(lows[1:] - closes[:-1])),
+                )
+                atr_5m = float(np.mean(tr[-14:]))
+                m.atr_5m = atr_5m
+                m.atr_15m = atr_5m * 1.75
+                m.natr_5m = atr_5m / closes[-1]
+                m.hurst_15m = self._calc_hurst(closes)
+
+                net_change = abs(closes[-1] - closes[-18])
+                sum_changes = float(np.sum(np.abs(np.diff(closes[-18:]))))
+                m.er_15m = net_change / max(sum_changes, 1e-9)
+
+                m.ema9_5m = float(np.mean(closes[-9:]))
+                m.ema21_5m = float(np.mean(closes[-21:]))
+                m.ema20_15m = float(np.mean(closes[-60:]))
+                m.ema50_4h = float(np.mean(closes))
+                m.vwap_session = float(np.sum(closes[-48:] * vols[-48:]) / max(np.sum(vols[-48:]), 1e-9))
+                m.swing_low_1h = float(np.min(lows[-36:-2]))
+                m.swing_high_1h = float(np.max(highs[-36:-2]))
+
+                if btc_rets is not None and len(log_rets) == len(btc_rets):
+                    cov_m = np.cov(log_rets, btc_rets)
+                    var_btc = cov_m[1, 1]
+                    if var_btc > 0:
+                        m.beta_btc = float(cov_m[0, 1] / var_btc)
+                        m.corr_btc = float(cov_m[0, 1] / (np.std(log_rets) * np.std(btc_rets) + 1e-12))
+            except Exception as e:
+                logger.debug(f"Refresh kline error for {sym}: {e}")
+
+    async def refresh_instrument_metrics(self, metas: Dict[str, InstrumentMeta]) -> None:
+        """Асинхронное обновление индикаторов и уровней без блокировки event loop."""
+        await asyncio.to_thread(self._refresh_instrument_metrics_sync, metas)
