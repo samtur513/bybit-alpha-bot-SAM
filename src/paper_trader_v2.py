@@ -453,6 +453,20 @@ class PaperTraderV2:
                 for sym, p in snapshot.open_positions.items()
             },
             "closed_trades_count": len(snapshot.closed_trades),
+            "closed_trades": [
+                {
+                    "symbol": t.symbol,
+                    "direction": "LONG" if t.direction == 1 else "SHORT",
+                    "entry_price": float(t.entry_price),
+                    "exit_price": float(t.exit_price),
+                    "net_pnl": float(t.net_pnl),
+                    "reason": getattr(t, "exit_reason", "CLOSE"),
+                    "was_pyramided": getattr(t, "was_pyramided", False),
+                    "hold_hours": round(getattr(t, "hold_hours", 0.0), 1),
+                    "exit_time": getattr(t, "exit_time", 0),
+                }
+                for t in snapshot.closed_trades[-30:]
+            ],
         }
 
         REPORTS_DIR.mkdir(parents=True, exist_ok=True)

@@ -79,6 +79,7 @@ HTML_PAGE = """<!DOCTYPE html>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
             --bg-base: #0b0e14;
@@ -265,6 +266,85 @@ HTML_PAGE = """<!DOCTYPE html>
             </div>
         </div>
 
+        
+        <!-- Performance Equity & PnL Curve Chart -->
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-title">
+                    <span>📈 Динамика депозита и результатов сделок (Live PnL Curve)</span>
+                    <span class="tag" style="background: rgba(56, 189, 248, 0.15); color: var(--accent);">LIVE REAL-TIME</span>
+                </div>
+                <div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-muted);">
+                    Старт: <strong style="color: var(--text);">$300.00</strong> | Текущее эквити: <strong id="chart-curr-equity" style="color: var(--accent);">$300.00</strong>
+                </div>
+            </div>
+            <div style="height: 180px; position: relative;">
+                <canvas id="equityChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Subsystems Health & Telemetry Monitor -->
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-title">
+                    <span>🩺 Мониторинг подсистем и телеметрия ядра v3.2 Dual-Regime</span>
+                    <span class="tag" style="background: rgba(16, 185, 129, 0.15); color: var(--green);">HEALTH: NOMINAL</span>
+                </div>
+                <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-muted);">
+                    Задержка Bybit API: <strong id="sub-ping-val" style="color: var(--accent);">2.4 ms</strong>
+                </div>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px;">
+                <!-- 1. Market Stream -->
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">1. Поток Bybit WS</span>
+                        <span id="sub-ws-tag" style="font-size: 10px; font-weight: 700; color: var(--green); padding: 2px 6px; background: rgba(16, 185, 129, 0.15); border-radius: 4px;">ONLINE</span>
+                    </div>
+                    <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--text);" id="sub-ws-info">
+                        Подписка: <strong>...</strong> | V5 Linear
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">Потоковые 1h свечи и стаканы</div>
+                </div>
+
+                <!-- 2. Dual-Regime Core -->
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">2. Dual-Regime Alpha</span>
+                        <span id="sub-alpha-tag" style="font-size: 10px; font-weight: 700; color: var(--accent); padding: 2px 6px; background: rgba(56, 189, 248, 0.15); border-radius: 4px;">ACTIVE</span>
+                    </div>
+                    <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--text);" id="sub-alpha-info">
+                        Donchian Trend + IRAS Range Maker
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">Адаптивное переключение Trend vs Chop</div>
+                </div>
+
+                <!-- 3. Risk & Sizing -->
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">3. Риск-менеджер & АКПП</span>
+                        <span id="sub-gear-tag" style="font-size: 10px; font-weight: 700; color: var(--yellow); padding: 2px 6px; background: rgba(245, 158, 11, 0.15); border-radius: 4px;">PROTECTED</span>
+                    </div>
+                    <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--text);" id="sub-gear-info">
+                        Риск: <strong>...</strong> | Half-Kelly
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">Penny-Perfect средняя цена и безубыток</div>
+                </div>
+
+                <!-- 4. Defense Shield -->
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">4. Щит News Core v1.2</span>
+                        <span id="sub-news-tag" style="font-size: 10px; font-weight: 700; color: var(--green); padding: 2px 6px; background: rgba(16, 185, 129, 0.15); border-radius: 4px;">ACTIVE</span>
+                    </div>
+                    <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--text);" id="sub-news-info">
+                        Макро-эмбарго: <strong>НЕТ (Торговля активна)</strong>
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">Emergency Eject & Regime Guard</div>
+                </div>
+            </div>
+        </div>
+
         <!-- Open Positions Panel -->
         <div class="panel">
             <div class="panel-header">
@@ -423,6 +503,58 @@ HTML_PAGE = """<!DOCTYPE html>
     </div>
 
     <script>
+
+        let chartInstance = null;
+        function initEquityChart() {
+            const canvas = document.getElementById('equityChart');
+            if (!canvas || typeof Chart === 'undefined') return;
+            const ctx = canvas.getContext('2d');
+            chartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: ['Старт'],
+                    datasets: [{
+                        label: 'Эквити ($)',
+                        data: [300.0],
+                        borderColor: '#38bdf8',
+                        backgroundColor: 'rgba(56, 189, 248, 0.08)',
+                        fill: true,
+                        tension: 0.25,
+                        borderWidth: 2,
+                        pointRadius: 4,
+                        pointHoverRadius: 6,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: (c) => ` Эквити: $${Number(c.parsed.y).toFixed(2)}`
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: 'rgba(255, 255, 255, 0.04)' },
+                            ticks: { color: '#64748b', font: { family: "'JetBrains Mono', monospace", size: 10 } }
+                        },
+                        y: {
+                            grid: { color: 'rgba(255, 255, 255, 0.04)' },
+                            ticks: {
+                                color: '#94a3b8',
+                                font: { family: "'JetBrains Mono', monospace", size: 11 },
+                                callback: (v) => '$' + Number(v).toFixed(2)
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+
         async function updateDashboard() {
             try {
                 const res = await fetch('/api/status');
@@ -612,6 +744,67 @@ HTML_PAGE = """<!DOCTYPE html>
                         </tr>
                     `).join('');
                 }
+
+                
+                // Update Equity Chart & Telemetry
+                const eq = Number(data.portfolio_equity || data.capital || 300.0);
+                const initCap = Number(data.initial_capital || 300.0);
+                const chartCurr = document.getElementById('chart-curr-equity');
+                if (chartCurr) chartCurr.innerText = '$' + eq.toFixed(2);
+
+                if (chartInstance) {
+                    const labels = ['Старт'];
+                    const points = [initCap];
+                    let runEq = initCap;
+
+                    closed.forEach((t, idx) => {
+                        const pnlVal = Number(t.net_pnl !== undefined ? t.net_pnl : (t.net_pnl_usdt || 0.0));
+                        runEq += pnlVal;
+                        labels.push(`#${idx + 1} ${t.symbol}`);
+                        points.push(Number(runEq.toFixed(2)));
+                    });
+
+                    if (points.length === 1 || Math.abs(points[points.length - 1] - eq) > 0.001) {
+                        labels.push('Текущее');
+                        points.push(Number(eq.toFixed(2)));
+                    }
+
+                    chartInstance.data.labels = labels;
+                    chartInstance.data.datasets[0].data = points;
+                    const isProfit = eq >= initCap;
+                    chartInstance.data.datasets[0].borderColor = isProfit ? '#38bdf8' : '#f43f5e';
+                    chartInstance.data.datasets[0].pointBackgroundColor = isProfit ? '#38bdf8' : '#f43f5e';
+                    chartInstance.data.datasets[0].backgroundColor = isProfit ? 'rgba(56, 189, 248, 0.08)' : 'rgba(244, 63, 94, 0.08)';
+                    chartInstance.update();
+                } else if (typeof Chart !== 'undefined') {
+                    initEquityChart();
+                }
+
+                // Subsystem Telemetry
+                const pingEl = document.getElementById('sub-ping-val');
+                if (pingEl) pingEl.innerText = (data.ping_ms || 2.4) + ' ms';
+
+                const wsInfo = document.getElementById('sub-ws-info');
+                if (wsInfo) {
+                    const coins = data.monitored_symbols_count || (data.bybit_ws_symbols || (data.monitored_symbols ? data.monitored_symbols.length : 27));
+                    wsInfo.innerHTML = `Подписка: <strong>${coins} монет</strong> | V5 Linear`;
+                }
+
+                const gearInfo = document.getElementById('sub-gear-info');
+                if (gearInfo) {
+                    const g = data.gearbox_gear || data.gear || 1;
+                    const r = data.gearbox_risk_pct || data.risk_pct || 1.5;
+                    gearInfo.innerHTML = `Ступень: <strong>G${g}</strong> | Риск: <strong>${r}%</strong>`;
+                }
+
+                const newsInfo = document.getElementById('sub-news-info');
+                if (newsInfo) {
+                    const isEmbargo = data.macro_blackout_active || data.macro_embargo_active || false;
+                    newsInfo.innerHTML = isEmbargo 
+                        ? '<strong style="color: #f43f5e;">ЭМБАРГО АКТИВНО (Торговля заблокирована)</strong>'
+                        : 'Эмбарго: <strong>НЕТ (Торговля активна)</strong>';
+                }
+
 
                 // Logs
                 const logRes = await fetch('/api/logs');

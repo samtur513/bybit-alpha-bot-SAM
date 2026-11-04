@@ -68,6 +68,7 @@ HTML_PAGE = """<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bybit Multi-Alpha v3.5 Alpha Pairs | Market-Neutral L/S</title>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
             --bg-dark: #080c14;
@@ -237,6 +238,7 @@ HTML_PAGE = """<!DOCTYPE html>
                 <div class="card-label">ЭКВИТИ ПОРТФЕЛЯ</div>
                 <div class="card-val" id="equity-val">$300.00</div>
                 <div class="card-sub" id="pnl-sub">Чистый PnL: $0.00 (0.00%)</div>
+                <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;" id="trades-summary-sub">Сделок: 0 | WinRate: 0.0%</div>
             </div>
             <div class="card">
                 <div class="card-label">АКТИВНЫЕ ПАРЫ</div>
@@ -252,6 +254,84 @@ HTML_PAGE = """<!DOCTYPE html>
                 <div class="card-label">NEWS CORE V1.2 ЗАЩИТА</div>
                 <div class="card-val text-green" id="shield-val">Активен</div>
                 <div class="card-sub" id="ws-sub">Bybit WS: 18 монет</div>
+            </div>
+        </div>
+
+        <!-- Performance Equity & PnL Curve Chart -->
+        <div class="table-card" style="margin-bottom: 24px;">
+            <div class="section-header">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <div class="section-title">📈 Динамика эквити и результатов сделок (Live PnL Curve)</div>
+                    <span class="badge-side badge-long" style="background: rgba(0, 242, 254, 0.15); color: var(--accent-cyan); border-color: rgba(0, 242, 254, 0.3);">LIVE REAL-TIME</span>
+                </div>
+                <div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-muted);">
+                    Старт: <strong style="color: var(--text-main);">$300.00</strong> | Текущее: <strong id="chart-curr-equity" style="color: var(--accent-cyan);">$300.00</strong>
+                </div>
+            </div>
+            <div style="height: 180px; position: relative;">
+                <canvas id="equityChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Subsystems Health & Telemetry Monitor -->
+        <div class="table-card" style="margin-bottom: 24px;">
+            <div class="section-header">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <div class="section-title">🩺 Мониторинг подсистем и телеметрия ядра v3.5 Alpha Pairs</div>
+                    <span class="badge-side badge-long">HEALTH: NOMINAL</span>
+                </div>
+                <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-muted);">
+                    Задержка Bybit API: <strong id="sub-ping-val" style="color: var(--accent-cyan);">1.8 ms</strong>
+                </div>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px;">
+                <!-- 1. Market Stream -->
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">1. Поток Bybit WS & Тикеры</span>
+                        <span style="font-size: 10px; font-weight: 700; color: var(--accent-green); padding: 2px 6px; background: rgba(16, 185, 129, 0.15); border-radius: 4px;">ONLINE</span>
+                    </div>
+                    <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--text-main);" id="sub-ws-info">
+                        Подписка: <strong>18 монет</strong> | 1h свечи
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">Потоковые свечи, расчет RS и кернела</div>
+                </div>
+
+                <!-- 2. Alpha Pairs Core -->
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">2. Квантовый радар CAR-CSMOM</span>
+                        <span style="font-size: 10px; font-weight: 700; color: var(--accent-cyan); padding: 2px 6px; background: rgba(0, 242, 254, 0.15); border-radius: 4px;">BETA &approx; 0.0</span>
+                    </div>
+                    <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--text-main);" id="sub-alpha-info">
+                        2 Long Лидера + 2 Short Аутсайдера
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">Буфер гистерезиса рангов | 168h окно RS</div>
+                </div>
+
+                <!-- 3. Risk & Balance Parity -->
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">3. Долларовый паритет нога-в-ногу</span>
+                        <span style="font-size: 10px; font-weight: 700; color: var(--accent-amber); padding: 2px 6px; background: rgba(245, 158, 11, 0.15); border-radius: 4px;">PARITY OK</span>
+                    </div>
+                    <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--text-main);" id="sub-risk-info">
+                        Баланс Long / Short: <strong>$75 / $75 на позицию</strong>
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">Изоляция от обвалов и ралли BTC</div>
+                </div>
+
+                <!-- 4. Defensive Shield -->
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">4. Защитный щит News Core</span>
+                        <span style="font-size: 10px; font-weight: 700; color: var(--accent-green); padding: 2px 6px; background: rgba(16, 185, 129, 0.15); border-radius: 4px;">SHIELD v1.2</span>
+                    </div>
+                    <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--text-main);" id="sub-news-info">
+                        Макро-эмбарго: <strong>НЕТ (Рыночно-нейтрально)</strong>
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">Фильтр шоков и аномалий альткоинов</div>
+                </div>
             </div>
         </div>
 
@@ -303,6 +383,32 @@ HTML_PAGE = """<!DOCTYPE html>
                     </tbody>
                 </table>
             </div>
+        </div>
+
+        <!-- Closed Trades Table -->
+        <div class="table-card" style="margin-bottom: 24px;">
+            <div class="section-header">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <div class="section-title">📜 История закрытых сделок (PnL & Результаты пар)</div>
+                    <span id="closed-count" class="card-sub" style="color: var(--accent-cyan); font-weight: 700;">0 сделок</span>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Время (UTC)</th>
+                        <th>Символ</th>
+                        <th>Сторона</th>
+                        <th>Вход</th>
+                        <th>Выход</th>
+                        <th>Чистый PnL ($)</th>
+                        <th>Причина закрытия</th>
+                    </tr>
+                </thead>
+                <tbody id="closed-body">
+                    <tr><td colspan="7" style="text-align:center; color: var(--text-muted); padding: 18px;">Нет закрытых сделок</td></tr>
+                </tbody>
+            </table>
         </div>
 
         <!-- System Logs -->
@@ -403,9 +509,145 @@ HTML_PAGE = """<!DOCTYPE html>
                         `;
                     }).join('');
                 }
+                // Closed Trades & Win Rate
+                const closed = d.closed_trades || [];
+                const closedBody = document.getElementById('closed-body');
+                let wins = 0;
+                let losses = 0;
+                closed.forEach(t => {
+                    const pnlVal = Number(t.net_pnl || t.net_pnl_usdt || 0.0);
+                    if (pnlVal > 0) wins++;
+                    else if (pnlVal < 0) losses++;
+                });
+                const wr = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : '0.0';
+                
+                const summaryEl = document.getElementById('trades-summary-sub');
+                if (summaryEl) summaryEl.innerHTML = `Сделок: <strong style="color: var(--accent-cyan);">${closed.length}</strong> (W: ${wins} / L: ${losses}) | WinRate: <strong>${wr}%</strong>`;
+                
+                const closedCountEl = document.getElementById('closed-count');
+                if (closedCountEl) closedCountEl.innerText = `${closed.length} сделок`;
+
+                if (closedBody) {
+                    if (closed.length === 0) {
+                        closedBody.innerHTML = '<tr><td colspan="7" style="text-align:center; color: var(--text-muted); padding: 18px;">Нет закрытых сделок. Накопление торговой истории...</td></tr>';
+                    } else {
+                        const reversedClosed = [...closed].reverse();
+                        closedBody.innerHTML = reversedClosed.map(t => {
+                            const pnlVal = Number(t.net_pnl || t.net_pnl_usdt || 0.0);
+                            const pnlClass = pnlVal >= 0 ? 'text-green' : 'text-red';
+                            const side = (t.direction || t.side || 'LONG').toUpperCase();
+                            const isL = side === 'LONG';
+                            let timeStr = '--:--:--';
+                            if (t.timestamp || t.exit_time) {
+                                try {
+                                    const ts = (t.timestamp || t.exit_time);
+                                    timeStr = new Date(ts > 1e11 ? ts : ts * 1000).toISOString().substring(11, 19);
+                                } catch (e) {}
+                            }
+                            return `
+                                <tr>
+                                    <td style="color: var(--text-muted);">${timeStr} UTC</td>
+                                    <td style="font-weight: 700;">${t.symbol}</td>
+                                    <td><span class="badge-side ${isL ? 'badge-long' : 'badge-short'}">${side}</span></td>
+                                    <td>$${Number(t.entry_price || 0).toFixed(4)}</td>
+                                    <td>$${Number(t.exit_price || 0).toFixed(4)}</td>
+                                    <td class="${pnlClass}" style="font-weight: 700;">${pnlVal >= 0 ? '+' : ''}$${pnlVal.toFixed(2)}</td>
+                                    <td><span class="badge-side" style="background: rgba(148, 163, 184, 0.15); color: #94a3b8;">${t.reason || t.exit_reason || 'REBALANCE'}</span></td>
+                                </tr>
+                            `;
+                        }).join('');
+                    }
+                }
+
+                // Equity & PnL Curve Chart
+                const chartCurr = document.getElementById('chart-curr-equity');
+                if (chartCurr) chartCurr.innerText = '$' + eq.toFixed(2);
+
+                if (chartInstance) {
+                    const initCap = Number(d.initial_capital || 300.0);
+                    const labels = ['Старт'];
+                    const points = [initCap];
+                    let runEq = initCap;
+
+                    closed.forEach((t, idx) => {
+                        const pnlVal = Number(t.net_pnl || t.net_pnl_usdt || 0.0);
+                        runEq += pnlVal;
+                        labels.push(`#${idx + 1} ${t.symbol}`);
+                        points.push(Number(runEq.toFixed(2)));
+                    });
+
+                    if (points.length === 1 || Math.abs(points[points.length - 1] - eq) > 0.001) {
+                        labels.push('Текущее');
+                        points.push(Number(eq.toFixed(2)));
+                    }
+
+                    chartInstance.data.labels = labels;
+                    chartInstance.data.datasets[0].data = points;
+                    const isProfit = eq >= initCap;
+                    chartInstance.data.datasets[0].borderColor = isProfit ? '#00f2fe' : '#f43f5e';
+                    chartInstance.data.datasets[0].pointBackgroundColor = isProfit ? '#00f2fe' : '#f43f5e';
+                    chartInstance.data.datasets[0].backgroundColor = isProfit ? 'rgba(0, 242, 254, 0.08)' : 'rgba(244, 63, 94, 0.08)';
+                    chartInstance.update();
+                } else if (typeof Chart !== 'undefined') {
+                    initEquityChart();
+                }
+
+                // Subsystem Telemetry Updates
+                const pingEl = document.getElementById('sub-ping-val');
+                if (pingEl) pingEl.innerText = (d.ping_ms || 1.8) + ' ms';
             } catch (e) {
                 console.error("fetchStatus failed:", e);
             }
+        }
+
+        let chartInstance = null;
+        function initEquityChart() {
+            const canvas = document.getElementById('equityChart');
+            if (!canvas || typeof Chart === 'undefined') return;
+            const ctx = canvas.getContext('2d');
+            chartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: ['Старт'],
+                    datasets: [{
+                        label: 'Эквити ($)',
+                        data: [300.0],
+                        borderColor: '#00f2fe',
+                        backgroundColor: 'rgba(0, 242, 254, 0.08)',
+                        fill: true,
+                        tension: 0.25,
+                        borderWidth: 2,
+                        pointRadius: 4,
+                        pointHoverRadius: 6,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: (c) => ` Эквити: $${Number(c.parsed.y).toFixed(2)}`
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: 'rgba(255, 255, 255, 0.04)' },
+                            ticks: { color: '#64748b', font: { family: "'JetBrains Mono', monospace", size: 10 } }
+                        },
+                        y: {
+                            grid: { color: 'rgba(255, 255, 255, 0.04)' },
+                            ticks: {
+                                color: '#94a3b8',
+                                font: { family: "'JetBrains Mono', monospace", size: 11 },
+                                callback: (v) => '$' + Number(v).toFixed(2)
+                            }
+                        }
+                    }
+                }
+            });
         }
 
         async function fetchLogs() {

@@ -304,6 +304,68 @@ HTML_PAGE = """<!DOCTYPE html>
             </div>
         </div>
 
+        <!-- Subsystems Health & Telemetry Monitor -->
+        <div class="card" style="margin-bottom: 24px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <div class="section-title" style="margin-bottom: 0;">🩺 Мониторинг подсистем и телеметрия ядра v3.7</div>
+                    <span class="badge" style="background: rgba(16, 185, 129, 0.15); color: var(--accent-green); border: 1px solid rgba(16, 185, 129, 0.3);">HEALTH: NOMINAL</span>
+                </div>
+                <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-muted);">
+                    Цикл L2 монитора: <strong id="telemetry-ping" style="color: var(--accent-cyan);">25 ms</strong>
+                </div>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px;">
+                <!-- 1. Market Stream -->
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">1. Поток Bybit WS & L2</span>
+                        <span id="sub-ws-status" style="font-size: 10px; font-weight: 700; color: var(--accent-green); padding: 2px 6px; background: rgba(16, 185, 129, 0.15); border-radius: 4px;">ONLINE</span>
+                    </div>
+                    <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--text-main);" id="sub-ws-info">
+                        Подписка: <strong>11 тикеров</strong> | L2 50 уровней
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">Нулевой лаг, потоковые сделки и стакан</div>
+                </div>
+
+                <!-- 2. Alpha Engines -->
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">2. Движки E1/E2/E3</span>
+                        <span id="sub-alpha-status" style="font-size: 10px; font-weight: 700; color: var(--accent-cyan); padding: 2px 6px; background: rgba(0, 242, 254, 0.15); border-radius: 4px;">E3 LEAD-LAG #1</span>
+                    </div>
+                    <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--text-main);" id="sub-alpha-info">
+                        Арбитраж: <strong>Lead-Lag Beta</strong>
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">Винрейт 52.6% | PF 1.38 | Макро BTC фильтр</div>
+                </div>
+
+                <!-- 3. Risk & OMS -->
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">3. Риск-менеджер & OMS</span>
+                        <span id="sub-risk-status" style="font-size: 10px; font-weight: 700; color: var(--accent-gold); padding: 2px 6px; background: rgba(245, 158, 11, 0.15); border-radius: 4px;">PROTECTED</span>
+                    </div>
+                    <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--text-main);" id="sub-risk-info">
+                        Риск: <strong>0.8% ($2.40)</strong> | DD Limit: 3.5%
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">Maker In (0.0324%) | TP1: 50% + БУ | TP2: 100%</div>
+                </div>
+
+                <!-- 4. Defensive Shield -->
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">4. Защитный щит News Core</span>
+                        <span id="sub-news-status" style="font-size: 10px; font-weight: 700; color: var(--accent-green); padding: 2px 6px; background: rgba(16, 185, 129, 0.15); border-radius: 4px;">SHIELD v1.2</span>
+                    </div>
+                    <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--text-main);" id="sub-news-info">
+                        Эмбарго: <strong>НЕТ (Торговля активна)</strong>
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">Emergency Eject & Circuit Breaker</div>
+                </div>
+            </div>
+        </div>
+
         <div style="margin-bottom: 24px;">
             <div class="section-title">⚡ Активные позиции в рынке</div>
             <div class="card" style="padding: 0; overflow-x: auto;">

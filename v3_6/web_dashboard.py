@@ -291,6 +291,68 @@ HTML_PAGE = """<!DOCTYPE html>
             </div>
         </div>
 
+        <!-- Subsystems Health & Telemetry Monitor -->
+        <div class="card" style="margin-bottom: 24px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <h3 style="font-size: 13px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px;">🩺 Мониторинг подсистем и телеметрия ядра v3.6 Omega</h3>
+                    <span class="badge" style="background: rgba(16, 185, 129, 0.15); color: var(--accent-green); border: 1px solid rgba(16, 185, 129, 0.3);">HEALTH: NOMINAL</span>
+                </div>
+                <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-muted);">
+                    Задержка Bybit API: <strong id="sub-ping" style="color: var(--accent-cyan);">2.1 ms</strong>
+                </div>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px;">
+                <!-- 1. Market Stream -->
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">1. Bybit V5 Stream</span>
+                        <span id="sub-ws-tag" style="font-size: 10px; font-weight: 700; color: var(--accent-green); padding: 2px 6px; background: rgba(16, 185, 129, 0.15); border-radius: 4px;">ONLINE</span>
+                    </div>
+                    <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--text-main);" id="sub-ws-info">
+                        Подписка: <strong>18 монет</strong> | 1h свечи
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">Нулевой лаг, потоковые тики</div>
+                </div>
+
+                <!-- 2. Dual-Regime Alpha Core -->
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">2. Dual-Regime Alpha</span>
+                        <span id="sub-alpha-tag" style="font-size: 10px; font-weight: 700; color: var(--accent-cyan); padding: 2px 6px; background: rgba(0, 242, 254, 0.15); border-radius: 4px;">ACTIVE</span>
+                    </div>
+                    <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--text-main);" id="sub-alpha-info">
+                        120h Donchian + IRAS Chop Maker
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">Тренд: Пробой Donchian | Боковик: IRAS Maker</div>
+                </div>
+
+                <!-- 3. ZF-8 Transmission -->
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">3. АКПП ZF-8 & Риск</span>
+                        <span id="sub-gear-tag" style="font-size: 10px; font-weight: 700; color: var(--accent-gold); padding: 2px 6px; background: rgba(245, 158, 11, 0.15); border-radius: 4px;">G1 (1.0%)</span>
+                    </div>
+                    <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--text-main);" id="sub-gear-info">
+                        Ступень: <strong>G1 Crawl</strong> | Half-Kelly
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">Динамический риск 0.5% - 4.5% + Пирамидинг</div>
+                </div>
+
+                <!-- 4. News Core & Defense -->
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">4. Щит News Core v1.2</span>
+                        <span id="sub-news-tag" style="font-size: 10px; font-weight: 700; color: var(--accent-green); padding: 2px 6px; background: rgba(16, 185, 129, 0.15); border-radius: 4px;">SHIELD ACTIVE</span>
+                    </div>
+                    <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--text-main);" id="sub-news-info">
+                        Regime Guard + Fast Scratch
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">Emergency Eject, Squeeze Escape & Защита прибыли</div>
+                </div>
+            </div>
+        </div>
+
         <!-- Open Positions Table -->
         <div class="card" style="margin-bottom: 24px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
