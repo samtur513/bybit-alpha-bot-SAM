@@ -64,7 +64,7 @@ class ScalperConfig:
 
     # 5. Параметры пула монет
     leader_symbol: str = "BTCUSDT"
-    max_active_symbols: int = 8
+    max_active_symbols: int = 15
 
     # 6. Пороги Движка 1 (OBI + Flow Toxicity Breakout)
     e1_obi_threshold: float = 0.45
