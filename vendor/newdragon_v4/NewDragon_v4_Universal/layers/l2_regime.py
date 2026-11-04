@@ -9,8 +9,23 @@ Implements:
 """
 from typing import Dict, Any, Optional
 import numpy as np
-from scipy.special import logsumexp
-from hmmlearn.hmm import GaussianHMM
+
+try:
+    from scipy.special import logsumexp
+except ImportError:
+    def logsumexp(a, axis=None, keepdims=False):
+        max_a = np.max(a, axis=axis, keepdims=True)
+        if not keepdims and axis is not None:
+            max_a_squeezed = np.squeeze(max_a, axis=axis)
+        else:
+            max_a_squeezed = max_a
+        out = np.log(np.sum(np.exp(a - max_a), axis=axis, keepdims=keepdims)) + max_a_squeezed
+        return out
+
+try:
+    from hmmlearn.hmm import GaussianHMM
+except ImportError:
+    GaussianHMM = None
 
 
 class CausalRegimeDetector:
@@ -31,13 +46,16 @@ class CausalRegimeDetector:
         self.min_covar = min_covar
         self.n_iter = n_iter
         self.random_state = random_state
-        self.model = GaussianHMM(
-            n_components=n_states,
-            covariance_type=covariance_type,
-            min_covar=min_covar,
-            n_iter=n_iter,
-            random_state=random_state,
-        )
+        if GaussianHMM is not None:
+            self.model = GaussianHMM(
+                n_components=n_states,
+                covariance_type=covariance_type,
+                min_covar=min_covar,
+                n_iter=n_iter,
+                random_state=random_state,
+            )
+        else:
+            self.model = None
         self.state_map: Dict[int, str] = {}
         self._log_alpha: Optional[np.ndarray] = None
         self.is_fitted: bool = False
