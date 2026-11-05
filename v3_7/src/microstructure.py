@@ -127,6 +127,16 @@ class SymbolMicrostructureState:
         top3_bid_v = sum(v for _, v in self.sorted_bids[:3])
         self.mid_history.append((ts_ms, self.mid_price, top3_ask_v, top3_bid_v))
 
+    @property
+    def micro_price(self) -> float:
+        """Микроцена Стойкова (Stoikov Micro-Price) с взвешиванием по объемам BBO."""
+        if not self.sorted_bids or not self.sorted_asks:
+            return self.mid_price
+        b1_p, b1_v = self.sorted_bids[0]
+        a1_p, a1_v = self.sorted_asks[0]
+        denom = b1_v + a1_v
+        return (b1_v * a1_p + a1_v * b1_p) / denom if denom > 0 else self.mid_price
+
     def apply_trades(self, trade_list: list) -> None:
         """Добавляет сделки в кольцевой буфер и обновляет состояние свипов."""
         for tr in trade_list:

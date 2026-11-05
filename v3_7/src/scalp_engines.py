@@ -75,6 +75,7 @@ class ThreeEnginesEvaluate:
             and avg_buy_2s > 0
             and buy_2s >= self.cfg.e1_volume_surge_mult * avg_buy_2s
             and dr_ask_400ms >= self.cfg.e1_depletion_threshold
+            and (state.micro_price - state.mid_price >= 0.10 * m.tick_size)
         ):
             entry = state.best_bid + state.meta.tick_size if state.spread_ticks >= 2.0 else state.best_bid
             tp1 = entry * (1.0 + max(0.0085, 1.10 * natr))
@@ -106,6 +107,7 @@ class ThreeEnginesEvaluate:
             and avg_sell_2s > 0
             and sell_2s >= self.cfg.e1_volume_surge_mult * avg_sell_2s
             and dr_bid_400ms >= self.cfg.e1_depletion_threshold
+            and (state.mid_price - state.micro_price >= 0.10 * m.tick_size)
         ):
             entry = state.best_ask - state.meta.tick_size if state.spread_ticks >= 2.0 else state.best_ask
             tp1 = entry * (1.0 - max(0.0085, 1.10 * natr))
