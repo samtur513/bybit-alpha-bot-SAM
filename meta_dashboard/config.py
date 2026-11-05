@@ -134,4 +134,14 @@ ENGINES = [
         "strategy": "Micro-Account Router (minNotional) + Order Flow Imbalance Z_OFI Scratch + NewDragon v4",
         "color": "#8b5cf6",  # violet
     },
+    {
+        "id": "v310",
+        "name": "v3.10 Sweep Pod",
+        "tag": "15m Sweep Reversion + 4-Part TCA",
+        "version": "3.10",
+        "timeframe": "15m",
+        "port": 8098,
+        "strategy": "Liquidity Sweep Reversion + Anti-Compression + Post-Only Maker Reclaim",
+        "color": "#06b6d4",  # cyan
+    },
 ]

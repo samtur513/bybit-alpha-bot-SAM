@@ -446,8 +446,8 @@ async def main() -> None:
     hub = DataAndTCAHub8095()
     hub.init_zmq()
     await hub.ledger.init_db()
-    await hub.bootstrap_universe(max_symbols=15)
     await hub.start_http_status_server()
+    await hub.bootstrap_universe(max_symbols=15)
     await asyncio.gather(
         hub.ws_ingestor_loop(),
         hub.periodic_kline_updater(),
