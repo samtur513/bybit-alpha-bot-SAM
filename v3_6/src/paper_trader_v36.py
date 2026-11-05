@@ -638,7 +638,7 @@ class PaperTraderV36:
                     "lower_channel": low,
                     "dist_to_long_pct": round(dist_l, 2),
                     "dist_to_short_pct": round(dist_s, 2),
-                    "trend": "BULLISH" if ema_f > ema_s else "BEARISH",
+                    "trend": self.btc_trend_status if sym == "BTCUSDT" else ("BULLISH" if ema_f > ema_s and curr_p > ema_f else ("BEARISH" if ema_f < ema_s and curr_p < ema_f else "NEUTRAL")),
                     "adx": round(float(last_r.get("adx", 0)), 1),
                     "rsi": round(float(last_r.get("rsi", 50)), 1),
                     "ker": round(float(last_r.get("ker", 0.1)), 2),

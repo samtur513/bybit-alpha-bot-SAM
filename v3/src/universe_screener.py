@@ -88,6 +88,15 @@ class CoinCandidateMetric:
 ScreenedAsset = CoinCandidateMetric
 
 
+NON_CRYPTO_OR_TOXIC_SYMBOLS = {
+    "INTCUSDT", "NVDAUSDT", "TSLAUSDT", "AAPLUSDT", "AMZNUSDT", "GOOGLUSDT", "METAUSDT",
+    "MSFTUSDT", "PLTRUSDT", "COINUSDT", "AMDUSDT", "BABAUSDT", "BIDUUSDT", "PDDUSDT",
+    "1000PEPEUSDT", "CLUSDT", "XAUUSDT", "XAGUSDT", "SOXLUSDT", "SOXSUSDT", "SPCXUSDT",
+    "MSTRUSDT", "SKHYNIXUSDT", "SNDKUSDT", "MUUSDT", "KORUUSDT", "TCEHYUSDT",
+    "CLANKERUSDT", "PUMPFUNUSDT", "ACTUSDT", "FARTCOINUSDT"
+}
+
+
 class UniverseScreener:
     """
     Scans derivatives universe, applies strict institutional risk/liquidity gates,
@@ -365,8 +374,14 @@ class UniverseScreener:
         candidates = []
         for item in tickers_list:
             sym = item.get("symbol", "")
-            # Only trade USDT linear perpetuals; exclude USDC-settled, TradFi pre-IPO, and non-crypto
-            if not sym.endswith("USDT") or sym.startswith("USDC") or "STOCK" in sym or sym in non_crypto_symbols:
+            # Only trade USDT linear perpetuals; exclude USDC-settled, TradFi pre-IPO, stocks, and non-crypto
+            if (
+                not sym.endswith("USDT")
+                or sym.startswith("USDC")
+                or "STOCK" in sym
+                or sym in non_crypto_symbols
+                or sym in NON_CRYPTO_OR_TOXIC_SYMBOLS
+            ):
                 continue
 
             try:
