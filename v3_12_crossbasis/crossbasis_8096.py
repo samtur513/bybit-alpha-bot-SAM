@@ -157,8 +157,8 @@ class CrossBasisEngine8096:
         return (self.total_filled_alpha_usdt / denom * 100.0) if denom > 0 else 100.0
 
     async def spot_ws_ingestor_loop(self) -> None:
-        """Subscribes to Bybit Public Spot ticker streams."""
-        topics = [f"tickers.{s}" for s in self.monitored_pairs]
+        """Subscribes to Bybit Public Spot orderbook.1 streams for exact BBO & OFI."""
+        topics = [f"orderbook.1.{s}" for s in self.monitored_pairs]
         for s in self.monitored_pairs:
             self.spot_states[s] = SpotState(symbol=s)
 
@@ -168,12 +168,12 @@ class CrossBasisEngine8096:
                     for chunk in [topics[i:i+10] for i in range(0, len(topics), 10)]:
                         await ws.send(orjson.dumps({"op": "subscribe", "args": chunk}).decode("utf-8"))
                         await asyncio.sleep(0.05)
-                    logger.info(f"Подключен к Bybit Spot WS (Pure Tickers). Мониторинг {len(self.monitored_pairs)} пар.")
+                    logger.info(f"Подключен к Bybit Spot WS (orderbook.1). Мониторинг {len(self.monitored_pairs)} пар.")
 
                     async for raw in ws:
                         msg = orjson.loads(raw)
                         topic = msg.get("topic", "")
-                        if not topic or not topic.startswith("tickers"):
+                        if not topic or not topic.startswith("orderbook.1"):
                             continue
                         sym = topic.split(".")[-1]
                         st = self.spot_states.get(sym)
@@ -181,11 +181,15 @@ class CrossBasisEngine8096:
                             continue
 
                         data = msg.get("data", {})
-                        if "lastPrice" in data and data["lastPrice"]:
-                            st.mid_price = float(data["lastPrice"])
-                        b_sz = float(data.get("bid1Size", 10.0))
-                        a_sz = float(data.get("ask1Size", 10.0))
-                        st.tfi_3s = (b_sz - a_sz) / (b_sz + a_sz + 1e-9)
+                        b = data.get("b", [])
+                        a = data.get("a", [])
+                        if b and a:
+                            st.best_bid = float(b[0][0])
+                            st.best_ask = float(a[0][0])
+                            st.mid_price = 0.5 * (st.best_bid + st.best_ask)
+                            b_sz = float(b[0][1])
+                            a_sz = float(a[0][1])
+                            st.tfi_3s = (b_sz - a_sz) / (b_sz + a_sz + 1e-9)
             except Exception as e:
                 logger.warning(f"Обрыв Spot WS: {e}. Переподключение через 2 сек...")
                 await asyncio.sleep(2.0)
@@ -207,24 +211,23 @@ class CrossBasisEngine8096:
         spot_tfi = spot_st.tfi_3s
         perp_tfi = perp_tick.get("tfi_3s", 0.0)
 
-        # NOISE GATE:
-        # 1. Long Lead-Lag: Spot leads with aggressive buying (Spot TFI >= +0.35, Basis >= +3.5 bps, Perp TFI lagging <= +0.10)
-        # 2. Short Lead-Lag: Spot leads with aggressive selling (Spot TFI <= -0.35, Basis <= -3.5 bps, Perp TFI lagging >= -0.10)
+        # NOISE GATE (FEE-ROBUST CALIBRATION):
+        # Basis threshold raised from 3.5 bps to 8.5 bps to guarantee net alpha after exchange fees (0.055% taker / 0.02% maker)
         action = None
-        if basis_bps >= 3.5 and spot_tfi >= 0.35 and perp_tfi <= 0.10:
+        if basis_bps >= 8.5 and spot_tfi >= 0.35 and perp_tfi <= 0.10:
             action = "LONG_LEAD_LAG"
             side = "Buy"
             pos_idx = 1
             limit_p = perp_tick["bid"]
-            sl_p = round(limit_p * (1.0 - 0.0025) / perp_tick["tick_size"]) * perp_tick["tick_size"]
-            tp_p = round(limit_p * (1.0 + 0.0065) / perp_tick["tick_size"]) * perp_tick["tick_size"]
-        elif basis_bps <= -3.5 and spot_tfi <= -0.35 and perp_tfi >= -0.10:
+            sl_p = round(limit_p * (1.0 - 0.0035) / perp_tick["tick_size"]) * perp_tick["tick_size"]
+            tp_p = round(limit_p * (1.0 + 0.0085) / perp_tick["tick_size"]) * perp_tick["tick_size"]
+        elif basis_bps <= -8.5 and spot_tfi <= -0.35 and perp_tfi >= -0.10:
             action = "SHORT_LEAD_LAG"
             side = "Sell"
             pos_idx = 2
             limit_p = perp_tick["ask"]
-            sl_p = round(limit_p * (1.0 + 0.0025) / perp_tick["tick_size"]) * perp_tick["tick_size"]
-            tp_p = round(limit_p * (1.0 - 0.0065) / perp_tick["tick_size"]) * perp_tick["tick_size"]
+            sl_p = round(limit_p * (1.0 + 0.0035) / perp_tick["tick_size"]) * perp_tick["tick_size"]
+            tp_p = round(limit_p * (1.0 - 0.0085) / perp_tick["tick_size"]) * perp_tick["tick_size"]
 
         if not action:
             return
@@ -608,6 +611,9 @@ async def main() -> None:
     engine = CrossBasisEngine8096()
     engine.init_zmq()
     await engine.ledger.init_db()
+    stats = await engine.ledger.get_summary_stats(MODULE_ID)
+    engine.equity_usdt = round(300.0 + stats.get("net_pnl_usdt", 0.0), 2)
+    engine.trades_count = stats.get("total_trades", 0)
     await engine.start_http_server()
     await asyncio.gather(
         engine.zmq_listener_loop(),

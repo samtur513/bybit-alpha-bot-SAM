@@ -598,6 +598,9 @@ async def main() -> None:
     engine = FundingSqueezeEngine8097()
     engine.init_zmq()
     await engine.ledger.init_db()
+    stats = await engine.ledger.get_summary_stats(MODULE_ID)
+    engine.equity_usdt = round(300.0 + stats.get("net_pnl_usdt", 0.0), 2)
+    engine.trades_count = stats.get("total_trades", 0)
     await engine.start_http_server()
     await asyncio.gather(
         engine.zmq_listener_loop(),
