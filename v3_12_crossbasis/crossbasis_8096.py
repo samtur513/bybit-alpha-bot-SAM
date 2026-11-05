@@ -158,6 +158,7 @@ class CrossBasisEngine8096:
         self.start_time = time.time()
         self.monitored_pairs = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "NEARUSDT"]
         self.circuit_breaker_tripped: bool = False
+        self.session_start_equity: float = self.equity_usdt
         self.max_daily_loss_usdt: float = float(os.getenv("MAX_DAILY_LOSS_USDT", "6.0"))
 
     def init_zmq(self) -> None:
@@ -413,11 +414,11 @@ class CrossBasisEngine8096:
                         f"[BASIS CLOSED: {exit_reason}] {sym} {pos.side} | NetPnL={res['net_pnl']:+.3f}$ "
                         f"(PureAlpha={res['pure_alpha']:+.3f}$, Fees={res['fees']:+.3f}$) | Equity={self.equity_usdt:.2f}$"
                     )
-                    if (300.0 - self.equity_usdt) >= self.max_daily_loss_usdt:
+                    if (self.session_start_equity - self.equity_usdt) >= self.max_daily_loss_usdt:
                         self.circuit_breaker_tripped = True
                         self.pending_intents.clear()
                         logger.critical(
-                            f"[CIRCUIT_BREAKER_8096] Лимит дневной просадки исчерпан (Equity=${self.equity_usdt:.2f} <= $294.00). "
+                            f"[CIRCUIT_BREAKER_8096] Лимит дневной просадки исчерпан (Equity=${self.equity_usdt:.2f} <= ${self.session_start_equity - self.max_daily_loss_usdt:.2f}). "
                             f"Торговля заблокирована!"
                         )
 
@@ -499,7 +500,8 @@ class CrossBasisEngine8096:
                 "open_positions": open_pos_list,
                 "basis_radar": basis_radar,
                 "capture_efficiency_pct": round(self.capture_efficiency, 2),
-                "lead_lag_gate": "ACTIVE (Basis >= 3.5 bps, Spot TFI >= 0.35)",
+                "lead_lag_gate": "ACTIVE (Basis Dislocation >= 8.5 bps, |Z| >= 2.0, Spot TFI >= 0.35)",
+                "circuit_breaker_tripped": self.circuit_breaker_tripped,
                 "tca_summary": stats,
             })
 
@@ -653,6 +655,7 @@ async def main() -> None:
     await engine.ledger.init_db()
     stats = await engine.ledger.get_summary_stats(MODULE_ID)
     engine.equity_usdt = round(300.0 + stats.get("net_pnl_usdt", 0.0), 2)
+    engine.session_start_equity = engine.equity_usdt
     engine.trades_count = stats.get("total_trades", 0)
     await engine.start_http_server()
     await asyncio.gather(
