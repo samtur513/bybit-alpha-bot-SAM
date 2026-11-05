@@ -183,8 +183,8 @@ class FundingSqueezeEngine8097:
                             # Trigger criteria:
                             # 1. Negative funding squeeze: fr <= -0.0003 (-0.03% per funding period, heavily shorted)
                             # 2. Positive funding squeeze: fr >= +0.0003 (+0.03% per funding period, heavily longed)
-                            # 3. Settlement window: within 30 minutes (1800s) and at least 60s remaining
-                            if abs(fr) >= 0.0003 and 60.0 <= time_to_settle_s <= 1800.0:
+                            # 3. Radar displays ALL candidates with |FR| >= 0.03%; trade execution fires within 30m window
+                            if abs(fr) >= 0.0003:
                                 act = "LONG_SQUEEZE" if fr < 0 else "SHORT_SQUEEZE"
                                 cand = FundingCandidate(
                                     symbol=sym,
@@ -197,29 +197,30 @@ class FundingSqueezeEngine8097:
                                 )
                                 candidates[sym] = cand
 
-                                # Direct market evaluation for discovered candidate
-                                bid_p = float(t.get("bid1Price") or t.get("lastPrice") or 0.0)
-                                ask_p = float(t.get("ask1Price") or t.get("lastPrice") or 0.0)
-                                if bid_p > 0 and ask_p > 0:
-                                    mid_p = 0.5 * (bid_p + ask_p)
-                                    spec = await self.get_symbol_spec(session, sym)
-                                    cand_tick = {
-                                        "symbol": sym,
-                                        "ts": now_ms,
-                                        "bid": bid_p,
-                                        "ask": ask_p,
-                                        "mid": mid_p,
-                                        "tick_size": spec[0],
-                                        "qty_step": spec[1],
-                                        "min_qty": spec[2],
-                                        "vwap": mid_p,
-                                        "tfi_3s": 0.35 if act == "LONG_SQUEEZE" else -0.35,
-                                        "atr_15m": mid_p * 0.008,
-                                        "top3_bid_notional": float(t.get("bid1Size") or 10.0) * bid_p,
-                                        "top3_ask_notional": float(t.get("ask1Size") or 10.0) * ask_p,
-                                    }
-                                    self.latest_ticks[sym] = cand_tick
-                                    self._evaluate_funding_setup(cand_tick)
+                                # Direct market evaluation for discovered candidate inside 30m window
+                                if 60.0 <= time_to_settle_s <= 1800.0:
+                                    bid_p = float(t.get("bid1Price") or t.get("lastPrice") or 0.0)
+                                    ask_p = float(t.get("ask1Price") or t.get("lastPrice") or 0.0)
+                                    if bid_p > 0 and ask_p > 0:
+                                        mid_p = 0.5 * (bid_p + ask_p)
+                                        spec = await self.get_symbol_spec(session, sym)
+                                        cand_tick = {
+                                            "symbol": sym,
+                                            "ts": now_ms,
+                                            "bid": bid_p,
+                                            "ask": ask_p,
+                                            "mid": mid_p,
+                                            "tick_size": spec[0],
+                                            "qty_step": spec[1],
+                                            "min_qty": spec[2],
+                                            "vwap": mid_p,
+                                            "tfi_3s": 0.35 if act == "LONG_SQUEEZE" else -0.35,
+                                            "atr_15m": mid_p * 0.008,
+                                            "top3_bid_notional": float(t.get("bid1Size") or 10.0) * bid_p,
+                                            "top3_ask_notional": float(t.get("ask1Size") or 10.0) * ask_p,
+                                        }
+                                        self.latest_ticks[sym] = cand_tick
+                                        self._evaluate_funding_setup(cand_tick)
 
                         self.funding_candidates = candidates
                         if candidates:
