@@ -84,7 +84,7 @@ async def position_monitor_task(oms: ScalpOMSV39) -> None:
     while True:
         now_ms = int(time.time() * 1000)
         await oms.monitor_step(now_ms)
-        await asyncio.sleep(0.025)
+        await asyncio.sleep(0.100)
 
 
 async def run_public_stream(

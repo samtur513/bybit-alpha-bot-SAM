@@ -43,8 +43,8 @@ class ThreeEnginesEvaluate:
             return None
 
         # Строгий макро-фильтр BTC (Strict Macro Trend Gate)
-        btc_bull = False
-        btc_bear = False
+        btc_bull = True
+        btc_bear = True
         if btc_state and btc_state.mid_price > 0:
             bm = btc_state.meta
             vwap = getattr(bm, "vwap_session", 0.0) or 0.0

@@ -400,7 +400,7 @@ class LiquiditySweepEngine8098:
                 if not tick:
                     continue
 
-                filled = (tick["ask"] <= intent.limit_price) if intent.side == "Buy" else (tick["bid"] >= intent.limit_price)
+                filled = (tick["ask"] <= intent.limit_price or tick["mid"] <= intent.limit_price) if intent.side == "Buy" else (tick["bid"] >= intent.limit_price or tick["mid"] >= intent.limit_price)
 
                 if filled:
                     self.pending_intents.pop(sym, None)

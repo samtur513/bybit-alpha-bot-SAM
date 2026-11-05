@@ -89,11 +89,11 @@ async def gc_guardian_task(oms: ScalpOMS) -> None:
 
 
 async def position_monitor_task(oms: ScalpOMS) -> None:
-    """Цикл мониторинга ордеров и позиций с шагом 25 мс."""
+    """Цикл мониторинга ордеров и позиций с шагом 100 мс (энергоэффективный режим для 1 vCPU)."""
     while True:
         now_ms = int(time.time() * 1000)
         await oms.monitor_step(now_ms)
-        await asyncio.sleep(0.025)
+        await asyncio.sleep(0.100)
 
 
 async def run_public_stream(

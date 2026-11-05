@@ -166,19 +166,19 @@ class FundingSqueezeEngine8097:
                         candidates = {}
                         for t in tickers:
                             sym = t.get("symbol", "")
-                            if not sym.endswith("USDT") or float(t.get("turnover24h", 0)) < 5_000_000:
+                            if not sym.endswith("USDT") or float(t.get("turnover24h") or 0) < 5_000_000:
                                 continue
 
                             fr_str = t.get("fundingRate", "")
                             if not fr_str:
                                 continue
                             fr = float(fr_str)
-                            next_f_ms = int(t.get("nextFundingTime", 0))
+                            next_f_ms = int(t.get("nextFundingTime") or 0)
                             if next_f_ms <= now_ms:
                                 continue
 
                             time_to_settle_s = (next_f_ms - now_ms) / 1000.0
-                            oi = float(t.get("openInterest", 0.0))
+                            oi = float(t.get("openInterest") or 0.0)
 
                             # Trigger criteria:
                             # 1. Negative funding squeeze: fr <= -0.0003 (-0.03% per funding period, heavily shorted)
@@ -191,7 +191,7 @@ class FundingSqueezeEngine8097:
                                     funding_rate=fr,
                                     next_funding_time_ms=next_f_ms,
                                     open_interest=oi,
-                                    predicted_rate=float(t.get("predictedDeliveryPrice", 0.0)),
+                                    predicted_rate=float(t.get("predictedDeliveryPrice") or 0.0),
                                     time_to_settle_sec=time_to_settle_s,
                                     action=act,
                                 )
@@ -220,7 +220,7 @@ class FundingSqueezeEngine8097:
                                             "top3_ask_notional": float(t.get("ask1Size") or 10.0) * ask_p,
                                         }
                                         self.latest_ticks[sym] = cand_tick
-                                        self._evaluate_funding_setup(cand_tick)
+                                        self._evaluate_funding_setup(cand_tick, cand)
 
                         self.funding_candidates = candidates
                         if candidates:
@@ -230,14 +230,15 @@ class FundingSqueezeEngine8097:
 
             await asyncio.sleep(30.0)
 
-    def _evaluate_funding_setup(self, tick: dict) -> None:
+    def _evaluate_funding_setup(self, tick: dict, cand: Optional[FundingCandidate] = None) -> None:
         sym = tick["symbol"]
         if sym in self.pending_intents or sym in self.open_positions:
             return
         if time.time() < self.cooldown_until.get(sym, 0.0):
             return
 
-        cand = self.funding_candidates.get(sym)
+        if cand is None:
+            cand = self.funding_candidates.get(sym)
         if not cand:
             return
 
@@ -314,7 +315,7 @@ class FundingSqueezeEngine8097:
                 if not tick:
                     continue
 
-                filled = (tick["ask"] <= intent.limit_price) if intent.side == "Buy" else (tick["bid"] >= intent.limit_price)
+                filled = (tick["ask"] <= intent.limit_price or tick["mid"] <= intent.limit_price) if intent.side == "Buy" else (tick["bid"] >= intent.limit_price or tick["mid"] >= intent.limit_price)
                 if filled:
                     self.pending_intents.pop(sym, None)
                     sl_link = f"M2_8097_SL_{sym}_{now_ms}"

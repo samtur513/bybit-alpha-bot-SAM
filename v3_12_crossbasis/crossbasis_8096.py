@@ -273,7 +273,7 @@ class CrossBasisEngine8096:
                 if not tick:
                     continue
 
-                filled = (tick["ask"] <= intent.limit_price) if intent.side == "Buy" else (tick["bid"] >= intent.limit_price)
+                filled = (tick["ask"] <= intent.limit_price or tick["mid"] <= intent.limit_price) if intent.side == "Buy" else (tick["bid"] >= intent.limit_price or tick["mid"] >= intent.limit_price)
                 if filled:
                     self.pending_intents.pop(sym, None)
                     sl_link = f"M1_8096_SL_{sym}_{now_ms}"

@@ -202,7 +202,7 @@ class DataAndTCAHub8095:
                     tickers = orjson.loads(await r2.read())
                     for t in tickers.get("result", {}).get("list", []):
                         sym = t["symbol"]
-                        if sym in specs and float(t.get("turnover24h", 0)) >= 50_000_000:
+                        if sym in specs and float(t.get("turnover24h") or 0) >= 50_000_000:
                             ranked.append((sym, float(t["turnover24h"])))
                     ranked.sort(key=lambda x: x[1], reverse=True)
         except Exception as e:
