@@ -15,14 +15,14 @@ POLL_INTERVAL_SECONDS = float(os.environ.get("META_POLL_INTERVAL", 2.0))
 
 ENGINES = [
     {
-        "id": "v20",
-        "name": "v2.0 Base Engine",
-        "tag": "1h Baseline Breakout",
-        "version": "2.0",
-        "timeframe": "1h",
+        "id": "v313",
+        "name": "v3.13 Sector Arb",
+        "tag": "Intra-Sector Spike Reversion (3-8m)",
+        "version": "3.13",
+        "timeframe": "3-8m",
         "port": 8080,
-        "strategy": "Donchian 120h (Static 18 Coins)",
-        "color": "#94a3b8",  # slate
+        "strategy": "Beta-Neutral Sector Pairs + 2-Stage Exit + News v1.2",
+        "color": "#06b6d4",  # cyan
     },
     {
         "id": "v21",

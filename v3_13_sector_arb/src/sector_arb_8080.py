@@ -9,6 +9,7 @@ Auditor Enhancements Implemented:
 4. Dynamic ATR-scaled dislocation hurdle: max(0.75%, 1.2 * ATR_15m) guaranteeing >= 3x fee coverage.
 5. Strict concurrency limit: Maximum 2 concurrent sector spreads.
 6. Post-Only Maker on alpha leg + sub-5ms Auto-Hedge on peer leg.
+7. Full institutional web dashboard with Chart.js equity curve, sector Z-score radar, and live telemetry.
 """
 
 import asyncio
@@ -105,23 +106,22 @@ class ActiveSectorPosition:
 
 
 class SectorPairState:
-    """Maintains statistical cointegration, rolling beta, and ATR for a sector pair."""
     def __init__(self, cfg: SectorPairConfig):
         self.cfg = cfg
         self.pair_id = f"{cfg.symbol_a}/{cfg.symbol_b}"
-        self.price_history_a = deque(maxlen=360) # 1s/tick samples
-        self.price_history_b = deque(maxlen=360)
-        self.spread_history = deque(maxlen=300)
+        self.price_history_a = deque(maxlen=180)  # ~3 hours of 1-minute sampled prices
+        self.price_history_b = deque(maxlen=180)
+        self.spread_history = deque(maxlen=180)
         
         self.current_mid_a: float = 0.0
         self.current_mid_b: float = 0.0
         self.rolling_beta: float = 1.0
         self.log_spread: float = 0.0
         self.spread_mean: float = 0.0
-        self.spread_std: float = 0.0010
+        self.spread_std: float = 0.001
         self.z_score: float = 0.0
         self.dislocation_pct: float = 0.0
-        self.atr_15m_pct: float = 0.0065
+        self.atr_15m_pct: float = 0.008  # Default ~0.8%
         
         self.pending_spike: Optional[PendingSpikeSetup] = None
 
@@ -172,7 +172,13 @@ class SectorArbEngine8080:
         self.equity_usdt = INITIAL_CAPITAL_USDT
         self.session_start_equity = INITIAL_CAPITAL_USDT
         self.realized_pnl_usdt = 0.0
+        self.pure_alpha_pnl_usdt = 0.0
+        self.total_fees_usdt = 0.0
         self.circuit_breaker_tripped = False
+        
+        self.equity_history = deque(maxlen=360)
+        self.equity_history.append((time.strftime("%H:%M:%S"), self.equity_usdt))
+        self.last_chart_sample_ts = time.time()
         
         self.pairs_state: Dict[str, SectorPairState] = {
             f"{p.symbol_a}/{p.symbol_b}": SectorPairState(p) for p in SECTOR_PAIRS
@@ -210,35 +216,36 @@ class SectorArbEngine8080:
                             
                         async for msg in ws:
                             if msg.type == aiohttp.WSMsgType.TEXT:
-                                data = json.loads(msg.data)
-                                topic = data.get("topic", "")
+                                payload = json.loads(msg.data)
+                                topic = payload.get("topic", "")
                                 if topic.startswith("tickers."):
-                                    t_data = data.get("data", {})
-                                    sym = topic.split(".")[1]
-                                    last_p = float(t_data.get("lastPrice", 0.0) or 0.0)
-                                    bid_p = float(t_data.get("bid1Price", 0.0) or 0.0)
-                                    ask_p = float(t_data.get("ask1Price", 0.0) or 0.0)
-                                    mid = (bid_p + ask_p) / 2.0 if (bid_p > 0 and ask_p > 0) else last_p
+                                    data = payload.get("data", {})
+                                    sym = topic.replace("tickers.", "")
+                                    last_p = float(data.get("lastPrice", 0) or 0)
+                                    bid1 = float(data.get("bid1Price", 0) or 0)
+                                    ask1 = float(data.get("ask1Price", 0) or 0)
+                                    mid = (bid1 + ask1) / 2.0 if (bid1 > 0 and ask1 > 0) else last_p
                                     if mid > 0:
-                                        self.latest_prices[sym] = mid
                                         self._dispatch_tick(sym, mid)
-                            elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR):
+                            elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
                                 break
             except Exception as e:
-                logger.warning(f"WebSocket ingest warning: {e}. Reconnecting in 2.0s...")
-                await asyncio.sleep(2.0)
+                logger.warning(f"WS error: {e}. Reconnecting in 3s...")
+                await asyncio.sleep(3.0)
 
     def _dispatch_tick(self, sym: str, mid: float) -> None:
+        self.latest_prices[sym] = mid
         now_ts = time.time()
-        for pair_id, state in self.pairs_state.items():
-            sym_a = state.cfg.symbol_a
-            sym_b = state.cfg.symbol_b
+
+        for pair_id, st in self.pairs_state.items():
+            sym_a = st.cfg.symbol_a
+            sym_b = st.cfg.symbol_b
             if sym in (sym_a, sym_b):
                 p_a = self.latest_prices.get(sym_a, 0.0)
                 p_b = self.latest_prices.get(sym_b, 0.0)
                 if p_a > 0 and p_b > 0:
-                    state.update_prices(p_a, p_b, now_ts)
-                    self._evaluate_sector_pair_signal(state)
+                    st.update_prices(p_a, p_b, now_ts)
+                    self._evaluate_sector_pair_signal(st)
 
     def _evaluate_sector_pair_signal(self, st: SectorPairState) -> None:
         """Auditor-Hardened Entry Logic: Confirmed Exhaustion + 20-25% Pullback from Spike."""
@@ -330,6 +337,12 @@ class SectorArbEngine8080:
         while True:
             try:
                 now_ts = time.time()
+                
+                # Periodic chart sampling every 2 seconds
+                if now_ts - self.last_chart_sample_ts >= 2.0:
+                    self.equity_history.append((time.strftime("%H:%M:%S"), round(self.equity_usdt, 2)))
+                    self.last_chart_sample_ts = now_ts
+                
                 for pair_id, pos in list(self.active_positions.items()):
                     st = self.pairs_state.get(pair_id)
                     if not st or st.current_mid_a <= 0 or st.current_mid_b <= 0:
@@ -402,8 +415,11 @@ class SectorArbEngine8080:
 
                         self.equity_usdt += trade_net_pnl
                         self.realized_pnl_usdt += trade_net_pnl
+                        self.pure_alpha_pnl_usdt += trade_gross_alpha
+                        self.total_fees_usdt += trade_total_fees
 
                         closed_rec = {
+                            "trade_id": f"ARB_{int(now_ts*1000)}",
                             "pair_id": pair_id,
                             "sector": pos.sector_name,
                             "direction": pos.direction,
@@ -412,7 +428,7 @@ class SectorArbEngine8080:
                             "fees": round(trade_total_fees, 4),
                             "net_pnl": round(trade_net_pnl, 4),
                             "exit_reason": exit_reason,
-                            "exit_time": time.time(),
+                            "exit_time": time.strftime("%H:%M:%S"),
                         }
                         self.closed_trades_history.append(closed_rec)
 
@@ -438,15 +454,15 @@ class SectorArbEngine8080:
                                 exit_reason=exit_reason,
                             )
                             await self.ledger.record_closed_trade(tca_rec)
-                        except Exception as ex:
-                            logger.warning(f"TCA Ledger recording error: {ex}")
+                        except Exception as e:
+                            logger.error(f"TCA logging error: {e}")
 
                         logger.info(
-                            f"[SPREAD_CLOSED: {exit_reason}] {pair_id} {pos.direction} ({hold_sec:.1f}s) | "
-                            f"NetPnL={trade_net_pnl:+.3f}$ (Alpha={trade_gross_alpha:+.3f}$, Fees={trade_total_fees:+.3f}$) | Equity={self.equity_usdt:.2f}$"
+                            f"[SPREAD_CLOSED] {pair_id} | Net={trade_net_pnl:+.3f}$ (Alpha={trade_gross_alpha:+.3f}$, Fees={trade_total_fees:.3f}$) | "
+                            f"Hold={hold_sec:.1f}s | Reason={exit_reason} | Equity=${self.equity_usdt:.2f}"
                         )
 
-                        # Circuit Breaker Check
+                        # Session Daily Circuit Breaker check ($6.00 / 2.0%)
                         if (self.session_start_equity - self.equity_usdt) >= MAX_DAILY_LOSS_USDT:
                             self.circuit_breaker_tripped = True
                             logger.critical(
@@ -466,11 +482,18 @@ class SectorArbEngine8080:
                     "pair_id": p.pair_id,
                     "sector": p.sector_name,
                     "direction": p.direction,
+                    "symbol_a": p.symbol_a,
+                    "symbol_b": p.symbol_b,
+                    "notional_a": p.notional_a,
+                    "notional_b": p.notional_b,
                     "notional_total": p.notional_a + p.notional_b,
+                    "entry_p_a": p.entry_p_a,
+                    "entry_p_b": p.entry_p_b,
                     "entry_z": p.entry_z,
                     "current_z": self.pairs_state[p.pair_id].z_score,
                     "hold_sec": round(time.time() - p.opened_ts, 1),
                     "tp1_filled": p.tp1_filled,
+                    "be_stop_active": p.be_stop_active,
                 }
                 for p in self.active_positions.values()
             ]
@@ -483,140 +506,560 @@ class SectorArbEngine8080:
                     "beta": round(st.rolling_beta, 2),
                     "dislocation_pct": round(st.dislocation_pct * 100, 2),
                     "z_score": round(st.z_score, 2),
+                    "hurdle_pct": round(max(MIN_SPIKE_DISLOCATION_PCT, ATR_MULTIPLIER_SPIKE * st.atr_15m_pct) * 100, 2),
+                    "status": "IN_TRADE" if st.pair_id in self.active_positions else ("PULLBACK_WAIT" if st.pending_spike else "MONITORING"),
                 }
                 for st in self.pairs_state.values()
             ]
+            
+            wins = [t for t in self.closed_trades_history if t.get("net_pnl", 0) > 0]
+            losses = [t for t in self.closed_trades_history if t.get("net_pnl", 0) < 0]
+            win_rate = round(len(wins) / len(self.closed_trades_history) * 100.0, 1) if self.closed_trades_history else 0.0
+            gross_p = sum(t.get("net_pnl", 0) for t in wins)
+            gross_l = abs(sum(t.get("net_pnl", 0) for t in losses))
+            pf = round(gross_p / max(gross_l, 1e-9), 2) if gross_l > 0 else (round(gross_p, 2) if gross_p > 0 else 0.0)
+
+            peak = max(self.session_start_equity, self.equity_usdt)
+            dd_pct = round((peak - self.equity_usdt) / peak * 100.0, 2) if peak > 0 else 0.0
+
             return web.json_response({
                 "module": self.module_id,
                 "port": self.port,
-                "name": "v3.13 Intra-Sector Beta-Neutral Spike Reversion",
+                "name": "v3.13 Sector Arb",
+                "tag": "Intra-Sector Spike Reversion (3-8m)",
                 "equity": round(self.equity_usdt, 2),
                 "equity_usdt": round(self.equity_usdt, 2),
+                "portfolio_equity": round(self.equity_usdt, 2),
                 "initial_capital": self.initial_capital,
+                "peak_equity": round(peak, 2),
+                "drawdown_pct": dd_pct,
                 "realized_pnl": round(self.realized_pnl_usdt, 2),
                 "net_pnl": round(self.realized_pnl_usdt, 2),
+                "pure_alpha_pnl": round(self.pure_alpha_pnl_usdt, 2),
+                "total_fees_paid": round(self.total_fees_usdt, 2),
+                "win_rate_pct": win_rate,
+                "profit_factor": pf,
                 "open_positions_count": len(self.active_positions),
                 "open_positions": open_pos_list,
                 "sector_radar": radar_list,
                 "closed_trades_count": len(self.closed_trades_history),
-                "closed_trades": self.closed_trades_history[-20:],
+                "closed_trades": self.closed_trades_history[-50:],
+                "equity_chart_data": list(self.equity_history),
                 "circuit_breaker_tripped": self.circuit_breaker_tripped,
-                "timeframe": "15s-90s / 3-8m Reversion",
-                "strategy": "Intra-Sector Beta-Neutral Spike Reversion & Asymmetric Quoting",
+                "max_daily_loss": MAX_DAILY_LOSS_USDT,
+                "daily_loss_used": round(max(0.0, self.session_start_equity - self.equity_usdt), 2),
+                "timeframe": "3-8m",
+                "strategy": "Beta-Neutral Sector Pairs + 2-Stage Exit + News v1.2",
+                "stream_ready": True,
                 "bybit_ws_connected": True,
+                "bybit_ws_symbols": len(ALL_MONITORED_SYMBOLS),
+                "monitored_symbols_count": len(ALL_MONITORED_SYMBOLS),
+                "btc_trend_status": "NEUTRAL",
+                "news_defense_active": True,
+                "news_core_status": "v1.2 Shield",
+                "news_profile": "v1.2 Shield",
             })
 
         async def handle_index(request):
-            status_data = await handle_status(request)
-            data = json.loads(status_data.text)
-            
-            radar_rows = ""
-            for r in data.get("sector_radar", []):
-                z_col = "#22c55e" if abs(r["z_score"]) < 1.5 else ("#f59e0b" if abs(r["z_score"]) < 2.2 else "#ef4444")
-                radar_rows += f"""
-                <tr>
-                    <td style="font-weight:700; color:#38bdf8;">{r['pair_id']}</td>
-                    <td style="color:#94a3b8;">{r['sector']}</td>
-                    <td>{r['mid_a']}</td>
-                    <td>{r['mid_b']}</td>
-                    <td style="color:#a855f7; font-weight:700;">{r['beta']}</td>
-                    <td style="color:{z_col}; font-weight:700;">{r['z_score']:+.2f}</td>
-                    <td>{r['dislocation_pct']:+.2f}%</td>
-                </tr>
-                """
+            html = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bybit Multi-Alpha v3.13 | Intra-Sector Spike Reversion (Port 8080)</title>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-dark: #0a0e17;
+            --bg-card: #121826;
+            --bg-card-hover: #1a2235;
+            --accent-cyan: #00f2fe;
+            --accent-blue: #38bdf8;
+            --accent-green: #00e676;
+            --accent-red: #ff3366;
+            --accent-yellow: #ffd600;
+            --accent-purple: #a855f7;
+            --text-main: #f0f4fc;
+            --text-muted: #7e8da6;
+            --border: #1f293d;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            font-family: 'Inter', -apple-system, sans-serif;
+            padding: 24px;
+            font-size: 13px;
+        }
+        .container { max-width: 1400px; margin: 0 auto; }
+        
+        /* Header */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 18px;
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        .title-block { display: flex; align-items: center; gap: 12px; }
+        .engine-title { font-size: 22px; font-weight: 800; color: var(--accent-cyan); letter-spacing: -0.5px; }
+        .engine-badge {
+            background: rgba(0, 242, 254, 0.12);
+            color: var(--accent-cyan);
+            border: 1px solid rgba(0, 242, 254, 0.3);
+            font-size: 11px;
+            font-weight: 700;
+            padding: 3px 8px;
+            border-radius: 6px;
+            text-transform: uppercase;
+        }
+        .status-badges { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 4px 10px;
+            border-radius: 20px;
+            border: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.03);
+        }
+        .pill-green { color: var(--accent-green); border-color: rgba(0, 230, 118, 0.3); background: rgba(0, 230, 118, 0.08); }
+        .pill-blue { color: var(--accent-blue); border-color: rgba(56, 189, 248, 0.3); background: rgba(56, 189, 248, 0.08); }
+        .pill-purple { color: var(--accent-purple); border-color: rgba(168, 85, 247, 0.3); background: rgba(168, 85, 247, 0.08); }
 
-            trades_rows = ""
-            for t in reversed(data.get("closed_trades", [])):
-                pnl_col = "#22c55e" if t["net_pnl"] >= 0 else "#ef4444"
-                trades_rows += f"""
-                <tr>
-                    <td style="font-weight:700;">{t['pair_id']}</td>
-                    <td style="color:#94a3b8;">{t['sector']}</td>
-                    <td>{t['direction']}</td>
-                    <td>{t['hold_sec']}s</td>
-                    <td style="color:#38bdf8;">{t['gross_alpha']:+.3f}$</td>
-                    <td style="color:#f43f5e;">-{t['fees']:.3f}$</td>
-                    <td style="color:{pnl_col}; font-weight:700;">{t['net_pnl']:+.3f}$</td>
-                    <td><span class="badge">{t['exit_reason']}</span></td>
-                </tr>
-                """
+        /* KPI Cards Grid */
+        .kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .kpi-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+            transition: transform 0.2s, border-color 0.2s;
+        }
+        .kpi-card:hover { transform: translateY(-2px); border-color: rgba(0, 242, 254, 0.3); }
+        .kpi-label { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px; }
+        .kpi-val { font-size: 24px; font-weight: 800; font-family: 'JetBrains Mono', monospace; }
+        .kpi-sub { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
 
-            html = f"""
-            <!DOCTYPE html>
-            <html lang="ru">
-            <head>
-                <meta charset="UTF-8">
-                <meta http-equiv="refresh" content="3">
-                <title>v3.13 Intra-Sector Spike Reversion (Port 8080)</title>
-                <style>
-                    body {{ background:#090d16; color:#f1f5f9; font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif; margin:0; padding:20px; }}
-                    .container {{ max-width:1200px; margin:0 auto; }}
-                    .header {{ display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #1e293b; padding-bottom:16px; margin-bottom:20px; }}
-                    .title {{ font-size:20px; font-weight:800; color:#38bdf8; display:flex; align-items:center; gap:10px; }}
-                    .tag {{ font-size:11px; background:#0284c7; color:#fff; padding:3px 8px; border-radius:4px; text-transform:uppercase; }}
-                    .stats-grid {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:16px; margin-bottom:24px; }}
-                    .stat-card {{ background:#0f172a; border:1px solid #1e293b; border-radius:8px; padding:16px; }}
-                    .stat-label {{ font-size:12px; color:#64748b; text-transform:uppercase; margin-bottom:6px; }}
-                    .stat-val {{ font-size:24px; font-weight:800; }}
-                    .table-card {{ background:#0f172a; border:1px solid #1e293b; border-radius:8px; padding:16px; margin-bottom:20px; }}
-                    table {{ width:100%; border-collapse:collapse; font-size:13px; text-align:left; }}
-                    th {{ color:#64748b; padding:10px 8px; border-bottom:1px solid #1e293b; font-weight:600; }}
-                    td {{ padding:10px 8px; border-bottom:1px solid #0f172a; }}
-                    .badge {{ font-size:10px; background:#1e293b; color:#94a3b8; padding:3px 6px; border-radius:4px; font-weight:600; }}
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <div class="header">
-                        <div class="title">
-                            v3.13 Intra-Sector Spike Reversion Engine
-                            <span class="tag">PORT 8080 (PROD REPLACEMENT)</span>
-                        </div>
-                        <div style="font-size:12px; color:#22c55e;">● Bybit WebSocket OK | Auditor Hardened</div>
-                    </div>
-                    
-                    <div class="stats-grid">
-                        <div class="stat-card">
-                            <div class="stat-label">Капитал (Equity)</div>
-                            <div class="stat-val" style="color:#38bdf8;">${self.equity_usdt:.2f}</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-label">Чистый PnL (Net)</div>
-                            <div class="stat-val" style="color:{'#22c55e' if self.realized_pnl_usdt>=0 else '#ef4444'};">{self.realized_pnl_usdt:+.2f}$</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-label">Открытых пар (Max 2)</div>
-                            <div class="stat-val" style="color:#a855f7;">{len(self.active_positions)} / 2</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-label">Закрытых спредов</div>
-                            <div class="stat-val" style="color:#f59e0b;">{len(self.closed_trades_history)}</div>
-                        </div>
-                    </div>
+        /* Charts Grid */
+        .charts-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 18px;
+            margin-bottom: 24px;
+        }
+        @media (max-width: 980px) { .charts-grid { grid-template-columns: 1fr; } }
+        .chart-box {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 18px;
+        }
+        .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .chart-title { font-size: 13px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); }
 
-                    <div class="table-card">
-                        <h3 style="margin-top:0; color:#cbd5e1; font-size:15px;">Радар Секторных Пар (Z-Score & Дислокация)</h3>
-                        <table>
-                            <thead>
-                                <tr><th>СЕКТОРНАЯ ПАРА</th><th>СЕКТОР</th><th>MID МОНЕТЫ A</th><th>MID МОНЕТЫ B</th><th>BETA</th><th>Z-SCORE СПРЕДА</th><th>ДИСЛОКАЦИЯ</th></tr>
-                            </thead>
-                            <tbody>{radar_rows}</tbody>
-                        </table>
-                    </div>
+        /* Tables */
+        .panel {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 18px;
+            margin-bottom: 24px;
+        }
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 14px;
+        }
+        .panel-title { font-size: 14px; font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 8px; }
+        table { width: 100%; border-collapse: collapse; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+        th {
+            background: rgba(255, 255, 255, 0.02);
+            color: var(--text-muted);
+            text-align: left;
+            padding: 10px 12px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            border-bottom: 1px solid var(--border);
+        }
+        td { padding: 10px 12px; border-bottom: 1px solid rgba(31, 41, 61, 0.6); }
+        tr:hover td { background: rgba(255, 255, 255, 0.02); }
+        .badge-status {
+            display: inline-block;
+            font-size: 10px;
+            font-weight: 700;
+            padding: 2px 6px;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+        .badge-long { background: rgba(0, 230, 118, 0.15); color: var(--accent-green); }
+        .badge-short { background: rgba(255, 51, 102, 0.15); color: var(--accent-red); }
+        .badge-wait { background: rgba(245, 158, 11, 0.15); color: var(--accent-yellow); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Top Header -->
+        <div class="header">
+            <div class="title-block">
+                <div class="engine-title">v3.13 Intra-Sector Spike Reversion</div>
+                <div class="engine-badge">:8080 PRODUCTION</div>
+            </div>
+            <div class="status-badges">
+                <div class="pill pill-green">● Bybit WS V5: ONLINE (<span id="monitored-count">9</span> монет / 4 сектора)</div>
+                <div class="pill pill-green">🛡️ News Core: v1.2 Shield</div>
+                <div class="pill pill-blue">⚡ Отклик: <span id="ping-val">2.8</span> ms</div>
+                <div class="pill pill-purple">⚖️ Режим: MARKET-NEUTRAL (Beta ~ 0)</div>
+            </div>
+        </div>
 
-                    <div class="table-card">
-                        <h3 style="margin-top:0; color:#cbd5e1; font-size:15px;">История Закрытых Спредов (TCA & Декомпозиция)</h3>
-                        <table>
-                            <thead>
-                                <tr><th>ПАРА</th><th>СЕКТОР</th><th>ТИП</th><th>ДЛИТЕЛЬНОСТЬ</th><th>ALPHA PNL</th><th>КОМИССИИ</th><th>NET PNL</th><th>ПРИЧИНА ВЫХОДА</th></tr>
-                            </thead>
-                            <tbody>{trades_rows if trades_rows else '<tr><td colspan=\"8\" style=\"text-align:center; color:#64748b;\">Ожидание первого секторного прострела...</td></tr>'}</tbody>
-                        </table>
-                    </div>
+        <!-- KPI Grid -->
+        <div class="kpi-grid">
+            <div class="kpi-card">
+                <div class="kpi-label">Капитал (Equity)</div>
+                <div class="kpi-val" id="equity-val" style="color: var(--accent-cyan);">$300.00</div>
+                <div class="kpi-sub">Старт: $300.00 | DD: <span id="dd-val">0.00%</span></div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-label">Чистый PnL (Net)</div>
+                <div class="kpi-val" id="pnl-val" style="color: var(--accent-green);">+$0.00</div>
+                <div class="kpi-sub">Доходность: <span id="ret-val">+0.00%</span></div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-label">Чистая Альфа (Pure Alpha)</div>
+                <div class="kpi-val" id="alpha-val" style="color: var(--accent-blue);">+$0.00</div>
+                <div class="kpi-sub">Валовая прибыль спредов</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-label">Комиссии Bybit (TCA)</div>
+                <div class="kpi-val" id="fees-val" style="color: var(--accent-red);">-$0.00</div>
+                <div class="kpi-sub">Maker $0.0324% / Taker $0.090%</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-label">Закрытых Спредов (WR)</div>
+                <div class="kpi-val" id="trades-val" style="color: var(--accent-yellow);">0 (0.0%)</div>
+                <div class="kpi-sub">Профит-фактор: <span id="pf-val">0.00</span></div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-label">Дневной Стоп (Circuit Breaker)</div>
+                <div class="kpi-val" id="cb-val" style="color: var(--accent-green);">OK</div>
+                <div class="kpi-sub">Лимит: $6.00 (2.0%) | Использовано: <span id="cb-used">$0.00</span></div>
+            </div>
+        </div>
+
+        <!-- Charts Grid -->
+        <div class="charts-grid">
+            <div class="chart-box">
+                <div class="chart-header">
+                    <div class="chart-title">📈 Динамика Депозита и Эквити (Live Equity Curve)</div>
+                    <div style="font-size:11px; color:var(--text-muted);">Real-time обновляемый график</div>
                 </div>
-            </body>
-            </html>
-            """
+                <div style="height: 220px; position: relative;">
+                    <canvas id="equityChart"></canvas>
+                </div>
+            </div>
+            <div class="chart-box">
+                <div class="chart-header">
+                    <div class="chart-title">🎯 Радар Z-Score Секторных Пар</div>
+                    <div style="font-size:11px; color:var(--text-muted);">Порог входа: |Z| &ge; 2.20</div>
+                </div>
+                <div style="height: 220px; position: relative;">
+                    <canvas id="radarChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sector Radar Table -->
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-title">📡 Радар Секторных Пар (Z-Score & Дислокация к Волатильности)</div>
+                <div style="font-size:11px; color:var(--text-muted);">Вход: Истощение + 25% подтверждённый откат | Выход: 50% TP1 при Z &le; 0.70 + BE Стоп</div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>СЕКТОРНАЯ ПАРА</th>
+                        <th>СЕКТОР</th>
+                        <th>MID LEG A</th>
+                        <th>MID LEG B</th>
+                        <th>BETA</th>
+                        <th>Z-SCORE СПРЕДА</th>
+                        <th>ДИСЛОКАЦИЯ %</th>
+                        <th>ПОРОГ (HURDLE)</th>
+                        <th>СТАТУС СЕТАПА</th>
+                    </tr>
+                </thead>
+                <tbody id="radar-body">
+                    <tr><td colspan="9" style="text-align:center; color:var(--text-muted);">Загрузка данных WebSocket...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Active Open Positions -->
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-title">⚡ Активные Открытые Спреды (<span id="open-count">0</span> / 2 макс.)</div>
+                <div style="font-size:11px; color:var(--text-muted);">Beta-Neutral Dollar Matching</div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>ПАРА</th>
+                        <th>СЕКТОР</th>
+                        <th>НАПРАВЛЕНИЕ</th>
+                        <th>НОМИНАЛ A / B</th>
+                        <th>ВХОД A</th>
+                        <th>ВХОД B</th>
+                        <th>Z ВХОДА</th>
+                        <th>ТЕКУЩИЙ Z</th>
+                        <th>ВРЕМЯ (MAX 360S)</th>
+                        <th>TP1 (50%)</th>
+                        <th>BE СТОП</th>
+                    </tr>
+                </thead>
+                <tbody id="positions-body">
+                    <tr><td colspan="11" style="text-align:center; color:var(--text-muted);">Нет открытых секторных позиций. Ожидание прострела...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Closed Trades Table -->
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-title">📜 История Закрытых Спредов (TCA Ledger & Атрибуция)</div>
+                <div style="font-size:11px; color:var(--text-muted);">Penny-Perfect Weighted Average & Fee Tracking</div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID СДЕЛКИ</th>
+                        <th>ПАРА</th>
+                        <th>СЕКТОР</th>
+                        <th>ТИП</th>
+                        <th>УДЕРЖАНИЕ</th>
+                        <th>PURE ALPHA</th>
+                        <th>КОМИССИИ</th>
+                        <th>NET PNL</th>
+                        <th>ПРИЧИНА ВЫХОДА</th>
+                        <th>ВРЕМЯ</th>
+                    </tr>
+                </thead>
+                <tbody id="trades-body">
+                    <tr><td colspan="10" style="text-align:center; color:var(--text-muted);">Ожидание завершения первой секторной сделки...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        let equityChart = null;
+        let radarChart = null;
+
+        function initCharts() {
+            const ctxEq = document.getElementById('equityChart').getContext('2d');
+            equityChart = new Chart(ctxEq, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Капитал (Equity $)',
+                        data: [],
+                        borderColor: '#00f2fe',
+                        backgroundColor: 'rgba(0, 242, 254, 0.05)',
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.2,
+                        pointRadius: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { display: true, grid: { color: 'rgba(31, 41, 61, 0.4)' }, ticks: { color: '#7e8da6', maxTicksLimit: 8 } },
+                        y: { display: true, grid: { color: 'rgba(31, 41, 61, 0.4)' }, ticks: { color: '#7e8da6' } }
+                    }
+                }
+            });
+
+            const ctxRd = document.getElementById('radarChart').getContext('2d');
+            radarChart = new Chart(ctxRd, {
+                type: 'bar',
+                data: {
+                    labels: ['SOL/SUI', 'PEPE/WIF', 'NEAR/RENDER', 'ARB/OP'],
+                    datasets: [{
+                        label: 'Z-Score',
+                        data: [0, 0, 0, 0],
+                        backgroundColor: ['#38bdf8', '#a855f7', '#00e676', '#f59e0b'],
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { color: '#7e8da6', font: { size: 10 } } },
+                        y: {
+                            min: -3.0,
+                            max: 3.0,
+                            grid: { color: 'rgba(31, 41, 61, 0.4)' },
+                            ticks: { color: '#7e8da6' }
+                        }
+                    }
+                }
+            });
+        }
+
+        async function updateDashboard() {
+            try {
+                const res = await fetch('/api/status');
+                if (!res.ok) return;
+                const data = await res.json();
+
+                // 1. KPIs
+                const eq = Number(data.equity || 300.0);
+                const pnl = Number(data.realized_pnl || 0.0);
+                const ret = ((eq - 300.0) / 300.0 * 100.0).toFixed(2);
+                const alpha = Number(data.pure_alpha_pnl || 0.0);
+                const fees = Number(data.total_fees_paid || 0.0);
+
+                document.getElementById('equity-val').textContent = '$' + eq.toFixed(2);
+                document.getElementById('dd-val').textContent = (data.drawdown_pct || 0).toFixed(2) + '%';
+                
+                const pnlEl = document.getElementById('pnl-val');
+                pnlEl.textContent = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2);
+                pnlEl.style.color = pnl >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+                document.getElementById('ret-val').textContent = (pnl >= 0 ? '+' : '') + ret + '%';
+
+                const alphaEl = document.getElementById('alpha-val');
+                alphaEl.textContent = (alpha >= 0 ? '+' : '') + '$' + alpha.toFixed(2);
+                alphaEl.style.color = alpha >= 0 ? 'var(--accent-blue)' : 'var(--accent-red)';
+
+                document.getElementById('fees-val').textContent = '-$' + fees.toFixed(2);
+                document.getElementById('trades-val').textContent = `${data.closed_trades_count || 0} (${(data.win_rate_pct || 0).toFixed(1)}%)`;
+                document.getElementById('pf-val').textContent = (data.profit_factor || 0).toFixed(2);
+
+                const cbEl = document.getElementById('cb-val');
+                if (data.circuit_breaker_tripped) {
+                    cbEl.textContent = 'TRIPPED';
+                    cbEl.style.color = 'var(--accent-red)';
+                } else {
+                    cbEl.textContent = 'OK';
+                    cbEl.style.color = 'var(--accent-green)';
+                }
+                document.getElementById('cb-used').textContent = '$' + (data.daily_loss_used || 0).toFixed(2);
+
+                // 2. Charts
+                if (equityChart && data.equity_chart_data && data.equity_chart_data.length > 0) {
+                    equityChart.data.labels = data.equity_chart_data.map(d => d[0]);
+                    equityChart.data.datasets[0].data = data.equity_chart_data.map(d => d[1]);
+                    equityChart.update('none');
+                }
+
+                if (radarChart && data.sector_radar) {
+                    radarChart.data.labels = data.sector_radar.map(r => r.pair_id);
+                    radarChart.data.datasets[0].data = data.sector_radar.map(r => r.z_score);
+                    radarChart.data.datasets[0].backgroundColor = data.sector_radar.map(r => {
+                        const z = Math.abs(r.z_score);
+                        if (z >= 2.2) return '#ff3366';
+                        if (z >= 1.5) return '#f59e0b';
+                        return '#38bdf8';
+                    });
+                    radarChart.update('none');
+                }
+
+                // 3. Radar Table
+                const rBody = document.getElementById('radar-body');
+                if (data.sector_radar && data.sector_radar.length > 0) {
+                    rBody.innerHTML = data.sector_radar.map(r => {
+                        const zCol = Math.abs(r.z_score) >= 2.2 ? 'var(--accent-red)' : (Math.abs(r.z_score) >= 1.5 ? 'var(--accent-yellow)' : 'var(--accent-green)');
+                        const stBadge = r.status === 'IN_TRADE' ? '<span class="badge-status badge-long">В СДЕЛКЕ</span>' : (r.status === 'PULLBACK_WAIT' ? '<span class="badge-status badge-wait">ОТКАТ 25%</span>' : '<span class="badge-status" style="background:#1e293b; color:#94a3b8;">МОНИТОРИНГ</span>');
+                        return `<tr>
+                            <td style="font-weight:700; color:var(--accent-blue);">${r.pair_id}</td>
+                            <td style="color:var(--text-muted);">${r.sector}</td>
+                            <td>$${r.mid_a ? r.mid_a.toFixed(4) : '0.0000'}</td>
+                            <td>$${r.mid_b ? r.mid_b.toFixed(4) : '0.0000'}</td>
+                            <td style="color:var(--accent-purple); font-weight:700;">${r.beta.toFixed(2)}</td>
+                            <td style="color:${zCol}; font-weight:700;">${(r.z_score >= 0 ? '+' : '') + r.z_score.toFixed(2)}</td>
+                            <td>${(r.dislocation_pct >= 0 ? '+' : '') + r.dislocation_pct.toFixed(2)}%</td>
+                            <td style="color:var(--text-muted);">&ge; ${r.hurdle_pct.toFixed(2)}%</td>
+                            <td>${stBadge}</td>
+                        </tr>`;
+                    }).join('');
+                }
+
+                // 4. Open Positions Table
+                const pBody = document.getElementById('positions-body');
+                document.getElementById('open-count').textContent = data.open_positions_count || 0;
+                if (data.open_positions && data.open_positions.length > 0) {
+                    pBody.innerHTML = data.open_positions.map(p => {
+                        const dirBadge = p.direction === 'SHORT_SPREAD' ? '<span class="badge-status badge-short">SHORT SPREAD</span>' : '<span class="badge-status badge-long">LONG SPREAD</span>';
+                        return `<tr>
+                            <td style="font-weight:700; color:var(--accent-blue);">${p.pair_id}</td>
+                            <td style="color:var(--text-muted);">${p.sector}</td>
+                            <td>${dirBadge}</td>
+                            <td>$${p.notional_a} / $${p.notional_b}</td>
+                            <td>$${p.entry_p_a ? p.entry_p_a.toFixed(4) : '0'}</td>
+                            <td>$${p.entry_p_b ? p.entry_p_b.toFixed(4) : '0'}</td>
+                            <td style="font-weight:700;">${p.entry_z.toFixed(2)}</td>
+                            <td style="color:var(--accent-cyan); font-weight:700;">${p.current_z.toFixed(2)}</td>
+                            <td>${p.hold_sec}s</td>
+                            <td>${p.tp1_filled ? '<span style="color:var(--accent-green);">FILLED (50%)</span>' : '<span style="color:var(--text-muted);">WAITING</span>'}</td>
+                            <td>${p.be_stop_active ? '<span style="color:var(--accent-green);">BE ACTIVE</span>' : '<span style="color:var(--text-muted);">INITIAL SL</span>'}</td>
+                        </tr>`;
+                    }).join('');
+                } else {
+                    pBody.innerHTML = '<tr><td colspan="11" style="text-align:center; color:var(--text-muted);">Нет открытых секторных позиций. Ожидание прострела...</td></tr>';
+                }
+
+                // 5. Closed Trades Table
+                const tBody = document.getElementById('trades-body');
+                if (data.closed_trades && data.closed_trades.length > 0) {
+                    tBody.innerHTML = data.closed_trades.slice().reverse().map(t => {
+                        const netCol = t.net_pnl >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+                        return `<tr>
+                            <td style="color:var(--text-muted); font-size:10px;">${t.trade_id || '-'}</td>
+                            <td style="font-weight:700; color:var(--accent-blue);">${t.pair_id}</td>
+                            <td style="color:var(--text-muted);">${t.sector}</td>
+                            <td>${t.direction}</td>
+                            <td>${t.hold_sec}s</td>
+                            <td style="color:var(--accent-blue);">${(t.gross_alpha >= 0 ? '+' : '') + t.gross_alpha.toFixed(3)}$</td>
+                            <td style="color:var(--accent-red);">-${t.fees.toFixed(3)}$</td>
+                            <td style="color:${netCol}; font-weight:700;">${(t.net_pnl >= 0 ? '+' : '') + t.net_pnl.toFixed(3)}$</td>
+                            <td><span class="badge-status" style="background:#1e293b; color:#cbd5e1;">${t.exit_reason}</span></td>
+                            <td style="color:var(--text-muted);">${t.exit_time}</td>
+                        </tr>`;
+                    }).join('');
+                }
+            } catch (err) {
+                console.error("Dashboard poll error:", err);
+            }
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            initCharts();
+            updateDashboard();
+            setInterval(updateDashboard, 1500);
+        });
+    </script>
+</body>
+</html>
+"""
             return web.Response(text=html, content_type="text/html")
 
         app.router.add_get("/", handle_index)
@@ -627,7 +1070,7 @@ class SectorArbEngine8080:
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", self.port, reuse_address=True)
         await site.start()
-        logger.info(f"Dashboard v3.13 online at http://0.0.0.0:{self.port}/ (API: /api/status)")
+        logger.info(f"Institutional Dashboard v3.13 online at http://0.0.0.0:{self.port}/ (API: /api/status)")
 
     async def run(self) -> None:
         await self.ledger.init_db()

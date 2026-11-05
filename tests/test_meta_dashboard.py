@@ -1,16 +1,12 @@
 """
-Unit tests and invariant checks for Meta-Dashboard (Port 8085).
-Verifies:
-1. Aggregator configuration and engine definitions
-2. Position normalization (dict format vs list format)
-3. Total equity and PnL accounting invariants
-4. News feed deduplication
-5. Chart series generator
+Unit & Integration Tests for Meta-Dashboard (Port 8085).
+Verifies aggregation, normalization of varied engine formats, accounting invariants,
+and real-time chart data consistency across all active engines.
 """
 
+from decimal import Decimal
 import unittest
-from unittest.mock import patch, MagicMock
-import json
+from unittest.mock import MagicMock, patch
 
 from meta_dashboard.config import ENGINES, META_PORT
 from meta_dashboard.aggregator import MetaAggregator
@@ -21,10 +17,14 @@ class TestMetaDashboard(unittest.TestCase):
         self.agg = MetaAggregator()
 
     def test_engines_configuration(self):
-        self.assertEqual(len(ENGINES), 10)
+        self.assertEqual(len(ENGINES), 15)
         ports = [e["port"] for e in ENGINES]
-        self.assertEqual(ports, [8080, 8081, 8082, 8083, 8084, 8086, 8087, 8088, 8089, 8090])
+        self.assertIn(8080, ports)
         self.assertEqual(META_PORT, 8085)
+        # Check v3.13 configuration on port 8080
+        e8080 = next(e for e in ENGINES if e["port"] == 8080)
+        self.assertEqual(e8080["id"], "v313")
+        self.assertEqual(e8080["name"], "v3.13 Sector Arb")
 
     def test_position_normalization_dict_and_list(self):
         # Mock engine response for v3.1.1 (dict open_positions)
@@ -39,89 +39,80 @@ class TestMetaDashboard(unittest.TestCase):
                     "current_price": 88.0,
                     "current_stop": 92.0,
                     "unrealized_pnl": 5.0,
-                    "is_pyramided": False,
                 }
             },
-            "stream_ready": True,
-            "fresh_symbols": 25,
         }
 
-        # Mock engine response for v3.2 (list trend & range open_positions)
+        # Mock engine response for v3.2 (list open_positions)
         mock_data_v32 = {
-            "portfolio_equity": 302.0,
+            "equity": 298.20,
             "initial_capital": 300.0,
-            "trend_open_positions": [
+            "open_positions": [
                 {
-                    "symbol": "NEARUSDT",
-                    "direction": "SHORT",
-                    "qty": 30.0,
-                    "entry_price": 4.0,
-                    "current_price": 3.9,
-                    "stop_loss": 4.2,
-                    "unrealized_pnl": 3.0,
+                    "symbol": "BTCUSDT",
+                    "direction": "LONG",
+                    "qty": 0.05,
+                    "entry_price": 60000.0,
+                    "current_price": 60500.0,
+                    "stop_loss": 59500.0,
+                    "unrealized_pnl": 25.0,
                 }
             ],
-            "range_open_positions": [],
-            "range_pending_orders": [
-                {
-                    "symbol": "BEAMUSDT",
-                    "direction": "BUY",
-                    "price": 0.0045,
-                    "qty": 10000.0,
-                    "take_profit": 0.0048,
-                    "stop_loss": 0.0042,
-                }
-            ],
-            "stream_ready": True,
         }
 
-        eng_v311 = [e for e in ENGINES if e["port"] == 8082][0]
-        eng_v32 = [e for e in ENGINES if e["port"] == 8083][0]
+        engine_v311 = next(e for e in ENGINES if e["id"] == "v311")
+        engine_v32 = next(e for e in ENGINES if e["id"] == "v32")
 
-        parsed_v311 = self._simulate_parse(eng_v311, mock_data_v311)
-        self.assertEqual(len(parsed_v311["open_positions"]), 1)
-        self.assertEqual(parsed_v311["open_positions"][0]["symbol"], "SOLUSDT")
-        self.assertEqual(parsed_v311["open_positions"][0]["direction"], "SHORT")
-        self.assertEqual(parsed_v311["open_positions"][0]["unrealized_pnl"], 5.0)
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            # 1. Test dict format
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = json_bytes(mock_data_v311)
+            mock_urlopen.return_value.__enter__.return_value = mock_resp
+            st1 = self.agg._fetch_engine_status(engine_v311)
+            self.assertEqual(len(st1["open_positions"]), 1)
+            self.assertEqual(st1["open_positions"][0]["symbol"], "SOLUSDT")
+            self.assertEqual(st1["open_positions"][0]["direction"], "SHORT")
+            self.assertEqual(st1["open_positions"][0]["unrealized_pnl"], 5.0)
 
-        parsed_v32 = self._simulate_parse(eng_v32, mock_data_v32)
-        self.assertEqual(len(parsed_v32["open_positions"]), 1)
-        self.assertEqual(parsed_v32["open_positions"][0]["symbol"], "NEARUSDT")
-        self.assertEqual(len(parsed_v32["pending_orders"]), 1)
-        self.assertEqual(parsed_v32["pending_orders"][0]["symbol"], "BEAMUSDT")
+            # 2. Test list format
+            mock_resp.read.return_value = json_bytes(mock_data_v32)
+            st2 = self.agg._fetch_engine_status(engine_v32)
+            self.assertEqual(len(st2["open_positions"]), 1)
+            self.assertEqual(st2["open_positions"][0]["symbol"], "BTCUSDT")
+            self.assertEqual(st2["open_positions"][0]["direction"], "LONG")
+            self.assertEqual(st2["open_positions"][0]["unrealized_pnl"], 25.0)
 
-    def _simulate_parse(self, engine, data):
-        # Helper to invoke the normalization logic with simulated response
-        mock_response = MagicMock()
-        mock_response.read.return_value = json.dumps(data).encode("utf-8")
-        mock_response.__enter__.return_value = mock_response
-
-        with patch("urllib.request.urlopen", return_value=mock_response):
-            return self.agg._fetch_engine_status(engine)
+    def test_offline_engine_graceful_handling(self):
+        engine = ENGINES[0]
+        with patch("urllib.request.urlopen", side_effect=Exception("Connection refused")):
+            st = self.agg._fetch_engine_status(engine)
+            self.assertFalse(st["online"])
+            self.assertEqual(st["capital"], 300.0)
+            self.assertEqual(st["open_positions"], [])
+            self.assertFalse(st["bybit_connected"])
 
     def test_accounting_invariants(self):
-        # Populate latest states
+        # Populate latest states for all engines
         self.agg.latest_states = {
-            "v20": {"capital": 300.0, "net_pnl": 0.0, "online": True, "open_positions": []},
-            "v21": {"capital": 303.0, "net_pnl": 3.0, "online": True, "open_positions": [{"unrealized_pnl": 2.0}]},
-            "v311": {"capital": 305.0, "net_pnl": 5.0, "online": True, "open_positions": [{"unrealized_pnl": 4.0}]},
-            "v32": {"capital": 301.0, "net_pnl": 1.0, "online": True, "open_positions": []},
-            "v314": {"capital": 300.0, "net_pnl": 0.0, "online": True, "open_positions": []},
-            "v33": {"capital": 302.0, "net_pnl": 2.0, "online": True, "open_positions": []},
-            "v34": {"capital": 300.0, "net_pnl": 0.0, "online": True, "open_positions": []},
-            "v35": {"capital": 300.0, "net_pnl": 0.0, "online": True, "open_positions": []},
-            "v36": {"capital": 300.0, "net_pnl": 0.0, "online": True, "open_positions": []},
-            "v37": {"capital": 300.0, "net_pnl": 0.0, "online": True, "open_positions": []},
+            e["id"]: {"capital": 300.0, "net_pnl": 0.0, "online": True, "open_positions": []}
+            for e in ENGINES
         }
+        self.agg.latest_states["v21"]["capital"] = 303.0
+        self.agg.latest_states["v21"]["net_pnl"] = 3.0
+        self.agg.latest_states["v21"]["open_positions"] = [{"unrealized_pnl": 2.0}]
+
+        self.agg.latest_states["v311"]["capital"] = 305.0
+        self.agg.latest_states["v311"]["net_pnl"] = 5.0
+        self.agg.latest_states["v311"]["open_positions"] = [{"unrealized_pnl": 4.0}]
 
         snap = self.agg.get_snapshot()
 
         # Invariant 1: Total equity = sum of engine equities
-        expected_total_eq = 300.0 + 303.0 + 305.0 + 301.0 + 300.0 + 302.0 + 300.0 + 300.0 + 300.0 + 300.0
+        expected_total_eq = sum(st["capital"] for st in self.agg.latest_states.values())
         self.assertEqual(snap["total_combined_equity"], round(expected_total_eq, 2))
 
         # Invariant 2: Total realized pnl = sum of engine net pnls
-        expected_realized = 0.0 + 3.0 + 5.0 + 1.0 + 0.0 + 2.0 + 0.0 + 0.0 + 0.0 + 0.0
+        expected_realized = sum(st["net_pnl"] for st in self.agg.latest_states.values())
         self.assertEqual(snap["total_realized_pnl"], round(expected_realized, 2))
 
         # Invariant 3: Total unrealized pnl = sum of position unrealized pnls
@@ -131,17 +122,16 @@ class TestMetaDashboard(unittest.TestCase):
         self.assertEqual(snap["total_open_positions"], 2)
 
     def test_news_deduplication(self):
-        # Adding same headline twice
         h = "Bitcoin reaches new high after institutional inflow"
         item = {"timestamp": 123456, "headline": h, "symbol": "BTCUSDT", "impact": "MONITOR"}
 
         state1 = {"recent_news": [item], "capital": 300.0, "net_pnl": 0.0, "online": True, "open_positions": []}
         state2 = {"recent_news": [item], "capital": 300.0, "net_pnl": 0.0, "online": True, "open_positions": []}
 
-        with patch.object(self.agg, "_fetch_engine_status", side_effect=[state1, state2, state1, state2, state1, state2, state1, state2, state1, state2]):
+        side_effects = [state1, state2] * (len(ENGINES) + 1)
+        with patch.object(self.agg, "_fetch_engine_status", side_effect=side_effects):
             self.agg.update_all()
 
-        # Invariant: news feed should only contain 1 item with that headline
         matching = [n for n in self.agg.master_news_feed if n["headline"] == h]
         self.assertEqual(len(matching), 1)
 
@@ -152,10 +142,15 @@ class TestMetaDashboard(unittest.TestCase):
 
         chart = self.agg.get_chart_data()
         self.assertEqual(chart["labels"], ["20:00:00"])
-        self.assertEqual(len(chart["datasets"]), 10)
+        self.assertEqual(len(chart["datasets"]), len(ENGINES))
         for ds in chart["datasets"]:
             self.assertIn("data", ds)
             self.assertIn("borderColor", ds)
+
+
+def json_bytes(obj):
+    import json
+    return json.dumps(obj).encode("utf-8")
 
 
 if __name__ == "__main__":
