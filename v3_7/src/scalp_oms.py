@@ -106,7 +106,9 @@ class ScalpOMS:
 
         # Ограничение ликвидности: не более 20% от объема топ-3 уровней стакана
         max_book_notional = self.cfg.max_book_depth_pct * state.top3_book_notional_usdt(intent.side)
-        target_notional = min(notional_by_risk, max_book_notional, self.cfg.equity_usdt * self.cfg.max_leverage_cap)
+        dollar_cap = getattr(self.cfg, 'max_loss_usdt_cap', 2.0)
+        max_by_dollar_cap = dollar_cap / max(total_risk_pct, 0.0015)
+        target_notional = min(notional_by_risk, max_by_dollar_cap, max_book_notional, self.cfg.equity_usdt * self.cfg.max_leverage_cap)
 
         raw_qty = target_notional / max(intent.entry_price, 1e-9)
         step = state.meta.qty_step
@@ -157,6 +159,8 @@ class ScalpOMS:
         if self.circuit_breaker_tripped or self.news_embargo_active:
             return False
         if intent.symbol in self.active_positions or intent.symbol in self.pending_orders:
+            return False
+        if len(self.active_positions) >= getattr(self.cfg, 'max_concurrent_positions', 2):
             return False
         if time.time() < self.cooldown_until.get(intent.symbol, 0.0):
             return False
@@ -403,6 +407,16 @@ class ScalpOMS:
             # -----------------------------------------------------------------
 
             # -----------------------------------------------------------------
+            # Г0. Динамический ранний безубыток (Early Profit Lock)
+            be_trig = getattr(self.cfg, 'dynamic_breakeven_pct', 0.0035)
+            cur_pnl_pct = (curr_p - pos.entry_price) / pos.entry_price if is_long else (pos.entry_price - curr_p) / pos.entry_price
+            if cur_pnl_pct >= be_trig and not getattr(pos, 'is_breakeven_set', False):
+                be_sl = pos.entry_price * (1.0 + 0.0005) if is_long else pos.entry_price * (1.0 - 0.0005)
+                if (is_long and be_sl > pos.sl_price) or (not is_long and be_sl < pos.sl_price):
+                    pos.sl_price = be_sl
+                    pos.is_breakeven_set = True
+                    logger.info(f"[DYNAMIC BREAKEVEN] {sym} PnL={cur_pnl_pct*100:.2f}%. Стоп перенесен в безубыток {be_sl:.5f}")
+
             # Г. Проверка Take-Profit 1 (Penny-Perfect 50% фиксация + SL в БУ)
             # -----------------------------------------------------------------
             hit_tp1 = curr_p >= pos.tp1_price if is_long else curr_p <= pos.tp1_price

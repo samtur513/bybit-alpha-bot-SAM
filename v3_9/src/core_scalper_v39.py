@@ -143,26 +143,31 @@ async def run_public_stream(
                             continue
 
                         if sym == cfg.leader_symbol:
-                            for alt_sym, alt_st in states.items():
-                                if alt_sym == cfg.leader_symbol:
-                                    continue
-                                sig3 = evaluator.evaluate_engine3_lead_lag(alt_st, btc_state, now_ms)
+                            if getattr(cfg, "enable_e3_leadlag", True):
+                                for alt_sym, alt_st in states.items():
+                                    if alt_sym == cfg.leader_symbol:
+                                        continue
+                                    sig3 = evaluator.evaluate_engine3_lead_lag(alt_st, btc_state, now_ms)
+                                    if sig3:
+                                        await oms.submit_signal(sig3)
+                        else:
+                            # v3.9: Специализированный Lead-Lag арбитражер (E3) + OFI Fast Scratch
+                            if getattr(cfg, "enable_e3_leadlag", True):
+                                sig3 = evaluator.evaluate_engine3_lead_lag(st, btc_state, now_ms)
                                 if sig3:
                                     await oms.submit_signal(sig3)
-                        else:
-                            sig3 = evaluator.evaluate_engine3_lead_lag(st, btc_state, now_ms)
-                            if sig3:
-                                await oms.submit_signal(sig3)
-                                continue
+                                    continue
 
-                            sig2 = evaluator.evaluate_engine2_liquidity_sweep(st, btc_state, now_ms)
-                            if sig2:
-                                await oms.submit_signal(sig2)
-                                continue
+                            if getattr(cfg, "enable_e2_sweeps", False):
+                                sig2 = evaluator.evaluate_engine2_liquidity_sweep(st, btc_state, now_ms)
+                                if sig2:
+                                    await oms.submit_signal(sig2)
+                                    continue
 
-                            sig1 = evaluator.evaluate_engine1_obi_breakout(st, now_ms, btc_state)
-                            if sig1:
-                                await oms.submit_signal(sig1)
+                            if getattr(cfg, "enable_e1_obi", False):
+                                sig1 = evaluator.evaluate_engine1_obi_breakout(st, now_ms, btc_state)
+                                if sig1:
+                                    await oms.submit_signal(sig1)
                 finally:
                     ping_task.cancel()
 

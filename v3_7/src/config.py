@@ -55,6 +55,12 @@ class ScalperConfig:
     max_daily_dd_pct: float = float(os.getenv("MAX_DAILY_DRAWDOWN_PCT", "0.035"))  # 3.5% дневной лимит ($10.50 от $300)
     max_leverage_cap: float = 2.5
     max_book_depth_pct: float = 0.20  # Не более 20% от топ-3 уровней стакана
+    max_concurrent_positions: int = 2  # Жесткий лимит: не более 2 позиций одновременно (защита от кластерного риска)
+    max_loss_usdt_cap: float = 2.0  # Жесткий долларовый потолок убытка: не более $2.00 на сделку
+    dynamic_breakeven_pct: float = 0.0035  # При +0.35% профита стоп подтягивается в безубыток (+0.05%)
+    enable_e3_leadlag: bool = False  # Отключен: Lead-Lag полностью отдан v3.9, исключая дублирование
+    enable_e2_sweeps: bool = True   # Специализация v3.7: Снятие ликвидности и абсорбция
+    enable_e1_obi: bool = True      # Специализация v3.7: Дисбаланс L2 стакана
 
     # 4. Bybit V5 Endpoints
     ws_public_url: str = "wss://stream.bybit.com/v5/public/linear"

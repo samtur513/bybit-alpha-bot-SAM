@@ -60,6 +60,12 @@ class ScalperConfigV39:
     max_daily_dd_pct: float = float(os.getenv("MAX_DAILY_DRAWDOWN_PCT", "0.035"))  # 3.5%
     max_leverage_cap: float = 3.0
     max_book_depth_pct: float = 0.20
+    max_concurrent_positions: int = 2  # Жесткий лимит: не более 2 позиций одновременно (защита от кластерного риска)
+    max_loss_usdt_cap: float = 2.0  # Жесткий долларовый потолок убытка: не более $2.00 на сделку
+    dynamic_breakeven_pct: float = 0.0035  # При +0.35% профита стоп подтягивается в безубыток (+0.05%)
+    enable_e3_leadlag: bool = True   # Специализация v3.9: Флагманский Lead-Lag Beta-Catchup
+    enable_e2_sweeps: bool = False  # Отключен: Sweeps полностью отданы v3.7, исключая конфликт
+    enable_e1_obi: bool = False     # Отключен: OBI стакана полностью отдан v3.7, исключая конфликт
 
     # 4. NewDragon v4 Micro-Router & OFI Scratch
     enforce_min_notional: bool = True
