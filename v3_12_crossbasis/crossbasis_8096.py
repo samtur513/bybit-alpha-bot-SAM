@@ -380,14 +380,17 @@ class CrossBasisEngine8096:
                         f"(PureAlpha={res['pure_alpha']:+.3f}$, Fees={res['fees']:+.3f}$) | Equity={self.equity_usdt:.2f}$"
                     )
 
-            await asyncio.sleep(0.100)
+            await asyncio.sleep(0.150)
 
     async def zmq_listener_loop(self) -> None:
         logger.info(f"Ожидание тиков перпов из шины Hub {ZMQ_SUB_ADDR}...")
         while True:
             _, raw_payload = await self.sub_sock.recv_multipart()
             tick = orjson.loads(raw_payload)
-            self.latest_perp_ticks[tick["symbol"]] = tick
+            sym = tick.get("symbol")
+            if sym not in self.monitored_pairs:
+                continue
+            self.latest_perp_ticks[sym] = tick
             self._evaluate_cross_basis_setup(tick)
 
     async def start_http_server(self) -> None:

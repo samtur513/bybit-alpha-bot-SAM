@@ -69,6 +69,27 @@ class SymbolHubState:
         self.avg_1m_vol: float = 1.0
         self.last_pub_ms: int = 0
 
+    def update_ticker(self, data: dict) -> None:
+        if "bid1Price" in data and data["bid1Price"]:
+            self.best_bid = float(data["bid1Price"])
+        if "ask1Price" in data and data["ask1Price"]:
+            self.best_ask = float(data["ask1Price"])
+        if "lastPrice" in data and data["lastPrice"]:
+            last_p = float(data["lastPrice"])
+            if self.best_bid <= 0:
+                self.best_bid = last_p
+            if self.best_ask <= 0:
+                self.best_ask = last_p
+            self.mid_price = 0.5 * (self.best_bid + self.best_ask)
+        elif self.best_bid > 0 and self.best_ask > 0:
+            self.mid_price = 0.5 * (self.best_bid + self.best_ask)
+
+        b_sz = float(data.get("bid1Size", 10.0))
+        a_sz = float(data.get("ask1Size", 10.0))
+        self.top3_bid_notional = b_sz * self.best_bid
+        self.top3_ask_notional = a_sz * self.best_ask
+        self.obi_10 = (b_sz - a_sz) / (b_sz + a_sz + 1e-9)
+
     def update_l2_book(self, msg_type: str, data: dict) -> None:
         if msg_type == "snapshot":
             self.bids = {float(p): float(v) for p, v in data.get("b", [])}
@@ -254,19 +275,19 @@ class DataAndTCAHub8095:
     async def ws_ingestor_loop(self) -> None:
         topics = []
         for s in self.states:
-            topics.append(f"orderbook.50.{s}")
+            topics.append(f"tickers.{s}")
             topics.append(f"publicTrade.{s}")
 
         topic_chunks = [topics[i:i+10] for i in range(0, len(topics), 10)]
 
         while True:
             try:
-                async with websockets.connect(WS_PUBLIC_LINEAR, ping_interval=15, max_queue=8192) as ws:
+                async with websockets.connect(WS_PUBLIC_LINEAR, ping_interval=15, max_queue=4096) as ws:
                     for chunk in topic_chunks:
                         await ws.send(orjson.dumps({"op": "subscribe", "args": chunk}).decode("utf-8"))
                         await asyncio.sleep(0.05)
 
-                    logger.info(f"Подключен к Bybit WS. Трансляция в ZeroMQ {ZMQ_PUB_ADDR} для {len(self.states)} пар ({len(topics)} topics).")
+                    logger.info(f"Подключен к Bybit WS (Clean Tickers + Trades). Трансляция для {len(self.states)} пар.")
 
                     async for raw in ws:
                         msg = orjson.loads(raw)
@@ -279,17 +300,14 @@ class DataAndTCAHub8095:
                         if not st:
                             continue
 
-                        if topic.startswith("orderbook"):
-                            st.update_l2_book(msg.get("type", "delta"), msg.get("data", {}))
+                        if topic.startswith("tickers"):
+                            st.update_ticker(msg.get("data", {}))
                         elif topic.startswith("publicTrade"):
                             st.update_trades(msg.get("data", []))
 
-                        # THROTTLING GATE: Broadcast max 10 Hz (100ms) per symbol
-                        # Prevents 100% CPU lock on Bybit 50-level delta and trade bursts
-                        if (now_ms - st.last_pub_ms) < 100:
-                            continue
-
-                        if not st.recompute_l2_metrics():
+                        # THROTTLING GATE: Broadcast max 5 Hz (200ms) per symbol
+                        # Keeps 1-core VPS CPU < 0.5% while providing high fidelity feeds
+                        if (now_ms - st.last_pub_ms) < 200:
                             continue
 
                         if st.mid_price <= 0 or st.atr_15m <= 0:

@@ -519,7 +519,7 @@ class LiquiditySweepEngine8098:
                         f"CaptureEff={self.capture_efficiency:.1f}% | Equity={self.equity_usdt:.2f}$"
                     )
 
-            await asyncio.sleep(0.100)
+            await asyncio.sleep(0.150)
 
     async def zmq_listener_loop(self) -> None:
         logger.info(f"Подключен к шине Data Hub {ZMQ_SUB_ADDR}. Ожидание сетапов Liquidity Sweep...")

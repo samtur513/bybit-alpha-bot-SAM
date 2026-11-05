@@ -375,14 +375,20 @@ class FundingSqueezeEngine8097:
                         f"(PureAlpha={res['pure_alpha']:+.3f}$, Fees={res['fees']:+.3f}$) | Equity={self.equity_usdt:.2f}$"
                     )
 
-            await asyncio.sleep(0.100)
+            await asyncio.sleep(0.200)
 
     async def zmq_listener_loop(self) -> None:
         logger.info(f"Ожидание тиков из шины Hub {ZMQ_SUB_ADDR}...")
         while True:
             _, raw_payload = await self.sub_sock.recv_multipart()
+            # Fast filter: if no extreme funding candidates and no open positions, skip to save CPU
+            if not self.funding_candidates and not self.open_positions:
+                continue
             tick = orjson.loads(raw_payload)
-            self.latest_ticks[tick["symbol"]] = tick
+            sym = tick.get("symbol")
+            if sym not in self.funding_candidates and sym not in self.open_positions:
+                continue
+            self.latest_ticks[sym] = tick
             self._evaluate_funding_setup(tick)
 
     async def start_http_server(self) -> None:
