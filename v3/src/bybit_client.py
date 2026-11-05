@@ -121,8 +121,12 @@ class BybitClient:
         raise RuntimeError(f"Unexpected loop exit in request for {endpoint}")
 
     def get_server_time(self) -> int:
-        res = self.request("GET", "/v5/market/time")
-        return int(res["result"]["timeNano"]) // 1_000_000
+        try:
+            res = self.request("GET", "/v5/market/time")
+            return int(res["result"]["timeNano"]) // 1_000_000
+        except Exception as e:
+            logger.warning(f"get_server_time failed ({e}), falling back to local system UTC timestamp")
+            return int(time.time() * 1000)
 
     def get_instruments_info(self, category: str = "linear", symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         params = {"category": category, "limit": 1000}

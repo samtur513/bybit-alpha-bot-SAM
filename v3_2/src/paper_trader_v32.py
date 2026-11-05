@@ -137,7 +137,7 @@ class PaperTraderV32:
     ):
         self.initial_capital = initial_capital
         self.poll_interval = poll_interval_seconds
-        self.client = client or BybitClient(timeout=10, max_retries=3)
+        self.client = client or BybitClient(timeout=10, max_retries=5)
         self.bar_interval_ms = bar_interval_ms
         self.state_file = state_file or PERSISTENT_STATE_FILE
         self.live_status_file = live_status_file or LIVE_STATUS_FILE
