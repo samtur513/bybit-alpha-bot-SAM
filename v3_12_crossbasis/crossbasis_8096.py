@@ -157,37 +157,35 @@ class CrossBasisEngine8096:
         return (self.total_filled_alpha_usdt / denom * 100.0) if denom > 0 else 100.0
 
     async def spot_ws_ingestor_loop(self) -> None:
-        """Subscribes to Bybit Public Spot orderbook and trade streams."""
-        topics = []
+        """Subscribes to Bybit Public Spot ticker streams."""
+        topics = [f"tickers.{s}" for s in self.monitored_pairs]
         for s in self.monitored_pairs:
-            topics.append(f"tickers.{s}")
-            topics.append(f"publicTrade.{s}")
             self.spot_states[s] = SpotState(symbol=s)
 
         while True:
             try:
-                async with websockets.connect(WS_PUBLIC_SPOT, ping_interval=15, max_queue=4096) as ws:
+                async with websockets.connect(WS_PUBLIC_SPOT, ping_interval=20, max_queue=2048) as ws:
                     for chunk in [topics[i:i+10] for i in range(0, len(topics), 10)]:
                         await ws.send(orjson.dumps({"op": "subscribe", "args": chunk}).decode("utf-8"))
                         await asyncio.sleep(0.05)
-                    logger.info(f"Подключен к Bybit Spot WS. Отслеживание базиса для {len(self.monitored_pairs)} пар.")
+                    logger.info(f"Подключен к Bybit Spot WS (Pure Tickers). Мониторинг {len(self.monitored_pairs)} пар.")
 
                     async for raw in ws:
                         msg = orjson.loads(raw)
                         topic = msg.get("topic", "")
-                        if not topic:
+                        if not topic or not topic.startswith("tickers"):
                             continue
                         sym = topic.split(".")[-1]
                         st = self.spot_states.get(sym)
                         if not st:
                             continue
 
-                        if topic.startswith("tickers"):
-                            data = msg.get("data", {})
-                            if "lastPrice" in data:
-                                st.mid_price = float(data["lastPrice"])
-                        elif topic.startswith("publicTrade"):
-                            st.update_trades(msg.get("data", []))
+                        data = msg.get("data", {})
+                        if "lastPrice" in data and data["lastPrice"]:
+                            st.mid_price = float(data["lastPrice"])
+                        b_sz = float(data.get("bid1Size", 10.0))
+                        a_sz = float(data.get("ask1Size", 10.0))
+                        st.tfi_3s = (b_sz - a_sz) / (b_sz + a_sz + 1e-9)
             except Exception as e:
                 logger.warning(f"Обрыв Spot WS: {e}. Переподключение через 2 сек...")
                 await asyncio.sleep(2.0)

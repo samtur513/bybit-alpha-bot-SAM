@@ -68,8 +68,12 @@ class SymbolHubState:
         self.high_compression_ratio: float = 0.0  # (swing_high - recent_6_low) / ATR_15m
         self.avg_1m_vol: float = 1.0
         self.last_pub_ms: int = 0
+        self.cur_vol_24h: float = 0.0
 
     def update_ticker(self, data: dict) -> None:
+        old_mid = self.mid_price
+        old_vol = self.cur_vol_24h
+
         if "bid1Price" in data and data["bid1Price"]:
             self.best_bid = float(data["bid1Price"])
         if "ask1Price" in data and data["ask1Price"]:
@@ -89,6 +93,16 @@ class SymbolHubState:
         self.top3_bid_notional = b_sz * self.best_bid
         self.top3_ask_notional = a_sz * self.best_ask
         self.obi_10 = (b_sz - a_sz) / (b_sz + a_sz + 1e-9)
+
+        # Tick-rule flow estimation without flood of publicTrade
+        if "volume24h" in data and data["volume24h"]:
+            new_vol = float(data["volume24h"])
+            if old_vol > 0 and new_vol >= old_vol:
+                delta_q = new_vol - old_vol
+                is_buy = self.mid_price >= old_mid
+                now_ms = int(time.time() * 1000)
+                self.trades.append((now_ms, is_buy, self.mid_price, delta_q))
+            self.cur_vol_24h = new_vol
 
     def update_l2_book(self, msg_type: str, data: dict) -> None:
         if msg_type == "snapshot":
@@ -273,26 +287,22 @@ class DataAndTCAHub8095:
                 logger.warning(f"Ошибка periodic_kline_updater: {e}")
 
     async def ws_ingestor_loop(self) -> None:
-        topics = []
-        for s in self.states:
-            topics.append(f"tickers.{s}")
-            topics.append(f"publicTrade.{s}")
-
+        topics = [f"tickers.{s}" for s in self.states]
         topic_chunks = [topics[i:i+10] for i in range(0, len(topics), 10)]
 
         while True:
             try:
-                async with websockets.connect(WS_PUBLIC_LINEAR, ping_interval=15, max_queue=4096) as ws:
+                async with websockets.connect(WS_PUBLIC_LINEAR, ping_interval=20, max_queue=2048) as ws:
                     for chunk in topic_chunks:
                         await ws.send(orjson.dumps({"op": "subscribe", "args": chunk}).decode("utf-8"))
                         await asyncio.sleep(0.05)
 
-                    logger.info(f"Подключен к Bybit WS (Clean Tickers + Trades). Трансляция для {len(self.states)} пар.")
+                    logger.info(f"Подключен к Bybit WS (Clean Tickers). Трансляция для {len(self.states)} пар.")
 
                     async for raw in ws:
                         msg = orjson.loads(raw)
                         topic = msg.get("topic", "")
-                        if not topic:
+                        if not topic or not topic.startswith("tickers"):
                             continue
                         now_ms = int(msg.get("ts", time.time() * 1000))
                         sym = topic.split(".")[-1]
@@ -300,14 +310,11 @@ class DataAndTCAHub8095:
                         if not st:
                             continue
 
-                        if topic.startswith("tickers"):
-                            st.update_ticker(msg.get("data", {}))
-                        elif topic.startswith("publicTrade"):
-                            st.update_trades(msg.get("data", []))
+                        st.update_ticker(msg.get("data", {}))
 
-                        # THROTTLING GATE: Broadcast max 5 Hz (200ms) per symbol
-                        # Keeps 1-core VPS CPU < 0.5% while providing high fidelity feeds
-                        if (now_ms - st.last_pub_ms) < 200:
+                        # THROTTLING GATE: Broadcast max 4 Hz (250ms) per symbol
+                        # Keeps 1-core VPS CPU < 0.3% while maintaining precision
+                        if (now_ms - st.last_pub_ms) < 250:
                             continue
 
                         if st.mid_price <= 0 or st.atr_15m <= 0:
