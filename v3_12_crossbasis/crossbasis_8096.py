@@ -54,10 +54,13 @@ class SpotState:
     trades: collections.deque = None
     tfi_3s: float = 0.0
     last_calc_ms: int = 0
+    basis_history: collections.deque = None
 
     def __post_init__(self):
         if self.trades is None:
             self.trades = collections.deque(maxlen=1000)
+        if self.basis_history is None:
+            self.basis_history = collections.deque(maxlen=300)
 
     def update_trades(self, trade_data: list):
         now_ms = int(time.time() * 1000)
@@ -79,6 +82,17 @@ class SpotState:
             else:
                 s_v += q
         self.tfi_3s = (b_v - s_v) / (b_v + s_v + 1e-9)
+
+    def get_basis_z_score(self, current_basis: float) -> tuple[float, float]:
+        """Returns (z_score, mean_basis) over the rolling buffer to neutralize structural basis bias."""
+        if not self.basis_history or len(self.basis_history) < 5:
+            # Cold start: baseline at 0.0
+            return (current_basis / 3.0), 0.0
+        vals = [b for _, b in self.basis_history]
+        mean_b = float(np.mean(vals))
+        std_b = float(np.std(vals))
+        z = (current_basis - mean_b) / max(std_b, 0.8)
+        return float(np.clip(z, -5.0, 5.0)), mean_b
 
 
 @dataclass
@@ -143,6 +157,8 @@ class CrossBasisEngine8096:
         self.trades_count: int = 0
         self.start_time = time.time()
         self.monitored_pairs = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "NEARUSDT"]
+        self.circuit_breaker_tripped: bool = False
+        self.max_daily_loss_usdt: float = float(os.getenv("MAX_DAILY_LOSS_USDT", "6.0"))
 
     def init_zmq(self) -> None:
         self.zmq_ctx = zmq.asyncio.Context()
@@ -196,6 +212,8 @@ class CrossBasisEngine8096:
                 await asyncio.sleep(2.0)
 
     def _evaluate_cross_basis_setup(self, perp_tick: dict) -> None:
+        if self.circuit_breaker_tripped:
+            return
         sym = perp_tick["symbol"]
         if sym not in self.monitored_pairs or sym in self.pending_intents or sym in self.open_positions:
             return
@@ -211,20 +229,26 @@ class CrossBasisEngine8096:
 
         # Basis in basis points: (Spot - Perp) / Perp * 10000
         basis_bps = (spot_mid - perp_mid) / perp_mid * 10000.0
+        now_ms = perp_tick.get("ts", int(time.time() * 1000))
+        spot_st.basis_history.append((now_ms, basis_bps))
+
+        z_basis, mean_basis = spot_st.get_basis_z_score(basis_bps)
+        dislocation = basis_bps - mean_basis
+
         spot_tfi = spot_st.tfi_3s
         perp_tfi = perp_tick.get("tfi_3s", 0.0)
 
-        # NOISE GATE (FEE-ROBUST CALIBRATION):
-        # Basis threshold raised from 3.5 bps to 8.5 bps to guarantee net alpha after exchange fees (0.055% taker / 0.02% maker)
+        # STATISTICAL ANOMALY GATE (Neutralizes Structural Basis):
+        # Requires true transient dislocation >= 8.5 bps AND Z-score >= 2.0
         action = None
-        if basis_bps >= 8.5 and spot_tfi >= 0.35 and perp_tfi <= 0.10:
+        if dislocation >= 8.5 and z_basis >= 2.0 and spot_tfi >= 0.35 and perp_tfi <= 0.10:
             action = "LONG_LEAD_LAG"
             side = "Buy"
             pos_idx = 1
             limit_p = perp_tick["bid"]
             sl_p = round(limit_p * (1.0 - 0.0035) / perp_tick["tick_size"]) * perp_tick["tick_size"]
             tp_p = round(limit_p * (1.0 + 0.0085) / perp_tick["tick_size"]) * perp_tick["tick_size"]
-        elif basis_bps <= -8.5 and spot_tfi <= -0.35 and perp_tfi >= -0.10:
+        elif dislocation <= -8.5 and z_basis <= -2.0 and spot_tfi <= -0.35 and perp_tfi >= -0.10:
             action = "SHORT_LEAD_LAG"
             side = "Sell"
             pos_idx = 2
@@ -323,10 +347,12 @@ class CrossBasisEngine8096:
                         exit_reason = "TP_HIT"
                         exit_fill = pos.tp_price
                         is_maker = True
+                        self.cooldown_until[sym] = time.time() + 300.0
                     elif hold_sec >= 120.0:  # 2m Fast Scratch
                         exit_reason = "FAST_SCRATCH_2M"
                         exit_fill = tick["bid"]
-                        is_maker = True
+                        is_maker = False
+                        self.cooldown_until[sym] = time.time() + 600.0
                 else:
                     if mid >= pos.sl_price:
                         exit_reason = "SL_HIT"
@@ -337,10 +363,12 @@ class CrossBasisEngine8096:
                         exit_reason = "TP_HIT"
                         exit_fill = pos.tp_price
                         is_maker = True
+                        self.cooldown_until[sym] = time.time() + 300.0
                     elif hold_sec >= 120.0:
                         exit_reason = "FAST_SCRATCH_2M"
                         exit_fill = tick["ask"]
-                        is_maker = True
+                        is_maker = False
+                        self.cooldown_until[sym] = time.time() + 600.0
 
                 if exit_reason:
                     self.open_positions.pop(sym, None)
@@ -385,6 +413,13 @@ class CrossBasisEngine8096:
                         f"[BASIS CLOSED: {exit_reason}] {sym} {pos.side} | NetPnL={res['net_pnl']:+.3f}$ "
                         f"(PureAlpha={res['pure_alpha']:+.3f}$, Fees={res['fees']:+.3f}$) | Equity={self.equity_usdt:.2f}$"
                     )
+                    if (300.0 - self.equity_usdt) >= self.max_daily_loss_usdt:
+                        self.circuit_breaker_tripped = True
+                        self.pending_intents.clear()
+                        logger.critical(
+                            f"[CIRCUIT_BREAKER_8096] Лимит дневной просадки исчерпан (Equity=${self.equity_usdt:.2f} <= $294.00). "
+                            f"Торговля заблокирована!"
+                        )
 
             await asyncio.sleep(0.250)
 
