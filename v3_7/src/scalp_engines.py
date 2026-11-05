@@ -61,7 +61,10 @@ class ThreeEnginesEvaluate:
 
         natr = max(m.natr_5m, self.cfg.e1_min_natr_5m)
         tfi_2s, buy_2s, sell_2s, avg_buy_2s, avg_sell_2s = state.get_trade_flow_metrics(now_ms, 2000)
-        _, dr_ask_400ms, dr_bid_400ms = state.get_depletion_and_return(now_ms, 400)
+        _, dr_ask_400ms, dr_bid_400ms, delta_ask_vol, delta_bid_vol = state.get_depletion_with_volumes(now_ms, 400)
+        _, buy_400ms, sell_400ms, _, _ = state.get_trade_flow_metrics(now_ms, 400)
+        real_ask_absorption = (buy_400ms >= 0.50 * delta_ask_vol) if delta_ask_vol > 0 else True
+        real_bid_absorption = (sell_400ms >= 0.50 * delta_bid_vol) if delta_bid_vol > 0 else True
 
         # 1. LONG УСЛОВИЯ (строго по восходящему тренду BTC и альткоина)
         long_trend_ok = (
@@ -75,6 +78,7 @@ class ThreeEnginesEvaluate:
             and avg_buy_2s > 0
             and buy_2s >= self.cfg.e1_volume_surge_mult * avg_buy_2s
             and dr_ask_400ms >= self.cfg.e1_depletion_threshold
+            and real_ask_absorption
             and (state.micro_price - state.mid_price >= 0.10 * m.tick_size)
         ):
             entry = state.best_bid + state.meta.tick_size if state.spread_ticks >= 2.0 else state.best_bid
@@ -107,6 +111,7 @@ class ThreeEnginesEvaluate:
             and avg_sell_2s > 0
             and sell_2s >= self.cfg.e1_volume_surge_mult * avg_sell_2s
             and dr_bid_400ms >= self.cfg.e1_depletion_threshold
+            and real_bid_absorption
             and (state.mid_price - state.micro_price >= 0.10 * m.tick_size)
         ):
             entry = state.best_ask - state.meta.tick_size if state.spread_ticks >= 2.0 else state.best_ask

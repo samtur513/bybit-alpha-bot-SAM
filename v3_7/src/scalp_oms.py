@@ -80,6 +80,9 @@ class ActivePosition:
     leader_ref_ret: float = 0.0
     leader_entry_mid: float = 0.0
     order_link_id: str = ""
+    scratch_stage: int = 0
+    scratch_start_ms: int = 0
+    is_breakeven_set: bool = False
 
 
 class ScalpOMS:
@@ -106,7 +109,7 @@ class ScalpOMS:
 
         # Ограничение ликвидности: не более 20% от объема топ-3 уровней стакана
         max_book_notional = self.cfg.max_book_depth_pct * state.top3_book_notional_usdt(intent.side)
-        dollar_cap = getattr(self.cfg, 'max_loss_usdt_cap', 2.0)
+        dollar_cap = getattr(self.cfg, 'max_loss_usdt_cap', 1.50)
         max_by_dollar_cap = dollar_cap / max(total_risk_pct, 0.0015)
         target_notional = min(notional_by_risk, max_by_dollar_cap, max_book_notional, self.cfg.equity_usdt * self.cfg.max_leverage_cap)
 
@@ -161,6 +164,9 @@ class ScalpOMS:
         if intent.symbol in self.active_positions or intent.symbol in self.pending_orders:
             return False
         if len(self.active_positions) >= getattr(self.cfg, 'max_concurrent_positions', 2):
+            return False
+        same_side = sum(1 for p in self.active_positions.values() if p.side == intent.side)
+        if same_side >= getattr(self.cfg, 'max_positions_per_side', 2):
             return False
         if time.time() < self.cooldown_until.get(intent.symbol, 0.0):
             return False
@@ -513,9 +519,10 @@ class ScalpOMS:
         # Предохранитель дневной просадки (Circuit Breaker)
         if self.daily_pnl_usdt <= -(self.cfg.equity_usdt * self.cfg.max_daily_dd_pct):
             self.circuit_breaker_tripped = True
+            self.pending_orders.clear()
             logger.critical(
                 f"[CIRCUIT BREAKER] Достигнут лимит дневной просадки -{self.cfg.max_daily_dd_pct*100:.1f}% "
-                f"({self.daily_pnl_usdt:.2f} USDT). Торговля заблокирована!"
+                f"({self.daily_pnl_usdt:.2f} USDT). Очередь очищена, торговля заблокирована!"
             )
 
     # =========================================================================

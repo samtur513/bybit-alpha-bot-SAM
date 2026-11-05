@@ -137,3 +137,47 @@ def test_liquidity_sweep_tracking(mock_meta):
     assert state.sweep_high_active is True
     assert state.sweep_max_price == 153.85
     assert state.sweep_buy_vol == 230.0
+
+
+def test_distance_weighted_obi_dampens_gapped_levels(mock_meta):
+    """Проверяет, что дистанционное взвешивание экспоненциально гасит влияние дыр в стакане."""
+    state = SymbolMicrostructureState("SOLUSDT", mock_meta)
+
+    # Стакан с большой дырой на покупку: Bid1 на 150.00 (100 qty), Bid2 далеко на 149.00 (100 тиков вниз, 1000 qty)
+    # Аски плотные: Ask1 на 150.01 (100 qty), Ask2 на 150.02 (100 qty)
+    snapshot = {
+        "b": [["150.00", "100.0"], ["149.00", "1000.0"]],
+        "a": [["150.01", "100.0"], ["150.02", "100.0"]],
+    }
+    state.apply_orderbook("snapshot", snapshot, 1000)
+
+    # Далекий объем 1000.0 на расстоянии 100 тиков гасится почти до 0: exp(-0.25 * 100) ~ 0
+    # Поэтому OBI не должен быть захвачен этой далекой плитой
+    assert state.obi < 0.20
+    # Проверка микроцены Стойкова
+    assert state.micro_price == pytest.approx(150.005, abs=1e-3)
+
+
+def test_fixed_price_depletion_and_anti_spoofing(mock_meta):
+    """Проверяет фиксацию ценовых уровней против ошибки сдвига и защиту от спуфинга."""
+    state = SymbolMicrostructureState("SOLUSDT", mock_meta)
+
+    # t0: начальный стакан
+    snap_t0 = {
+        "b": [["150.00", "100.0"]],
+        "a": [["150.01", "100.0"], ["150.02", "100.0"], ["150.03", "100.0"]],
+    }
+    state.apply_orderbook("snapshot", snap_t0, 1000)
+
+    # t1: разъели Ask1 и Ask2
+    delta_t1 = {
+        "b": [],
+        "a": [["150.01", "0.0"], ["150.02", "0.0"], ["150.04", "500.0"]],  # добавилась плита выше
+    }
+    state.apply_orderbook("delta", delta_t1, 1400)
+
+    # Проверяем разъедание: должно учитывать именно уровни <= 150.03
+    log_ret, dr_ask, dr_bid, delta_ask_vol, delta_bid_vol = state.get_depletion_with_volumes(1400, 400)
+    assert dr_ask > 0.50
+    assert delta_ask_vol == 200.0  # Исчезло ровно 200 единиц (150.01 и 150.02)
+

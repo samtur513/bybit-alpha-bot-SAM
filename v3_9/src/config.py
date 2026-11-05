@@ -56,12 +56,13 @@ class ScalperConfigV39:
 
     # 3. Capital & Risk Limits
     equity_usdt: float = float(os.getenv("EQUITY_USDT", "300.0"))
-    risk_per_trade_pct: float = float(os.getenv("RISK_PER_TRADE_PCT", "0.0080"))  # 0.80% True 1R ($2.40)
-    max_daily_dd_pct: float = float(os.getenv("MAX_DAILY_DRAWDOWN_PCT", "0.035"))  # 3.5%
-    max_leverage_cap: float = 3.0
+    risk_per_trade_pct: float = float(os.getenv("RISK_PER_TRADE_PCT", "0.0050"))  # 0.50% True 1R ($1.50)
+    max_daily_dd_pct: float = float(os.getenv("MAX_DAILY_DRAWDOWN_PCT", "0.020"))  # 2.0% ($6.00)
+    max_leverage_cap: float = 2.0
     max_book_depth_pct: float = 0.20
     max_concurrent_positions: int = 2  # Жесткий лимит: не более 2 позиций одновременно (защита от кластерного риска)
-    max_loss_usdt_cap: float = 2.0  # Жесткий долларовый потолок убытка: не более $2.00 на сделку
+    max_positions_per_side: int = 2   # Не более 2 позиций в одну сторону
+    max_loss_usdt_cap: float = 1.50  # Жесткий долларовый потолок убытка: не более $1.50 на сделку
     dynamic_breakeven_pct: float = 0.0035  # При +0.35% профита стоп подтягивается в безубыток (+0.05%)
     enable_e3_leadlag: bool = True   # Специализация v3.9: Флагманский Lead-Lag Beta-Catchup
     enable_e2_sweeps: bool = False  # Отключен: Sweeps полностью отданы v3.7, исключая конфликт

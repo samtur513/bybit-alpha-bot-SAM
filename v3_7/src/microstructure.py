@@ -112,20 +112,28 @@ class SymbolMicrostructureState:
         self.spread_ticks = (self.best_ask - self.best_bid) / max(self.meta.tick_size, 1e-9)
         self.last_update_ms = ts_ms
 
-        # Вычисление экспоненциально взвешенного OBI по топ-10 уровням
+        # Вычисление экспоненциально взвешенного OBI по дистанции в тиках (Auditor Vuln 3)
         n_lvl = min(10, len(self.sorted_bids), len(self.sorted_asks))
-        if n_lvl > 0:
-            b_vols = np.array([v for _, v in self.sorted_bids[:n_lvl]])
-            a_vols = np.array([v for _, v in self.sorted_asks[:n_lvl]])
-            w = self.obi_weights[:n_lvl]
-            w_bid = float(np.dot(w, b_vols))
-            w_ask = float(np.dot(w, a_vols))
-            denom = w_bid + w_ask
-            self.obi = (w_bid - w_ask) / denom if denom > 0 else 0.0
+        if n_lvl > 0 and self.meta.tick_size > 0:
+            tick_sz = max(self.meta.tick_size, 1e-9)
+            w_bid_sum = 0.0
+            for p, v in self.sorted_bids[:n_lvl]:
+                dist_ticks = abs(p - self.mid_price) / tick_sz
+                w = math.exp(-0.25 * dist_ticks)
+                w_bid_sum += w * v
 
-        top3_ask_v = sum(v for _, v in self.sorted_asks[:3])
-        top3_bid_v = sum(v for _, v in self.sorted_bids[:3])
-        self.mid_history.append((ts_ms, self.mid_price, top3_ask_v, top3_bid_v))
+            w_ask_sum = 0.0
+            for p, v in self.sorted_asks[:n_lvl]:
+                dist_ticks = abs(p - self.mid_price) / tick_sz
+                w = math.exp(-0.25 * dist_ticks)
+                w_ask_sum += w * v
+
+            denom = w_bid_sum + w_ask_sum
+            self.obi = (w_bid_sum - w_ask_sum) / denom if denom > 0 else 0.0
+
+        top3_asks = tuple(self.sorted_asks[:3])
+        top3_bids = tuple(self.sorted_bids[:3])
+        self.mid_history.append((ts_ms, self.mid_price, top3_asks, top3_bids))
 
     @property
     def micro_price(self) -> float:
@@ -212,28 +220,58 @@ class SymbolMicrostructureState:
     ) -> Tuple[float, float, float]:
         """
         Возвращает (лог-доходность, коэффициент разъедания Ask DR_ask, коэффициент разъедания Bid DR_bid)
+        с защитой от ошибки сдвига уровней (Level Shift Bug) по фиксированным ценам (Auditor Vuln 2).
+        """
+        log_ret, dr_ask, dr_bid, _, _ = self.get_depletion_with_volumes(now_ms, lookback_ms)
+        return log_ret, dr_ask, dr_bid
+
+    def get_depletion_with_volumes(
+        self, now_ms: int, lookback_ms: int
+    ) -> Tuple[float, float, float, float, float]:
+        """
+        Возвращает (log_ret, dr_ask, dr_bid, delta_ask_vol, delta_bid_vol)
+        с фиксацией ценовых уровней P1, P2, P3 на момент t0 и проверкой исчезнувшего объема.
         """
         if not self.mid_history:
-            return 0.0, 0.0, 0.0
+            return 0.0, 0.0, 0.0, 0.0, 0.0
         target_ts = now_ms - lookback_ms
         past_mid = self.mid_price
-        past_ask_v = sum(v for _, v in self.sorted_asks[:3]) if self.sorted_asks else 0.0
-        past_bid_v = sum(v for _, v in self.sorted_bids[:3]) if self.sorted_bids else 0.0
+        past_top3_asks: Tuple[Tuple[float, float], ...] = ()
+        past_top3_bids: Tuple[Tuple[float, float], ...] = ()
 
-        for ts, m_p, a_v, b_v in reversed(self.mid_history):
+        for item in reversed(self.mid_history):
+            ts = item[0]
             if ts <= target_ts:
-                past_mid = m_p
-                past_ask_v = a_v
-                past_bid_v = b_v
+                past_mid = item[1]
+                past_top3_asks = item[2]
+                past_top3_bids = item[3]
                 break
 
         log_ret = math.log(self.mid_price / past_mid) if past_mid > 0 else 0.0
-        curr_ask_v = sum(v for _, v in self.sorted_asks[:3]) if self.sorted_asks else 0.0
-        curr_bid_v = sum(v for _, v in self.sorted_bids[:3]) if self.sorted_bids else 0.0
 
-        dr_ask = (past_ask_v - curr_ask_v) / max(past_ask_v, 1e-9) if past_ask_v > 0 else 0.0
-        dr_bid = (past_bid_v - curr_bid_v) / max(past_bid_v, 1e-9) if past_bid_v > 0 else 0.0
-        return log_ret, dr_ask, dr_bid
+        # Разъедание асков по фиксированным ценам
+        if past_top3_asks:
+            max_past_ask_p = max(p for p, _ in past_top3_asks)
+            v_ask_initial = sum(v for _, v in past_top3_asks)
+            v_ask_remaining = sum(v for p, v in self.asks.items() if p <= max_past_ask_p)
+            delta_ask_vol = max(0.0, v_ask_initial - v_ask_remaining)
+            dr_ask = delta_ask_vol / max(v_ask_initial, 1e-9)
+        else:
+            delta_ask_vol = 0.0
+            dr_ask = 0.0
+
+        # Разъедание бидов по фиксированным ценам
+        if past_top3_bids:
+            min_past_bid_p = min(p for p, _ in past_top3_bids)
+            v_bid_initial = sum(v for _, v in past_top3_bids)
+            v_bid_remaining = sum(v for p, v in self.bids.items() if p >= min_past_bid_p)
+            delta_bid_vol = max(0.0, v_bid_initial - v_bid_remaining)
+            dr_bid = delta_bid_vol / max(v_bid_initial, 1e-9)
+        else:
+            delta_bid_vol = 0.0
+            dr_bid = 0.0
+
+        return log_ret, dr_ask, dr_bid, delta_ask_vol, delta_bid_vol
 
     def top3_book_notional_usdt(self, side: str = "Buy") -> float:
         """Суммарный объем в USDT топ-3 уровней стакана для лимита размера позиции."""

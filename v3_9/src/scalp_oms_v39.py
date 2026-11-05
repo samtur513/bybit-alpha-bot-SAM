@@ -58,7 +58,7 @@ class ScalpOMSV39(ScalpOMS):
         notional_by_risk = (self.cfg.equity_usdt * self.cfg.risk_per_trade_pct) / max(total_risk_pct, 0.0015)
 
         max_book_notional = self.cfg.max_book_depth_pct * state.top3_book_notional_usdt(intent.side)
-        dollar_cap = getattr(self.cfg, 'max_loss_usdt_cap', 2.0)
+        dollar_cap = getattr(self.cfg, 'max_loss_usdt_cap', 1.50)
         max_by_dollar_cap = dollar_cap / max(total_risk_pct, 0.0015)
         target_notional = min(notional_by_risk, max_by_dollar_cap, max_book_notional, self.cfg.equity_usdt * self.cfg.max_leverage_cap)
 
@@ -143,20 +143,39 @@ class ScalpOMSV39(ScalpOMS):
                     await self._close_position(pos, curr_p, is_maker=False, reason="BTC_REVERSAL_STOP")
                     continue
 
-            # C. NewDragon Z_OFI Order Flow Imbalance Fast Scratch
+            # C. NewDragon Z_OFI Order Flow Imbalance Fast Scratch (2-Stage Auditor Protocol)
             if self.cfg.enable_z_ofi_scratch and hold_sec <= self.cfg.z_ofi_window_sec and not pos.tp1_filled:
                 z_ofi = getattr(st, "get_z_ofi", lambda: 0.0)()
                 is_adverse_flow = (is_long and z_ofi < -self.cfg.z_ofi_scratch_threshold) or (
                     not is_long and z_ofi > self.cfg.z_ofi_scratch_threshold
                 )
                 if is_adverse_flow:
-                    self.scratch_count += 1
-                    logger.info(
-                        f"[OFI_FAST_SCRATCH] {sym} {pos.side} scratch triggered! "
-                        f"Hold={hold_sec:.1f}s | Z_OFI={z_ofi:.2f}"
-                    )
-                    await self._close_position(pos, curr_p, is_maker=False, reason="OFI_FAST_SCRATCH")
-                    continue
+                    critical_flow = (is_long and z_ofi <= -2.5) or (not is_long and z_ofi >= 2.5)
+                    elapsed_scratch_ms = (now_ms - getattr(pos, "scratch_start_ms", now_ms)) if getattr(pos, "scratch_stage", 0) == 1 else 0
+
+                    if critical_flow or elapsed_scratch_ms >= 500:
+                        # Stage 2 / Critical flow: экстренный выход
+                        self.scratch_count += 1
+                        logger.warning(
+                            f"[OFI_FAST_SCRATCH] {sym} {pos.side} экстренный сброс в рынок! "
+                            f"Hold={hold_sec:.1f}s | Z_OFI={z_ofi:.2f}"
+                        )
+                        await self._close_position(pos, curr_p, is_maker=False, reason="OFI_FAST_SCRATCH")
+                        continue
+                    elif getattr(pos, "scratch_stage", 0) == 0:
+                        # Stage 1: умеренный разворот (2.0 <= |Z_OFI| < 2.5), ставим мейкер-выход
+                        pos.scratch_stage = 1
+                        pos.scratch_start_ms = now_ms
+                        self.scratch_count += 1
+                        logger.info(
+                            f"[OFI_SCRATCH_STAGE1] {sym} {pos.side} разворот институционального потока: "
+                            f"Hold={hold_sec:.1f}s | Z_OFI={z_ofi:.2f}. Выставление мейкер-выхода."
+                        )
+                        true_be = pos.entry_price * (1.0 + self.cfg.roundtrip_mm) if is_long else pos.entry_price * (1.0 - self.cfg.roundtrip_mm)
+                        if is_long and st.best_ask >= true_be:
+                            pos.tp1_price = st.best_ask
+                        elif not is_long and st.best_bid <= true_be:
+                            pos.tp1_price = st.best_bid
 
             # D0. Dynamic Breakeven (Early Profit Lock)
             be_trig = getattr(self.cfg, "dynamic_breakeven_pct", 0.0035)
