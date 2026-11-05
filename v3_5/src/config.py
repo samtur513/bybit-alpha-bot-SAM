@@ -45,8 +45,8 @@ CANDLE_INTERVAL = "60"                 # 1-hour candles ("60" in Bybit API)
 BAR_INTERVAL_MS = 3600 * 1000          # 3,600,000 ms
 
 # Quantitative Strategy Parameters
-MOMENTUM_WINDOW_HOURS = 168            # 168-hour (7 days) relative momentum vs BTC
-REBALANCE_INTERVAL_HOURS = 12          # Ranking check every 12 hours
+MOMENTUM_WINDOW_HOURS = 72             # 72-hour (3 days) responsive relative momentum vs BTC
+REBALANCE_INTERVAL_HOURS = 4           # Ranking check every 4 hours for faster rotation
 ENTRY_TOP_K = 2                        # Max 2 Longs
 ENTRY_BOTTOM_K = 2                     # Max 2 Shorts
 MIN_REL_STRENGTH_LONG = Decimal("0.025")   # Long candidate must outperform BTC by >= 2.5%

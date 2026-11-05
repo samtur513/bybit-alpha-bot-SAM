@@ -549,10 +549,7 @@ class PaperTraderV36:
                         volume=float(b.get("volume", 0)),
                         volume_sma=float(b.get("volume_sma", 1.0)),
                     )
-                    # IRAS filter: if KER > 0.15, force neutral/trend
-                    if ker > 0.15:
-                        reg.is_chop = False
-                        reg.regime = MarketRegime.NEUTRAL
+                    # IRAS regime classification (harmonized with v3.2)
                     regimes_dict[s] = reg
                 self.latest_regimes = regimes_dict
 

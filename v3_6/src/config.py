@@ -60,9 +60,9 @@ ENABLE_CHOP_SCREENER = True
 CHOP_UNIVERSE_TOP_N = 10
 CHOP_MIN_24H_TURNOVER = 5_000_000.0
 CHOP_MIN_OPEN_INTEREST = 2_000_000.0
-CHOP_MAX_KER = 0.18                     # Optimal Calibrated KER <= 0.15 (Pass 4 standard)
-CHOP_MIN_BANDWIDTH_PCT = 0.022         # 3.0% minimum Bollinger Bandwidth
-CHOP_MAX_ADX = 18.0                    # ADX < 18.0 = non-trending chop
+CHOP_MAX_KER = 0.25                     # Harmonized with v3.2 (KER <= 0.25 captures true stationary chop)
+CHOP_MIN_BANDWIDTH_PCT = 0.025         # 2.5% minimum Bollinger Bandwidth
+CHOP_MAX_ADX = 20.0                    # Harmonized with v3.2 (ADX < 20.0 = non-trending range)
 CHOP_RESCAN_INTERVAL_HOURS = 1
 
 # Candle Timeframe & Bar Interval (1-Hour Resolution)
