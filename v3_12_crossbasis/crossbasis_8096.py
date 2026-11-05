@@ -378,7 +378,7 @@ class CrossBasisEngine8096:
                         f"(PureAlpha={res['pure_alpha']:+.3f}$, Fees={res['fees']:+.3f}$) | Equity={self.equity_usdt:.2f}$"
                     )
 
-            await asyncio.sleep(0.150)
+            await asyncio.sleep(0.250)
 
     async def zmq_listener_loop(self) -> None:
         logger.info(f"Ожидание тиков перпов из шины Hub {ZMQ_SUB_ADDR}...")

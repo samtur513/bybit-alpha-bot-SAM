@@ -375,7 +375,7 @@ class FundingSqueezeEngine8097:
                         f"(PureAlpha={res['pure_alpha']:+.3f}$, Fees={res['fees']:+.3f}$) | Equity={self.equity_usdt:.2f}$"
                     )
 
-            await asyncio.sleep(0.200)
+            await asyncio.sleep(0.300)
 
     async def zmq_listener_loop(self) -> None:
         logger.info(f"Ожидание тиков из шины Hub {ZMQ_SUB_ADDR}...")

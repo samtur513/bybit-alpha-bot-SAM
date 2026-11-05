@@ -280,7 +280,7 @@ class DataAndTCAHub8095:
 
     async def periodic_kline_updater(self) -> None:
         while True:
-            await asyncio.sleep(60.0)
+            await asyncio.sleep(180.0)
             try:
                 await self.refresh_structural_levels()
             except Exception as e:
@@ -312,9 +312,9 @@ class DataAndTCAHub8095:
 
                         st.update_ticker(msg.get("data", {}))
 
-                        # THROTTLING GATE: Broadcast max 4 Hz (250ms) per symbol
-                        # Keeps 1-core VPS CPU < 0.3% while maintaining precision
-                        if (now_ms - st.last_pub_ms) < 250:
+                        # THROTTLING GATE: Broadcast max 2.5 Hz (400ms) per symbol
+                        # Keeps 1-core VPS CPU < 1.5% while maintaining quantitative accuracy
+                        if (now_ms - st.last_pub_ms) < 400:
                             continue
 
                         if st.mid_price <= 0 or st.atr_15m <= 0:
