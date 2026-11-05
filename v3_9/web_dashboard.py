@@ -432,6 +432,11 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         pass
 
 
+class ReusableThreadingTCPServer(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+
 def run_scalper_async():
     asyncio.run(core_scalper_v39.main())
 
@@ -441,8 +446,8 @@ def run_server():
     t.start()
     logger.info("Launched v3.9 Bybit Scalper async loop...")
 
-    server = socketserver.ThreadingTCPServer(("0.0.0.0", PORT), DashboardHandler)
-    server.allow_reuse_address = True
+    socketserver.TCPServer.allow_reuse_address = True
+    server = ReusableThreadingTCPServer(("0.0.0.0", PORT), DashboardHandler)
     logger.info(f"{VERSION_NAME} live on http://127.0.0.1:{PORT}")
     try:
         server.serve_forever()

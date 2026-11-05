@@ -820,9 +820,14 @@ class MetaHandler(http.server.SimpleHTTPRequestHandler):
         return
 
 
+class ReusableThreadingTCPServer(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+
 def start_meta_server():
     global AGGREGATOR
-    logger.info("Initializing MetaAggregator for 5 Bybit engines...")
+    logger.info("Initializing MetaAggregator for Bybit multi-alpha fleet...")
     AGGREGATOR = MetaAggregator()
 
     agg_thread = threading.Thread(target=AGGREGATOR.run_loop, daemon=True)
@@ -831,9 +836,10 @@ def start_meta_server():
     # Pre-poll once
     AGGREGATOR.update_all()
 
+    socketserver.TCPServer.allow_reuse_address = True
     server_address = ("0.0.0.0", META_PORT)
-    with socketserver.ThreadingTCPServer(server_address, MetaHandler) as httpd:
-        logger.info(f"Master Meta-Dashboard live on http://0.0.0.0:{META_PORT} (Monitoring ports 8080-8084)")
+    with ReusableThreadingTCPServer(server_address, MetaHandler) as httpd:
+        logger.info(f"Master Meta-Dashboard live on http://0.0.0.0:{META_PORT}")
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:

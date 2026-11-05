@@ -477,6 +477,11 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         pass
 
 
+class ReusableThreadingTCPServer(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+
 def run_paper_trader():
     global DAEMON_INSTANCE
     try:
@@ -491,8 +496,8 @@ def run_server():
     t.start()
     logger.info("Launched v3.8 NewDragon Trend Lab background trader...")
 
-    server = socketserver.ThreadingTCPServer(("0.0.0.0", PORT), DashboardHandler)
-    server.allow_reuse_address = True
+    socketserver.TCPServer.allow_reuse_address = True
+    server = ReusableThreadingTCPServer(("0.0.0.0", PORT), DashboardHandler)
     logger.info(f"{VERSION_NAME} live on http://127.0.0.1:{PORT}")
     try:
         server.serve_forever()
