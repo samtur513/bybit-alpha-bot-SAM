@@ -53,6 +53,7 @@ class SpotState:
     mid_price: float = 0.0
     trades: collections.deque = None
     tfi_3s: float = 0.0
+    last_calc_ms: int = 0
 
     def __post_init__(self):
         if self.trades is None:
@@ -62,6 +63,11 @@ class SpotState:
         now_ms = int(time.time() * 1000)
         for tr in trade_data:
             self.trades.append((int(tr["T"]), tr["S"] == "Buy", float(tr["p"]), float(tr["v"])))
+
+        # THROTTLE: Recalculate TFI at most once per 100ms
+        if (now_ms - self.last_calc_ms) < 100:
+            return
+        self.last_calc_ms = now_ms
 
         cut = now_ms - 3000
         b_v, s_v = 0.0, 0.0
@@ -374,7 +380,7 @@ class CrossBasisEngine8096:
                         f"(PureAlpha={res['pure_alpha']:+.3f}$, Fees={res['fees']:+.3f}$) | Equity={self.equity_usdt:.2f}$"
                     )
 
-            await asyncio.sleep(0.025)
+            await asyncio.sleep(0.100)
 
     async def zmq_listener_loop(self) -> None:
         logger.info(f"Ожидание тиков перпов из шины Hub {ZMQ_SUB_ADDR}...")

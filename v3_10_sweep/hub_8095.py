@@ -67,8 +67,9 @@ class SymbolHubState:
         self.low_compression_ratio: float = 0.0   # (recent_6_high - swing_low) / ATR_15m
         self.high_compression_ratio: float = 0.0  # (swing_high - recent_6_low) / ATR_15m
         self.avg_1m_vol: float = 1.0
+        self.last_pub_ms: int = 0
 
-    def update_l2(self, msg_type: str, data: dict) -> None:
+    def update_l2_book(self, msg_type: str, data: dict) -> None:
         if msg_type == "snapshot":
             self.bids = {float(p): float(v) for p, v in data.get("b", [])}
             self.asks = {float(p): float(v) for p, v in data.get("a", [])}
@@ -86,10 +87,13 @@ class SymbolHubState:
                 else:
                     self.asks[p] = v
 
+    def recompute_l2_metrics(self) -> bool:
+        if not self.bids or not self.asks:
+            return False
         s_bids = sorted(self.bids.items(), key=lambda x: x[0], reverse=True)[:10]
         s_asks = sorted(self.asks.items(), key=lambda x: x[0])[:10]
         if not s_bids or not s_asks:
-            return
+            return False
 
         self.best_bid = s_bids[0][0]
         self.best_ask = s_asks[0][0]
@@ -102,6 +106,7 @@ class SymbolHubState:
         wb = float(np.dot(w, [v for _, v in s_bids[:n]]))
         wa = float(np.dot(w, [v for _, v in s_asks[:n]]))
         self.obi_10 = (wb - wa) / (wb + wa + 1e-9)
+        return True
 
     def update_trades(self, trades_data: list) -> None:
         for tr in trades_data:
@@ -275,13 +280,22 @@ class DataAndTCAHub8095:
                             continue
 
                         if topic.startswith("orderbook"):
-                            st.update_l2(msg.get("type", "delta"), msg.get("data", {}))
+                            st.update_l2_book(msg.get("type", "delta"), msg.get("data", {}))
                         elif topic.startswith("publicTrade"):
                             st.update_trades(msg.get("data", []))
+
+                        # THROTTLING GATE: Broadcast max 10 Hz (100ms) per symbol
+                        # Prevents 100% CPU lock on Bybit 50-level delta and trade bursts
+                        if (now_ms - st.last_pub_ms) < 100:
+                            continue
+
+                        if not st.recompute_l2_metrics():
+                            continue
 
                         if st.mid_price <= 0 or st.atr_15m <= 0:
                             continue
 
+                        st.last_pub_ms = now_ms
                         tfi_3s, buy_3s, sell_3s = st.compute_flow(now_ms, 3000)
                         payload = {
                             "ts": now_ms,
