@@ -68,7 +68,7 @@ class PaperTraderV38:
     """Daemon running v3.8 NewDragon Trend Lab paper trading."""
 
     def __init__(self, symbols: Optional[List[str]] = None):
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.api_key = ""
         self.api_secret = ""
         self.client = BybitClient(timeout=10, max_retries=3)
@@ -458,28 +458,32 @@ class PaperTraderV38:
                     except queue.Empty:
                         kind = None
 
-                    with self.lock:
-                        if kind == "price":
-                            price = Decimal(str(data))
-                            if price.is_finite() and price > 0:
-                                self.prices[sym] = price
-                                self.price_times[sym] = received
-                                self.engine._observe(self.prices)
-                        elif kind == "bar":
-                            self._on_bar(sym, data)
-                        elif kind == "reset":
-                            self.ready = False
-                            self.candle_buffers = self._fetch_history()
+                    if kind == "reset":
+                        self.ready = False
+                        new_buffers = self._fetch_history()
+                        with self.lock:
+                            self.candle_buffers = new_buffers
                             self.ready = True
+                    elif kind:
+                        with self.lock:
+                            if kind == "price":
+                                price = Decimal(str(data))
+                                if price.is_finite() and price > 0:
+                                    self.prices[sym] = price
+                                    self.price_times[sym] = received
+                                    self.engine._observe(self.prices)
+                            elif kind == "bar":
+                                self._on_bar(sym, data)
 
+                    with self.lock:
                         self._signals()
 
-                        now = time.time()
-                        if now - last_export >= 2.0:
-                            last_export = now
-                            status = self.get_status()
-                            atomic_json(LIVE_STATUS_FILE, status)
-                            self.save_persistent_state()
+                    now = time.time()
+                    if now - last_export >= 2.0:
+                        last_export = now
+                        status = self.get_status()
+                        atomic_json(LIVE_STATUS_FILE, status)
+                        self.save_persistent_state()
 
                 except Exception as e:
                     logger.debug(f"Stream error: {e}")
