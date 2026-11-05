@@ -17,12 +17,8 @@ import zmq
 import zmq.asyncio
 from dotenv import load_dotenv
 
-if sys.platform != "win32":
-    try:
-        import uvloop
-        uvloop.install()
-    except ImportError:
-        pass
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 try:
     from v3_10_sweep.tca_ledger import ShadowTCALedger, TCATradeRecord
@@ -101,10 +97,8 @@ class LiquiditySweepEngine8098:
         self.fee_taker = 0.00090 if os.getenv("USE_MNT_DISCOUNT", "true").lower() == "true" else 0.00100
 
         self.ledger = ShadowTCALedger(fee_maker=self.fee_maker, fee_taker=self.fee_taker)
-        self.zmq_ctx = zmq.asyncio.Context()
-        self.sub_sock = self.zmq_ctx.socket(zmq.SUB)
-        self.sub_sock.connect(ZMQ_SUB_ADDR)
-        self.sub_sock.setsockopt(zmq.SUBSCRIBE, b"")
+        self.zmq_ctx = None
+        self.sub_sock = None
 
         self.ws_trade: Optional[websockets.WebSocketClientProtocol] = None
         self.latest_ticks: Dict[str, dict] = {}
@@ -117,6 +111,14 @@ class LiquiditySweepEngine8098:
         self.total_missed_alpha_usdt: float = 0.0
         self.trades_count: int = 0
         self.start_time = time.time()
+
+    def init_zmq(self) -> None:
+        self.zmq_ctx = zmq.asyncio.Context()
+        self.sub_sock = self.zmq_ctx.socket(zmq.SUB)
+        self.sub_sock.setsockopt(zmq.LINGER, 0)
+        self.sub_sock.connect(ZMQ_SUB_ADDR)
+        self.sub_sock.setsockopt(zmq.SUBSCRIBE, b"")
+        logger.info(f"ZeroMQ SUB сокет успешно подключен к {ZMQ_SUB_ADDR}")
 
     @property
     def capture_efficiency(self) -> float:
@@ -314,7 +316,6 @@ class LiquiditySweepEngine8098:
         )
 
         if not self.paper_mode and self.ws_trade:
-            # Live Bybit V5 Post-Only limit order without embedded SL
             frame = {
                 "reqId": str(uuid.uuid4()),
                 "header": {"X-BAPI-TIMESTAMP": str(int(time.time() * 1000)), "X-BAPI-RECV-WINDOW": "2500"},
@@ -338,7 +339,7 @@ class LiquiditySweepEngine8098:
         if self.paper_mode or not self.ws_trade:
             return
         close_side = "Sell" if pos.side == "Buy" else "Buy"
-        trigger_dir = 2 if pos.side == "Buy" else 1  # 2 = price falls below, 1 = price rises above
+        trigger_dir = 2 if pos.side == "Buy" else 1
         frame = {
             "reqId": str(uuid.uuid4()),
             "header": {"X-BAPI-TIMESTAMP": str(int(time.time() * 1000)), "X-BAPI-RECV-WINDOW": "2500"},
@@ -392,9 +393,6 @@ class LiquiditySweepEngine8098:
                 if not tick:
                     continue
 
-                # Realistic Post-Only limit execution check:
-                # Buy limit fills when Ask drops to or below limit
-                # Sell limit fills when Bid rises to or above limit
                 filled = (tick["ask"] <= intent.limit_price) if intent.side == "Buy" else (tick["bid"] >= intent.limit_price)
 
                 if filled:
@@ -719,6 +717,7 @@ class LiquiditySweepEngine8098:
 
 async def main() -> None:
     engine = LiquiditySweepEngine8098()
+    engine.init_zmq()
     await engine.ledger.init_db()
     await engine.start_http_server()
     await asyncio.gather(

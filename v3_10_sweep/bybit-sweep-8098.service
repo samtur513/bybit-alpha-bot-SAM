@@ -8,6 +8,7 @@ Type=simple
 User=root
 WorkingDirectory=/opt/bybit-bot/v3_10_sweep
 Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONPATH=/opt/bybit-bot:/opt/bybit-bot/v3_10_sweep"
 Environment="PAPER_TRADING=true"
 Environment="USE_MNT_DISCOUNT=true"
 Environment="EQUITY_USDT=300.0"

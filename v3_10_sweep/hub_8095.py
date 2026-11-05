@@ -16,12 +16,8 @@ import zmq
 import zmq.asyncio
 from dotenv import load_dotenv
 
-if sys.platform != "win32":
-    try:
-        import uvloop
-        uvloop.install()
-    except ImportError:
-        pass
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 try:
     from v3_10_sweep.tca_ledger import ShadowTCALedger
@@ -125,41 +121,54 @@ class SymbolHubState:
 
 class DataAndTCAHub8095:
     def __init__(self):
-        self.zmq_ctx = zmq.asyncio.Context()
-        self.pub_sock = self.zmq_ctx.socket(zmq.PUB)
-        self.pub_sock.bind(ZMQ_PUB_ADDR)
+        self.zmq_ctx = None
+        self.pub_sock = None
         self.states: Dict[str, SymbolHubState] = {}
         self.ledger = ShadowTCALedger()
         self.ticks_broadcasted: int = 0
         self.start_time = time.time()
 
+    def init_zmq(self) -> None:
+        self.zmq_ctx = zmq.asyncio.Context()
+        self.pub_sock = self.zmq_ctx.socket(zmq.PUB)
+        self.pub_sock.setsockopt(zmq.LINGER, 0)
+        self.pub_sock.bind(ZMQ_PUB_ADDR)
+        logger.info(f"ZeroMQ PUB сокет успешно привязан к {ZMQ_PUB_ADDR}")
+
     async def bootstrap_universe(self, max_symbols: int = 15) -> None:
         logger.info("Инициализация торговой вселенной из Bybit Linear...")
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"{REST_BASE}/v5/market/instruments-info?category=linear&limit=1000") as r1:
-                info = orjson.loads(await r1.read())
-                specs = {}
-                for it in info.get("result", {}).get("list", []):
-                    if it.get("status") == "Trading" and it.get("quoteCoin") == "USDT" and it.get("contractType") == "LinearPerpetual":
-                        specs[it["symbol"]] = (
-                            float(it["priceFilter"]["tickSize"]),
-                            float(it["lotSizeFilter"]["qtyStep"]),
-                            float(it["lotSizeFilter"]["minOrderQty"]),
-                        )
+        specs = {}
+        ranked = []
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+                async with session.get(f"{REST_BASE}/v5/market/instruments-info?category=linear&limit=1000") as r1:
+                    info = orjson.loads(await r1.read())
+                    for it in info.get("result", {}).get("list", []):
+                        if it.get("status") == "Trading" and it.get("quoteCoin") == "USDT" and it.get("contractType") == "LinearPerpetual":
+                            specs[it["symbol"]] = (
+                                float(it["priceFilter"]["tickSize"]),
+                                float(it["lotSizeFilter"]["qtyStep"]),
+                                float(it["lotSizeFilter"]["minOrderQty"]),
+                            )
 
-            async with session.get(f"{REST_BASE}/v5/market/tickers?category=linear") as r2:
-                tickers = orjson.loads(await r2.read())
-                ranked = []
-                for t in tickers.get("result", {}).get("list", []):
-                    sym = t["symbol"]
-                    if sym in specs and float(t.get("turnover24h", 0)) >= 50_000_000:
-                        ranked.append((sym, float(t["turnover24h"])))
-                ranked.sort(key=lambda x: x[1], reverse=True)
+                async with session.get(f"{REST_BASE}/v5/market/tickers?category=linear") as r2:
+                    tickers = orjson.loads(await r2.read())
+                    for t in tickers.get("result", {}).get("list", []):
+                        sym = t["symbol"]
+                        if sym in specs and float(t.get("turnover24h", 0)) >= 50_000_000:
+                            ranked.append((sym, float(t["turnover24h"])))
+                    ranked.sort(key=lambda x: x[1], reverse=True)
+        except Exception as e:
+            logger.warning(f"Ошибка загрузки вселенной через REST: {e}. Используем резервный список.")
 
-                chosen = ["BTCUSDT"] + [s for s, _ in ranked if s != "BTCUSDT"][: max_symbols - 1]
-                for sym in chosen:
-                    tk, qs, mq = specs[sym]
-                    self.states[sym] = SymbolHubState(sym, tk, qs, mq)
+        fallback_symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "SUIUSDT", "NEARUSDT", "APTUSDT", "AVAXUSDT", "LINKUSDT", "ADAUSDT", "BNBUSDT", "ENAUSDT", "INJUSDT", "PEPEUSDT"]
+        chosen = ["BTCUSDT"] + [s for s, _ in ranked if s != "BTCUSDT"][: max_symbols - 1]
+        if len(chosen) < 5:
+            chosen = fallback_symbols[:max_symbols]
+
+        for sym in chosen:
+            tk, qs, mq = specs.get(sym, (0.001, 0.01, 0.01))
+            self.states[sym] = SymbolHubState(sym, tk, qs, mq)
 
         logger.info(f"Вселенная сформирована ({len(self.states)} монет): {list(self.states.keys())}")
         await self.refresh_structural_levels()
@@ -169,7 +178,7 @@ class DataAndTCAHub8095:
         Calculates 15m Swing High/Low (4-24h window), touch count,
         and Anti-Compression ratios.
         """
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8)) as session:
             for sym, st in self.states.items():
                 try:
                     url = f"{REST_BASE}/v5/market/kline?category=linear&symbol={sym}&interval=15&limit=96"
@@ -217,7 +226,6 @@ class DataAndTCAHub8095:
                         st.high_touches = max(h_touches, 2)
 
                         # Anti-Compression Gate metrics:
-                        # How far the recent 6 candles were from the level
                         recent_6_high = float(np.max(highs[-7:-1]))
                         recent_6_low = float(np.min(lows[-7:-1]))
                         st.low_compression_ratio = max(recent_6_high - s_low, 0.0) / max(atr, 1e-9)
@@ -241,7 +249,6 @@ class DataAndTCAHub8095:
             topics.append(f"orderbook.50.{s}")
             topics.append(f"publicTrade.{s}")
 
-        # Batch topics in chunks of max 10 to satisfy Bybit V5 WS limit
         topic_chunks = [topics[i:i+10] for i in range(0, len(topics), 10)]
 
         while True:
@@ -298,8 +305,9 @@ class DataAndTCAHub8095:
                             "top3_bid_notional": st.top3_bid_notional,
                             "top3_ask_notional": st.top3_ask_notional,
                         }
-                        await self.pub_sock.send_multipart([sym.encode("utf-8"), orjson.dumps(payload)])
-                        self.ticks_broadcasted += 1
+                        if self.pub_sock:
+                            await self.pub_sock.send_multipart([sym.encode("utf-8"), orjson.dumps(payload)])
+                            self.ticks_broadcasted += 1
             except Exception as e:
                 logger.error(f"Обрыв Bybit WS: {e}. Переподключение через 2 сек...")
                 await asyncio.sleep(2.0)
@@ -433,6 +441,7 @@ class DataAndTCAHub8095:
 
 async def main() -> None:
     hub = DataAndTCAHub8095()
+    hub.init_zmq()
     await hub.ledger.init_db()
     await hub.bootstrap_universe(max_symbols=15)
     await hub.start_http_status_server()
