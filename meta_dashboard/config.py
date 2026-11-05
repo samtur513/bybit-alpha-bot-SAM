@@ -145,7 +145,7 @@ ENGINES = [
         "color": "#06b6d4",  # cyan
     },
     {
-        "id": "v311",
+        "id": "v311_funding",
         "name": "v3.11 Funding Squeeze",
         "tag": "Pre-Funding Squeeze + T-1s Eject",
         "version": "3.11",
