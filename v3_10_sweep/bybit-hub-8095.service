@@ -7,7 +7,8 @@ Type=simple
 User=root
 WorkingDirectory=/opt/bybit-bot/v3_10_sweep
 Environment="PYTHONUNBUFFERED=1"
-EnvironmentFile=/opt/bybit-bot/.env
+EnvironmentFile=-/opt/bybit-bot/.env
+EnvironmentFile=-/opt/bybit-bot/v3_10_sweep/.env
 ExecStart=/opt/bybit-bot/venv/bin/python hub_8095.py
 Restart=always
 RestartSec=3
