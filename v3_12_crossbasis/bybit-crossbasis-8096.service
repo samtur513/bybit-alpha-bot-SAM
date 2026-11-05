@@ -1,0 +1,24 @@
+[Unit]
+Description=Bybit Spot-Perp Cross-Basis Scalper Engine (Port 8096)
+After=network.target bybit-hub-8095.service
+Wants=bybit-hub-8095.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/bybit-bot/v3_12_crossbasis
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONPATH=/opt/bybit-bot:/opt/bybit-bot/v3_10_sweep:/opt/bybit-bot/v3_12_crossbasis"
+Environment="PAPER_TRADING=true"
+Environment="USE_MNT_DISCOUNT=true"
+Environment="EQUITY_USDT=300.0"
+EnvironmentFile=-/opt/bybit-bot/.env
+EnvironmentFile=-/opt/bybit-bot/v3_12_crossbasis/.env
+ExecStart=/opt/bybit-bot/venv/bin/python /opt/bybit-bot/v3_12_crossbasis/crossbasis_8096.py
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

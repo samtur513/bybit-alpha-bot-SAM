@@ -126,7 +126,7 @@ class ShadowTCALedger:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 """
-                INSERT INTO alpha_attribution_ledger VALUES (
+                INSERT OR REPLACE INTO alpha_attribution_ledger VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 """,

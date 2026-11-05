@@ -32,7 +32,7 @@ HTML_PAGE = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bybit Multi-Alpha | Master Meta-Dashboard (13 Engines)</title>
+    <title>Bybit Multi-Alpha | Master Meta-Dashboard (15 Engines)</title>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
@@ -353,7 +353,7 @@ HTML_PAGE = """<!DOCTYPE html>
             <div class="logo-group">
                 <div class="logo-badge">BYBIT V5 // META</div>
                 <div>
-                    <div class="title">Multi-Alpha Master Meta-Dashboard (13 Engines)</div>
+                    <div class="title">Multi-Alpha Master Meta-Dashboard (15 Engines)</div>
                     <div class="subtitle">Централизованный мониторинг 9 квантовых движков, потоков Bybit WS и защитного щита News Core</div>
                 </div>
             </div>

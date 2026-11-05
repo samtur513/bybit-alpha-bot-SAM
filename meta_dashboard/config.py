@@ -144,4 +144,24 @@ ENGINES = [
         "strategy": "Liquidity Sweep Reversion + Anti-Compression + Post-Only Maker Reclaim",
         "color": "#06b6d4",  # cyan
     },
+    {
+        "id": "v311",
+        "name": "v3.11 Funding Squeeze",
+        "tag": "Pre-Funding Squeeze + T-1s Eject",
+        "version": "3.11",
+        "timeframe": "15m",
+        "port": 8097,
+        "strategy": "Extreme Funding Rate Squeeze (|FR| >= 0.04%) + Clearing Dump Defense",
+        "color": "#f59e0b",  # amber
+    },
+    {
+        "id": "v312",
+        "name": "v3.12 Cross-Basis",
+        "tag": "Spot-Perp OFI Lead-Lag Scalper",
+        "version": "3.12",
+        "timeframe": "M1",
+        "port": 8096,
+        "strategy": "Spot-Perp Basis Dislocation (>= 3.5 bps) + Spot OFI Lead-Lag",
+        "color": "#a855f7",  # purple
+    },
 ]
