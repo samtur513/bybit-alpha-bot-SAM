@@ -40,3 +40,12 @@ Single-context domain documentation (`GLOSSARY.md` + `docs/adr/`). See `docs/age
 3. **Deep Module Design**: Keep interfaces thin and implementations deep. Changes in execution or risk modules must not bleed into signal generation.
 4. **Test-Driven Verification**: Every new feature or fix must be accompanied by unit tests and invariant checks. Never mark a task complete without 100% test pass.
 5. **Windows Concurrency & Persistence**: File writes must be atomic with exponential backoff retries (`persistence.py`) to prevent Windows OS file lock collisions (`WinError 5`). Web API endpoints must serve live telemetry from memory cache.
+6. **Linux Systemd & Service Daemon Standards**:
+   - In systemd unit files, ALWAYS prefix optional environment files with a hyphen: `EnvironmentFile=-/path/to/.env` so systemd does not abort with `Result: resources` / `Failed to load environment files` when `.env` is absent.
+   - ALWAYS embed fallback default environment variables (`PYTHONUNBUFFERED=1`, `PAPER_TRADING=true`, `USE_MNT_DISCOUNT=true`, `EQUITY_USDT=...`) directly inside the `[Service]` block.
+   - For all HTTP, TCP, and ZeroMQ servers, ALWAYS enforce `SO_REUSEADDR` (`allow_reuse_address = True`) to eliminate `[Errno 98] Address already in use` upon rapid service restarts.
+7. **Bybit V5 Exchange Protocol & Execution Invariants**:
+   - **WebSocket Batching Limit**: A single Bybit V5 WebSocket `subscribe` frame must never contain more than 10 topics. Always chunk topic lists into batches of 10.
+   - **Hedge Mode Stop-Loss Protection**: Never use order-level or position-level aggregate `stopLoss` fields in Hedge Mode. Always deploy independent conditional market stop orders with `reduceOnly=True`, `closeOnTrigger=False`, and distinct `orderLinkId` to protect sub-strategy isolation.
+   - **Fee Integrity & Post-Only Execution**: Protect against taker fee bleed ($0.090\%$) by routing retest entries via Post-Only maker limits ($0.0324\%$). Unfilled orders must expire via timeout and log opportunity costs to the Missed Intent Ledger.
+   - **Two-Sided Execution Symmetry**: Every quantitative module must implement full mathematical symmetry for both Long and Short directions (direction-aware limit fills, stop triggers, and MAE/MFE tracking).
