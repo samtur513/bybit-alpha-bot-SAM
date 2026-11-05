@@ -43,21 +43,35 @@ class ThreeEnginesEvaluate:
             return None
 
         # Строгий макро-фильтр BTC (Strict Macro Trend Gate)
+        # Strict Macro & Micro Trend Gate BTC (Prevents shorting into V-bounces or longing into waterfall dumps)
         btc_bull = True
         btc_bear = True
         if btc_state and btc_state.mid_price > 0:
             bm = btc_state.meta
             vwap = getattr(bm, "vwap_session", 0.0) or 0.0
             ema20 = getattr(bm, "ema20_15m", 0.0) or 0.0
+            ema9_5m = getattr(bm, "ema9_5m", 0.0) or 0.0
+
             if vwap > 0 and ema20 > 0:
                 btc_bull = (btc_state.mid_price >= vwap) and (btc_state.mid_price >= ema20)
                 btc_bear = (btc_state.mid_price <= vwap) and (btc_state.mid_price <= ema20)
             elif vwap > 0:
                 btc_bull = btc_state.mid_price >= vwap
                 btc_bear = btc_state.mid_price <= vwap
-            else:
-                btc_bull = True
-                btc_bear = True
+
+            # 5m EMA9 alignment check
+            if ema9_5m > 0:
+                btc_bull = btc_bull and (btc_state.mid_price >= ema9_5m)
+                btc_bear = btc_bear and (btc_state.mid_price <= ema9_5m)
+
+            # Micro-momentum veto (60s rolling window):
+            # If BTC is actively rebounding (+0.04% in 60s), VETO all shorts!
+            # If BTC is actively waterfall dumping (-0.04% in 60s), VETO all longs!
+            btc_ret_60s, _, _ = btc_state.get_depletion_and_return(now_ms, 60000)
+            if btc_ret_60s > 0.0004:
+                btc_bear = False
+            elif btc_ret_60s < -0.0004:
+                btc_bull = False
 
         natr = max(m.natr_5m, self.cfg.e1_min_natr_5m)
         tfi_2s, buy_2s, sell_2s, avg_buy_2s, avg_sell_2s = state.get_trade_flow_metrics(now_ms, 2000)
@@ -273,15 +287,18 @@ class ThreeEnginesEvaluate:
 
         # Dynamic Adaptive Impulse based on rolling BTC NATR_5m
         btc_natr = getattr(btc_state.meta, "natr_5m", 0.0025) or 0.0025
-        dyn_impulse = min(self.cfg.e3_btc_impulse_ret, max(0.00035, 0.20 * btc_natr))
-        dyn_min_lag = min(self.cfg.e3_min_lag_spread, max(0.0006, 0.50 * dyn_impulse))
-        dyn_tfi = max(0.25, self.cfg.e3_btc_tfi_threshold)
+        dyn_impulse = max(self.cfg.e3_btc_impulse_ret, 0.40 * btc_natr)
+        dyn_min_lag = max(self.cfg.e3_min_lag_spread, 0.60 * dyn_impulse)
+        dyn_tfi = max(0.40, self.cfg.e3_btc_tfi_threshold)
 
         # 1. LONG LEAD-LAG (Бычий импульс BTC - строго подтвержденный VWAP и EMA20)
         bm = btc_state.meta
         ema20_val = getattr(bm, "ema20_15m", 0.0) or 0.0
+        ema9_5m = getattr(bm, "ema9_5m", 0.0) or 0.0
         vwap_val = getattr(bm, "vwap_session", 0.0) or 0.0
         btc_is_bull = (btc_state.mid_price >= ema20_val) and (btc_state.mid_price >= vwap_val) if (ema20_val > 0 and vwap_val > 0) else (btc_state.mid_price >= vwap_val)
+        if ema9_5m > 0:
+            btc_is_bull = btc_is_bull and (btc_state.mid_price >= ema9_5m)
 
         if btc_is_bull:
             expected_alt_move = m.beta_btc * r_btc
@@ -315,6 +332,8 @@ class ThreeEnginesEvaluate:
 
         # 2. SHORT LEAD-LAG (Медвежий дамп BTC - строго подтвержденный ниже VWAP и EMA20)
         btc_is_bear = (btc_state.mid_price <= ema20_val) and (btc_state.mid_price <= vwap_val) if (ema20_val > 0 and vwap_val > 0) else (btc_state.mid_price <= vwap_val)
+        if ema9_5m > 0:
+            btc_is_bear = btc_is_bear and (btc_state.mid_price <= ema9_5m)
 
         if btc_is_bear:
             expected_alt_drop = m.beta_btc * abs(r_btc)

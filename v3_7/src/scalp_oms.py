@@ -492,8 +492,8 @@ class ScalpOMS:
         if total_trade_net_usdt < 0:
             self.consecutive_losses[pos.symbol] = self.consecutive_losses.get(pos.symbol, 0) + 1
             if self.consecutive_losses[pos.symbol] >= 3:
-                self.cooldown_until[pos.symbol] = time.time() + 3600.0  # 60 минут при 2 стопах
-                logger.warning(f"[COOLDOWN] {pos.symbol} отправлен в карантин на 60 мин ({self.consecutive_losses[pos.symbol]} стопа подряд).")
+                self.cooldown_until[pos.symbol] = time.time() + 3600.0  # 60m lockout after 3 consecutive losses
+                logger.warning(f"[COOLDOWN] {pos.symbol} locked for 60 min ({self.consecutive_losses[pos.symbol]} consecutive losses).")
         else:
             self.consecutive_losses[pos.symbol] = 0
 

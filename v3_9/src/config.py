@@ -66,7 +66,7 @@ class ScalperConfigV39:
     dynamic_breakeven_pct: float = 0.0035  # При +0.35% профита стоп подтягивается в безубыток (+0.05%)
     enable_e3_leadlag: bool = True   # Специализация v3.9: Флагманский Lead-Lag Beta-Catchup
     enable_e2_sweeps: bool = False  # Отключен: Sweeps полностью отданы v3.7, исключая конфликт
-    enable_e1_obi: bool = False     # Отключен: OBI стакана полностью отдан v3.7, исключая конфликт
+    enable_e1_obi: bool = True     # Отключен: OBI стакана полностью отдан v3.7, исключая конфликт
 
     # 4. NewDragon v4 Micro-Router & OFI Scratch
     enforce_min_notional: bool = True
@@ -103,12 +103,12 @@ class ScalperConfigV39:
     e2_min_risk_pct: float = 0.0008
     e2_max_hold_sec: float = 900.0
 
-    e3_btc_impulse_ret: float = 0.0007
-    e3_btc_tfi_threshold: float = 0.35
-    e3_alt_reaction_cap: float = 0.45
-    e3_min_lag_spread: float = 0.0015
+    e3_btc_impulse_ret: float = 0.0018
+    e3_btc_tfi_threshold: float = 0.50
+    e3_alt_reaction_cap: float = 0.40
+    e3_min_lag_spread: float = 0.0028
     e3_min_beta: float = 1.15
     e3_min_corr: float = 0.55
     e3_max_spread_ticks: float = 3.0
     e3_max_hold_sec: float = 1200.0
-    e3_leader_reversal_threshold: float = 0.50
+    e3_leader_reversal_threshold: float = 0.85
