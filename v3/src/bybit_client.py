@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import logging
+import random
 import time
 from typing import Any, Dict, List, Optional
 import requests
@@ -83,7 +84,8 @@ class BybitClient:
                 )
 
                 if response.status_code == 429:
-                    sleep_time = self.backoff_factor * (2 ** attempt)
+                    jitter = random.uniform(0.5, 2.0)
+                    sleep_time = self.backoff_factor * (1.5 ** attempt) + jitter
                     logger.warning(f"Rate limited on {endpoint}. Sleeping {sleep_time:.2f}s...")
                     time.sleep(sleep_time)
                     continue
@@ -96,7 +98,8 @@ class BybitClient:
                 if ret_code != 0:
                     # Specific transient Bybit errors can be retried
                     if ret_code in [10002, 10006, 10016, 10018]:  # server busy, rate limit, or svc error
-                        sleep_time = self.backoff_factor * (2 ** attempt)
+                        jitter = random.uniform(0.5, 2.0)
+                        sleep_time = self.backoff_factor * (1.5 ** attempt) + jitter
                         logger.warning(f"Bybit retCode {ret_code} on {endpoint}. Retrying in {sleep_time}s...")
                         time.sleep(sleep_time)
                         continue
@@ -110,7 +113,8 @@ class BybitClient:
                 if attempt == self.max_retries:
                     logger.error(f"Failed {method} {endpoint} after {self.max_retries} attempts: {e}")
                     raise
-                sleep_time = self.backoff_factor * (2 ** attempt)
+                jitter = random.uniform(0.5, 2.0)
+                sleep_time = self.backoff_factor * (1.5 ** attempt) + jitter
                 logger.info(f"Retrying {endpoint} attempt {attempt+1}/{self.max_retries} after error: {e}. Sleep {sleep_time:.2f}s")
                 time.sleep(sleep_time)
 

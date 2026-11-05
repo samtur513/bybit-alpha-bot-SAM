@@ -39,7 +39,7 @@ except ImportError:
 logging.basicConfig(level=logging.INFO, format="%(asctime)s.%(msecs)03d | CROSSBASIS_8096 | %(message)s", datefmt="%H:%M:%S")
 logger = logging.getLogger("CrossBasis8096")
 
-MODULE_ID = "M1_CROSSBASIS_8096"
+MODULE_ID = os.getenv("CROSSBASIS_MODULE_ID", "M1_CROSSBASIS_8096_V2")
 HTTP_PORT = int(os.getenv("CROSSBASIS_HTTP_PORT", "8096"))
 ZMQ_SUB_ADDR = os.getenv("ZMQ_SUB_ADDR", "tcp://127.0.0.1:5555")
 WS_PUBLIC_SPOT = "wss://stream.bybit.com/v5/public/spot"

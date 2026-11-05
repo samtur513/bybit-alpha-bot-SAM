@@ -100,7 +100,7 @@ async def run_public_stream(
 
     while True:
         try:
-            async with websockets.connect(cfg.ws_public_url, ping_interval=20, ping_timeout=20, max_queue=4096) as ws:
+            async with websockets.connect(cfg.ws_public_url, ping_interval=None, ping_timeout=None, max_queue=4096) as ws:
                 await ws.send(orjson.dumps({"op": "subscribe", "args": topics}).decode("utf-8"))
                 logger.info(f"Подписка активна на {len(states)} инструментов: {list(states.keys())}")
 

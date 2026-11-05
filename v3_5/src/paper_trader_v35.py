@@ -100,7 +100,6 @@ class PaperTraderV35:
             self.macro_blackout_until = time.time() + 1800.0  # 30-min blackout window
             logger.info(f"News Core v1.2 Macro blackout activated for 30m: {item.headline}")
 
-    @property
     def is_macro_blackout(self) -> bool:
         # Market-neutral pairs are inherently immune to market-wide beta macro shocks
         return False
@@ -348,7 +347,7 @@ class PaperTraderV35:
                 self.last_ping_ms = round((time.time() - t0) * 1000.0, 1)
 
                 # Check if news blackout is active (disabled for beta-neutral pairs)
-                is_blackout = self.is_macro_blackout()
+                is_blackout = self.is_macro_blackout() if callable(getattr(self, "is_macro_blackout", None)) else bool(getattr(self, "is_macro_blackout", False))
 
                 # Process Bar if new hour or interval or initial empty start
                 now_ts = int(time.time() * 1000)
