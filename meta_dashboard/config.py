@@ -164,4 +164,14 @@ ENGINES = [
         "strategy": "Spot-Perp Basis Dislocation (>= 3.5 bps) + Spot OFI Lead-Lag",
         "color": "#a855f7",  # purple
     },
+    {
+        "id": "v314_dispersion",
+        "name": "v3.14 Basket Dispersion",
+        "tag": "Synthetic Basket + Funding Carry (5-30m)",
+        "version": "3.14",
+        "timeframe": "5-30m",
+        "port": 8094,
+        "strategy": "BTC+ETH Benchmark Dispersion + Funding Carry + 2-Stage Exit",
+        "color": "#10b981",  # emerald green
+    },
 ]

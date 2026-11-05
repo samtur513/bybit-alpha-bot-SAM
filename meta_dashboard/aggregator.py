@@ -105,20 +105,20 @@ class MetaAggregator:
                         })
                 elif isinstance(raw_open_pos, list) and len(raw_open_pos) > 0:
                     for pos in raw_open_pos:
-                        sym = pos.get("symbol", "")
-                        entry_p = float(pos.get("entry_price", 0.0))
-                        curr_p = float(pos.get("current_price", entry_p))
+                        sym = pos.get("symbol") or pos.get("alt_symbol") or pos.get("pair_id") or ""
+                        entry_p = float(pos.get("entry_price") or pos.get("entry_p_alt") or pos.get("entry_p_a") or 0.0)
+                        curr_p = float(pos.get("current_price") or pos.get("current_p_alt") or entry_p)
                         dir_str = str(pos.get("direction", "LONG")).upper()
                         unr_pnl = float(pos.get("unrealized_pnl", pos.get("floating_pnl", 0.0)))
-                        unr_pct = round(((curr_p - entry_p) / entry_p * 100.0) if dir_str == "LONG" else ((entry_p - curr_p) / entry_p * 100.0), 2) if entry_p > 0 else 0.0
+                        unr_pct = round(((curr_p - entry_p) / entry_p * 100.0) if dir_str.startswith("LONG") else ((entry_p - curr_p) / entry_p * 100.0), 2) if entry_p > 0 else 0.0
                         normalized_positions.append({
                             "engine_id": engine["id"],
                             "engine_name": engine["name"],
                             "port": port,
                             "symbol": sym,
                             "direction": dir_str,
-                            "module": pos.get("module", "ALPHA_PAIRS" if engine["id"] == "v35" else "TREND"),
-                            "qty": float(pos.get("qty", 0.0)),
+                            "module": pos.get("module", "DISPERSION" if "dispersion" in engine["id"] else ("SECTOR_ARB" if "v313" in engine["id"] else "TREND")),
+                            "qty": float(pos.get("qty") or pos.get("notional_total") or pos.get("notional_alt") or 0.0),
                             "entry_price": entry_p,
                             "current_price": curr_p,
                             "stop_loss": float(pos.get("current_stop", pos.get("stop_loss", pos.get("stop_price", 0.0)))),
@@ -126,7 +126,7 @@ class MetaAggregator:
                             "unrealized_pnl": unr_pnl,
                             "unrealized_pct": unr_pct,
                             "is_pyramided": bool(pos.get("is_pyramided", False)),
-                            "is_breakeven_set": bool(pos.get("is_breakeven_set", False)),
+                            "is_breakeven_set": bool(pos.get("be_stop_active", pos.get("is_breakeven_set", False))),
                         })
                 else:
                     # Fallback Format 2: list trend_open_positions (v3.2)
