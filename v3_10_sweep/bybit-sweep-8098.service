@@ -1,0 +1,19 @@
+[Unit]
+Description=Bybit Liquidity Sweep Reversion Engine (Port 8098)
+After=network.target bybit-hub-8095.service
+Wants=bybit-hub-8095.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/bybit-bot/v3_10_sweep
+Environment="PYTHONUNBUFFERED=1"
+EnvironmentFile=/opt/bybit-bot/.env
+ExecStart=/opt/bybit-bot/venv/bin/python sweep_8098.py
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

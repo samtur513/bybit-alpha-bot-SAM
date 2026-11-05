@@ -1,0 +1,18 @@
+[Unit]
+Description=Bybit Data & TCA Hub (Port 8095, ZeroMQ 5555)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/bybit-bot/v3_10_sweep
+Environment="PYTHONUNBUFFERED=1"
+EnvironmentFile=/opt/bybit-bot/.env
+ExecStart=/opt/bybit-bot/venv/bin/python hub_8095.py
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
