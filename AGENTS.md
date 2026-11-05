@@ -49,3 +49,8 @@ Single-context domain documentation (`GLOSSARY.md` + `docs/adr/`). See `docs/age
    - **Hedge Mode Stop-Loss Protection**: Never use order-level or position-level aggregate `stopLoss` fields in Hedge Mode. Always deploy independent conditional market stop orders with `reduceOnly=True`, `closeOnTrigger=False`, and distinct `orderLinkId` to protect sub-strategy isolation.
    - **Fee Integrity & Post-Only Execution**: Protect against taker fee bleed ($0.090\%$) by routing retest entries via Post-Only maker limits ($0.0324\%$). Unfilled orders must expire via timeout and log opportunity costs to the Missed Intent Ledger.
    - **Two-Sided Execution Symmetry**: Every quantitative module must implement full mathematical symmetry for both Long and Short directions (direction-aware limit fills, stop triggers, and MAE/MFE tracking).
+8. **Python 3.12, Asyncio & ZeroMQ Lifecycle Invariants**:
+   - **No uvloop with pyzmq**: Never mix `uvloop` with `pyzmq` on Python 3.12. Standard `asyncio` is battle-tested, handles thousands of msgs/sec, and prevents `RuntimeError: There is no current event loop in thread 'MainThread'`.
+   - **Lazy ZeroMQ Socket Initialization**: Never instantiate `zmq.asyncio.Context()` or bind/connect sockets in synchronous class `__init__`. Always initialize ZeroMQ lazily inside an async method (e.g. `init_zmq()`) after `asyncio.run()` has established the running loop.
+   - **Windows Selector Policy**: On Windows (`win32`), always invoke `asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())` to support pyzmq selectors.
+   - **Explicit PYTHONPATH in Systemd**: Always declare `Environment="PYTHONPATH=/opt/bybit-bot:/opt/bybit-bot/<module>"` in service definitions to guarantee clean cross-directory imports.
