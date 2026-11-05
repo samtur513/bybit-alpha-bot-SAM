@@ -15,7 +15,11 @@ import orjson
 import websockets
 import zmq
 import zmq.asyncio
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -25,7 +29,6 @@ try:
 except ImportError:
     from tca_ledger import ShadowTCALedger, TCATradeRecord
 
-load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s.%(msecs)03d | SWEEP_8098 | %(message)s", datefmt="%H:%M:%S")
 logger = logging.getLogger("Sweep8098")
 

@@ -14,7 +14,7 @@ Environment="USE_MNT_DISCOUNT=true"
 Environment="EQUITY_USDT=300.0"
 EnvironmentFile=-/opt/bybit-bot/.env
 EnvironmentFile=-/opt/bybit-bot/v3_10_sweep/.env
-ExecStart=/opt/bybit-bot/venv/bin/python sweep_8098.py
+ExecStart=/opt/bybit-bot/venv/bin/python /opt/bybit-bot/v3_10_sweep/sweep_8098.py
 Restart=always
 RestartSec=3
 StandardOutput=journal

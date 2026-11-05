@@ -10,7 +10,7 @@ Environment="PYTHONUNBUFFERED=1"
 Environment="PYTHONPATH=/opt/bybit-bot:/opt/bybit-bot/v3_10_sweep"
 EnvironmentFile=-/opt/bybit-bot/.env
 EnvironmentFile=-/opt/bybit-bot/v3_10_sweep/.env
-ExecStart=/opt/bybit-bot/venv/bin/python hub_8095.py
+ExecStart=/opt/bybit-bot/venv/bin/python /opt/bybit-bot/v3_10_sweep/hub_8095.py
 Restart=always
 RestartSec=3
 StandardOutput=journal
