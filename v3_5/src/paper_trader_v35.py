@@ -237,6 +237,9 @@ class PaperTraderV35:
                 p = current_prices.get(s, pos.entry_price)
                 fl = pos.floating_pnl(p)
                 fl_pct = (fl / (pos.qty * pos.entry_price)) * Decimal("100.0") if pos.entry_price > 0 else Decimal("0.0")
+                is_stop_in_profit = (pos.stop_price > pos.entry_price) if pos.direction == 1 else (pos.stop_price < pos.entry_price)
+                locked_profit = (pos.qty * (pos.stop_price - pos.entry_price) * Decimal(str(pos.direction))) if is_stop_in_profit else Decimal("0.0")
+                tp_target = pos.entry_price + (Decimal(str(pos.direction)) * pos.initial_risk_dist * Decimal("4.0"))
                 open_pos_list.append({
                     "symbol": s,
                     "direction": "LONG" if pos.direction == 1 else "SHORT",
@@ -245,6 +248,9 @@ class PaperTraderV35:
                     "entry_price": float(pos.entry_price),
                     "current_price": float(p),
                     "stop_price": float(pos.stop_price),
+                    "is_stop_in_profit": bool(is_stop_in_profit),
+                    "locked_profit": float(locked_profit),
+                    "tp_target": float(tp_target),
                     "floating_pnl": float(fl),
                     "floating_pnl_pct": float(fl_pct),
                     "macro_trimmed": pos.macro_trimmed,

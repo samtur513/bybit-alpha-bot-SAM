@@ -351,7 +351,8 @@ HTML_PAGE = """<!DOCTYPE html>
                             <th>Объем</th>
                             <th>Вход</th>
                             <th>Текущая</th>
-                            <th>Стоп</th>
+                            <th>Стоп / Трейлинг</th>
+                            <th>Тейк-профит (+4R)</th>
                             <th>Плав. PnL</th>
                         </tr>
                     </thead>
@@ -470,6 +471,13 @@ HTML_PAGE = """<!DOCTYPE html>
                         const isL = p.direction === 'LONG';
                         const pnlColor = p.floating_pnl >= 0 ? 'text-green' : 'text-red';
                         const signP = p.floating_pnl >= 0 ? '+' : '';
+                        const inProfitStop = p.is_stop_in_profit;
+                        const stopDisplay = inProfitStop 
+                            ? `<span style="color: var(--accent-green); font-weight:700;">$${p.stop_price.toFixed(4)}</span> <span class="badge-side badge-long" style="font-size:9px; padding:1px 4px; margin-left:3px;">🛡️ +$${(p.locked_profit || 0).toFixed(2)}</span>`
+                            : `<span style="color: var(--accent-red);">$${p.stop_price.toFixed(4)}</span>`;
+                        const tpDisplay = p.tp_target 
+                            ? `<span style="color: var(--accent-cyan);">$${p.tp_target.toFixed(4)}</span> ${p.tp_taken ? '<span class="badge-side" style="font-size:9px;">50% взят</span>' : ''}`
+                            : `<span style="color: var(--text-muted);">-</span>`;
                         return `
                             <tr>
                                 <td style="font-weight:700;">${p.symbol}</td>
@@ -477,14 +485,15 @@ HTML_PAGE = """<!DOCTYPE html>
                                 <td>${p.qty.toFixed(3)}</td>
                                 <td>$${p.entry_price.toFixed(4)}</td>
                                 <td>$${p.current_price.toFixed(4)}</td>
-                                <td style="color: var(--accent-red);">$${p.stop_price.toFixed(4)}</td>
+                                <td>${stopDisplay}</td>
+                                <td>${tpDisplay}</td>
                                 <td class="${pnlColor}">${signP}$${p.floating_pnl.toFixed(2)} (${signP}${p.floating_pnl_pct.toFixed(1)}%)</td>
                             </tr>
                         `;
                     }).join('');
                     document.getElementById('pos-count-sub').innerText = `${d.open_positions.length} активных`;
                 } else {
-                    posBody.innerHTML = '<tr><td colspan="7" style="text-align:center; color: var(--text-muted);">Нет открытых позиций</td></tr>';
+                    posBody.innerHTML = '<tr><td colspan="8" style="text-align:center; color: var(--text-muted);">Нет открытых позиций</td></tr>';
                     document.getElementById('pos-count-sub').innerText = '0 открытых';
                 }
 
