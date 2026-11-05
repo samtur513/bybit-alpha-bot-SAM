@@ -1,8 +1,8 @@
 """
-v3.7 Scalp Strategy Engines:
-1. Engine 1: OBI Breakout & Depth Depletion (Long & Short)
-2. Engine 2: Liquidity Sweep & Absorption Reversion (Long & Short)
-3. Engine 3: Lead-Lag Beta-Catchup to BTC (Long & Short)
+v3.7 & v3.9 Scalp Strategy Engines (Optimized Production Freeze 2026-11-05):
+1. Engine 1: OBI Breakout & Depth Depletion (Long & Short with Strict BTC Gate)
+2. Engine 2: Liquidity Sweep & Absorption Reversion (Long & Short with Trend Guard)
+3. Engine 3: Lead-Lag Beta-Catchup to BTC (Long & Short, High R:R Fee-Robust)
 """
 
 from dataclasses import dataclass
@@ -15,7 +15,7 @@ from v3_7.src.microstructure import SymbolMicrostructureState
 @dataclass
 class SignalIntent:
     engine_id: str          # "E2_SWEEP" | "E3_LEADLAG" | "E1_OBI"
-    priority: int           # 1 (высший) .. 3
+    priority: int           # 1 (highest) .. 3
     symbol: str
     side: str               # "Buy" | "Sell"
     entry_price: float
@@ -33,7 +33,7 @@ class ThreeEnginesEvaluate:
         self.cfg = cfg
 
     # =========================================================================
-    # ДВИЖОК 1: OBI + FLOW TOXICITY BREAKOUT (LONG & SHORT)
+    # ДВИЖОК 1: OBI + FLOW TOXICITY BREAKOUT (LONG & SHORT С BTC ФИЛЬТРОМ)
     # =========================================================================
     def evaluate_engine1_obi_breakout(
         self, state: SymbolMicrostructureState, now_ms: int, btc_state: Optional[SymbolMicrostructureState] = None
@@ -42,21 +42,28 @@ class ThreeEnginesEvaluate:
         if state.mid_price <= 0 or state.spread_ticks > self.cfg.e1_max_spread_ticks:
             return None
 
-        # Проверка макро-тренда BTC если передан btc_state
-        btc_bull = True
-        btc_bear = True
+        # Строгий макро-фильтр BTC (Strict Macro Trend Gate)
+        btc_bull = False
+        btc_bear = False
         if btc_state and btc_state.mid_price > 0:
             bm = btc_state.meta
             vwap = getattr(bm, "vwap_session", 0.0) or 0.0
             ema20 = getattr(bm, "ema20_15m", 0.0) or 0.0
-            btc_bull = (btc_state.mid_price >= vwap) or (btc_state.mid_price >= ema20)
-            btc_bear = (btc_state.mid_price <= vwap) or (btc_state.mid_price <= ema20)
+            if vwap > 0 and ema20 > 0:
+                btc_bull = (btc_state.mid_price >= vwap) and (btc_state.mid_price >= ema20)
+                btc_bear = (btc_state.mid_price <= vwap) and (btc_state.mid_price <= ema20)
+            elif vwap > 0:
+                btc_bull = btc_state.mid_price >= vwap
+                btc_bear = btc_state.mid_price <= vwap
+            else:
+                btc_bull = True
+                btc_bear = True
 
         natr = max(m.natr_5m, self.cfg.e1_min_natr_5m)
         tfi_2s, buy_2s, sell_2s, avg_buy_2s, avg_sell_2s = state.get_trade_flow_metrics(now_ms, 2000)
         _, dr_ask_400ms, dr_bid_400ms = state.get_depletion_and_return(now_ms, 400)
 
-        # 1. LONG УСЛОВИЯ (строго по тренду BTC и альткоина)
+        # 1. LONG УСЛОВИЯ (строго по восходящему тренду BTC и альткоина)
         long_trend_ok = (
             btc_bull
             and (state.mid_price >= m.vwap_session or state.mid_price >= m.ema9_5m)
@@ -70,9 +77,9 @@ class ThreeEnginesEvaluate:
             and dr_ask_400ms >= self.cfg.e1_depletion_threshold
         ):
             entry = state.best_bid + state.meta.tick_size if state.spread_ticks >= 2.0 else state.best_bid
-            tp1 = entry * (1.0 + max(0.0065, 0.85 * natr))
-            tp2 = entry * (1.0 + max(0.0140, 1.80 * natr))
-            sl = entry * (1.0 - max(0.0040, 0.55 * natr))
+            tp1 = entry * (1.0 + max(0.0085, 1.10 * natr))
+            tp2 = entry * (1.0 + max(0.0180, 2.20 * natr))
+            sl = entry * (1.0 - max(0.0035, 0.45 * natr))
 
             return SignalIntent(
                 engine_id="E1_OBI",
@@ -87,7 +94,7 @@ class ThreeEnginesEvaluate:
                 reason=f"LONG OBI={state.obi:.2f} TFI={tfi_2s:.2f} DR_ask={dr_ask_400ms:.2f}",
             )
 
-        # 2. SHORT УСЛОВИЯ (строго по нисходящему тренду BTC и альткоина)
+        # 2. SHORT УСЛОВИЯ (строго по нисходящему тренду BTC и альткоина; блокировка контртренд-шортов)
         short_trend_ok = (
             btc_bear
             and (state.mid_price <= m.vwap_session or state.mid_price <= m.ema9_5m)
@@ -101,9 +108,9 @@ class ThreeEnginesEvaluate:
             and dr_bid_400ms >= self.cfg.e1_depletion_threshold
         ):
             entry = state.best_ask - state.meta.tick_size if state.spread_ticks >= 2.0 else state.best_ask
-            tp1 = entry * (1.0 - max(0.0065, 0.85 * natr))
-            tp2 = entry * (1.0 - max(0.0140, 1.80 * natr))
-            sl = entry * (1.0 + max(0.0040, 0.55 * natr))
+            tp1 = entry * (1.0 - max(0.0085, 1.10 * natr))
+            tp2 = entry * (1.0 - max(0.0180, 2.20 * natr))
+            sl = entry * (1.0 + max(0.0035, 0.45 * natr))
 
             return SignalIntent(
                 engine_id="E1_OBI",
@@ -163,8 +170,8 @@ class ThreeEnginesEvaluate:
 
                         if self.cfg.e2_min_risk_pct <= risk_pct <= self.cfg.e2_max_risk_pct:
                             state.reset_sweep("long")
-                            tp1 = max(entry + 2.0 * (entry - sl), entry * 1.0050)
-                            tp2 = max(m.vwap_session, tp1 * 1.003)
+                            tp1 = max(entry + 2.5 * (entry - sl), entry * 1.0085)
+                            tp2 = max(m.vwap_session, tp1 * 1.005)
                             return SignalIntent(
                                 engine_id="E2_SWEEP",
                                 priority=1,
@@ -180,8 +187,11 @@ class ThreeEnginesEvaluate:
 
         # ---------------------------------------------------------------------
         # 2. SHORT SWEEP: Закол уровня сопротивления (swing_high_1h)
+        # Блокировка если BTC находится в восходящем тренде
         # ---------------------------------------------------------------------
-        if state.sweep_high_active and m.swing_high_1h > 0:
+        bm = btc_state.meta
+        btc_above_vwap = btc_state.mid_price >= getattr(bm, "vwap_session", 0.0)
+        if state.sweep_high_active and m.swing_high_1h > 0 and not btc_above_vwap:
             elapsed_sec = (now_ms - state.sweep_high_start_ms) / 1000.0
             if elapsed_sec > self.cfg.e2_max_sweep_time_sec:
                 state.reset_sweep("short")
@@ -207,8 +217,8 @@ class ThreeEnginesEvaluate:
 
                         if self.cfg.e2_min_risk_pct <= risk_pct <= self.cfg.e2_max_risk_pct:
                             state.reset_sweep("short")
-                            tp1 = min(entry - 2.0 * (sl - entry), entry * 0.9950)
-                            tp2 = min(m.vwap_session, tp1 * 0.997)
+                            tp1 = min(entry - 2.5 * (sl - entry), entry * 0.9915)
+                            tp2 = min(m.vwap_session, tp1 * 0.995)
                             return SignalIntent(
                                 engine_id="E2_SWEEP",
                                 priority=1,
@@ -260,9 +270,13 @@ class ThreeEnginesEvaluate:
         dyn_min_lag = min(self.cfg.e3_min_lag_spread, max(0.0006, 0.50 * dyn_impulse))
         dyn_tfi = max(0.25, self.cfg.e3_btc_tfi_threshold)
 
-        # 1. LONG LEAD-LAG (Бычий импульс BTC)
+        # 1. LONG LEAD-LAG (Бычий импульс BTC - строго подтвержденный VWAP и EMA20)
         bm = btc_state.meta
-        if (btc_state.mid_price >= getattr(bm, "ema20_15m", 0.0)) or (btc_state.mid_price >= getattr(bm, "vwap_session", 0.0)):
+        ema20_val = getattr(bm, "ema20_15m", 0.0) or 0.0
+        vwap_val = getattr(bm, "vwap_session", 0.0) or 0.0
+        btc_is_bull = (btc_state.mid_price >= ema20_val) and (btc_state.mid_price >= vwap_val) if (ema20_val > 0 and vwap_val > 0) else (btc_state.mid_price >= vwap_val)
+
+        if btc_is_bull:
             expected_alt_move = m.beta_btc * r_btc
             lag_spread = expected_alt_move - r_alt
 
@@ -273,9 +287,9 @@ class ThreeEnginesEvaluate:
                 and lag_spread >= dyn_min_lag
             ):
                 entry = state.best_bid + state.meta.tick_size if state.spread_ticks >= 2.0 else state.best_bid
-                tp1 = entry * (1.0 + max(0.0065, 0.90 * lag_spread))
-                tp2 = entry * (1.0 + max(0.0140, 1.80 * lag_spread))
-                sl = entry * (1.0 - max(0.0040, 0.50 * lag_spread))
+                tp1 = entry * (1.0 + max(0.0085, 1.10 * lag_spread))
+                tp2 = entry * (1.0 + max(0.0180, 2.20 * lag_spread))
+                sl = entry * (1.0 - max(0.0035, 0.45 * lag_spread))
 
                 return SignalIntent(
                     engine_id="E3_LEADLAG",
@@ -292,8 +306,10 @@ class ThreeEnginesEvaluate:
                     reason=f"LONG BTC_r={r_btc*100:.2f}% LagS={lag_spread*100:.2f}% Beta={m.beta_btc:.2f}",
                 )
 
-        # 2. SHORT LEAD-LAG (Медвежий дамп BTC)
-        if (btc_state.mid_price <= getattr(bm, "ema20_15m", float("inf"))) or (btc_state.mid_price <= getattr(bm, "vwap_session", float("inf"))):
+        # 2. SHORT LEAD-LAG (Медвежий дамп BTC - строго подтвержденный ниже VWAP и EMA20)
+        btc_is_bear = (btc_state.mid_price <= ema20_val) and (btc_state.mid_price <= vwap_val) if (ema20_val > 0 and vwap_val > 0) else (btc_state.mid_price <= vwap_val)
+
+        if btc_is_bear:
             expected_alt_drop = m.beta_btc * abs(r_btc)
             actual_alt_drop = abs(r_alt) if r_alt < 0 else 0.0
             lag_spread = expected_alt_drop - actual_alt_drop
@@ -305,9 +321,9 @@ class ThreeEnginesEvaluate:
                 and lag_spread >= dyn_min_lag
             ):
                 entry = state.best_ask - state.meta.tick_size if state.spread_ticks >= 2.0 else state.best_ask
-                tp1 = entry * (1.0 - max(0.0065, 0.90 * lag_spread))
-                tp2 = entry * (1.0 - max(0.0140, 1.80 * lag_spread))
-                sl = entry * (1.0 + max(0.0040, 0.50 * lag_spread))
+                tp1 = entry * (1.0 - max(0.0085, 1.10 * lag_spread))
+                tp2 = entry * (1.0 - max(0.0180, 2.20 * lag_spread))
+                sl = entry * (1.0 + max(0.0035, 0.45 * lag_spread))
 
                 return SignalIntent(
                     engine_id="E3_LEADLAG",

@@ -136,6 +136,7 @@ class CrossBasisEngine8096:
         self.spot_states: Dict[str, SpotState] = {}
         self.pending_intents: Dict[str, PendingBasisIntent] = {}
         self.open_positions: Dict[str, OpenBasisPosition] = {}
+        self.cooldown_until: Dict[str, float] = {}
 
         self.total_filled_alpha_usdt: float = 0.0
         self.total_missed_alpha_usdt: float = 0.0
@@ -197,6 +198,8 @@ class CrossBasisEngine8096:
     def _evaluate_cross_basis_setup(self, perp_tick: dict) -> None:
         sym = perp_tick["symbol"]
         if sym not in self.monitored_pairs or sym in self.pending_intents or sym in self.open_positions:
+            return
+        if time.time() < self.cooldown_until.get(sym, 0.0):
             return
 
         spot_st = self.spot_states.get(sym)
@@ -315,6 +318,7 @@ class CrossBasisEngine8096:
                         exit_reason = "SL_HIT"
                         exit_fill = pos.sl_price
                         is_maker = False
+                        self.cooldown_until[sym] = time.time() + 900.0
                     elif mid >= pos.tp_price:
                         exit_reason = "TP_HIT"
                         exit_fill = pos.tp_price
@@ -328,6 +332,7 @@ class CrossBasisEngine8096:
                         exit_reason = "SL_HIT"
                         exit_fill = pos.sl_price
                         is_maker = False
+                        self.cooldown_until[sym] = time.time() + 900.0
                     elif mid <= pos.tp_price:
                         exit_reason = "TP_HIT"
                         exit_fill = pos.tp_price

@@ -108,6 +108,7 @@ class LiquiditySweepEngine8098:
         self.trackers: Dict[str, SweepTracker] = {}
         self.pending_intents: Dict[str, PendingLimitIntent] = {}
         self.open_positions: Dict[str, OpenSweepPosition] = {}
+        self.cooldown_until: Dict[str, float] = {}
 
         # Capture Efficiency metrics
         self.total_filled_alpha_usdt: float = 0.0
@@ -132,11 +133,14 @@ class LiquiditySweepEngine8098:
         sym = tick["symbol"]
         if sym == "BTCUSDT" or sym in self.pending_intents or sym in self.open_positions:
             return
+        if time.time() < self.cooldown_until.get(sym, 0.0):
+            return
 
         # 1. Lead-lag BTC safety filter (skip sweep entries if BTC is trending violently)
         btc = self.latest_ticks.get("BTCUSDT")
         if btc and abs(btc.get("tfi_3s", 0.0)) > 0.80:
             return
+        btc_bull = btc and btc.get("mid", 0) >= btc.get("vwap", 0)
 
         mid = tick["mid"]
         atr = tick["atr_15m"]
@@ -182,7 +186,7 @@ class LiquiditySweepEngine8098:
                 abs_ratio = tr.accum_aggr_vol / expected_vol
 
                 # Gate 2 (Absorption >= 2.5x) + Gate 3 (CVD Flip: TFI >= +0.30 and OBI >= +0.15)
-                if abs_ratio >= 2.5 and tick["tfi_3s"] >= 0.30 and tick["obi"] >= 0.15:
+                if abs_ratio >= 1.5 and tick["tfi_3s"] >= 0.15 and tick["obi"] >= 0.10:
                     tr.active = False
                     asyncio.create_task(
                         self._place_reclaim_limit_intent(
@@ -236,7 +240,7 @@ class LiquiditySweepEngine8098:
                 abs_ratio = tr.accum_aggr_vol / expected_vol
 
                 # Gate 2 (Absorption >= 2.5x) + Gate 3 (CVD Flip: TFI <= -0.30 and OBI <= -0.15)
-                if abs_ratio >= 2.5 and tick["tfi_3s"] <= -0.30 and tick["obi"] <= -0.15:
+                if abs_ratio >= 1.5 and tick["tfi_3s"] <= -0.15 and tick["obi"] <= -0.10 and not btc_bull:
                     tr.active = False
                     asyncio.create_task(
                         self._place_reclaim_limit_intent(
@@ -449,6 +453,7 @@ class LiquiditySweepEngine8098:
                         exit_reason = "SL_HIT"
                         exit_fill = pos.sl_price
                         is_maker_exit = False
+                        self.cooldown_until[sym] = time.time() + 900.0
                     elif mid >= pos.tp_price:
                         exit_reason = "TP_VWAP_TARGET"
                         exit_fill = pos.tp_price
@@ -462,6 +467,7 @@ class LiquiditySweepEngine8098:
                         exit_reason = "SL_HIT"
                         exit_fill = pos.sl_price
                         is_maker_exit = False
+                        self.cooldown_until[sym] = time.time() + 900.0
                     elif mid <= pos.tp_price:
                         exit_reason = "TP_VWAP_TARGET"
                         exit_fill = pos.tp_price

@@ -468,12 +468,15 @@ class ScalpOMS:
         total_trade_net_usdt = pos.tp1_realized_pnl_usdt + net_usdt
         self.daily_pnl_usdt += net_usdt
 
-        # Cooldown при череде убытков
+        # Cooldown при убытке: немедленный карантин на 15 мин после любого стопа
         if total_trade_net_usdt < 0:
-            self.consecutive_losses[pos.symbol] += 1
-            if self.consecutive_losses[pos.symbol] >= 3:
-                self.cooldown_until[pos.symbol] = time.time() + 3600.0
-                logger.warning(f"[COOLDOWN] {pos.symbol} отправлен в карантин на 60 мин (3 стопа подряд).")
+            self.consecutive_losses[pos.symbol] = self.consecutive_losses.get(pos.symbol, 0) + 1
+            if self.consecutive_losses[pos.symbol] >= 2:
+                self.cooldown_until[pos.symbol] = time.time() + 3600.0  # 60 минут при 2 стопах
+                logger.warning(f"[COOLDOWN] {pos.symbol} отправлен в карантин на 60 мин ({self.consecutive_losses[pos.symbol]} стопа подряд).")
+            else:
+                self.cooldown_until[pos.symbol] = time.time() + 900.0   # 15 минут при 1 стопе
+                logger.warning(f"[COOLDOWN] {pos.symbol} отправлен в карантин на 15 мин после закрытия по стопу.")
         else:
             self.consecutive_losses[pos.symbol] = 0
 

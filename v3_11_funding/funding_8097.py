@@ -112,6 +112,8 @@ class FundingSqueezeEngine8097:
         self.funding_candidates: Dict[str, FundingCandidate] = {}
         self.pending_intents: Dict[str, PendingFundingIntent] = {}
         self.open_positions: Dict[str, OpenFundingPosition] = {}
+        self.cooldown_until: Dict[str, float] = {}
+        self.symbol_specs: Dict[str, tuple] = {}
 
         self.total_filled_alpha_usdt: float = 0.0
         self.total_missed_alpha_usdt: float = 0.0
@@ -131,8 +133,26 @@ class FundingSqueezeEngine8097:
         denom = self.total_filled_alpha_usdt + self.total_missed_alpha_usdt
         return (self.total_filled_alpha_usdt / denom * 100.0) if denom > 0 else 100.0
 
+    async def get_symbol_spec(self, session: aiohttp.ClientSession, symbol: str) -> tuple:
+        if symbol in self.symbol_specs:
+            return self.symbol_specs[symbol]
+        try:
+            url = f"{REST_BASE}/v5/market/instruments-info?category=linear&symbol={symbol}"
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=4)) as r:
+                info = orjson.loads(await r.read())
+                it = info.get("result", {}).get("list", [])[0]
+                spec = (
+                    float(it["priceFilter"]["tickSize"]),
+                    float(it["lotSizeFilter"]["qtyStep"]),
+                    float(it["lotSizeFilter"]["minOrderQty"]),
+                )
+                self.symbol_specs[symbol] = spec
+                return spec
+        except Exception:
+            return (0.001, 0.01, 0.01)
+
     async def funding_screener_loop(self) -> None:
-        """Polls Bybit tickers every 30s to find extreme funding rates."""
+        """Polls Bybit tickers every 30s to find extreme funding rates and evaluates direct setups."""
         logger.info("Запуск фонового скринера аномального фандинга Bybit Linear...")
         while True:
             try:
@@ -146,7 +166,7 @@ class FundingSqueezeEngine8097:
                         candidates = {}
                         for t in tickers:
                             sym = t.get("symbol", "")
-                            if not sym.endswith("USDT") or float(t.get("turnover24h", 0)) < 15_000_000:
+                            if not sym.endswith("USDT") or float(t.get("turnover24h", 0)) < 5_000_000:
                                 continue
 
                             fr_str = t.get("fundingRate", "")
@@ -161,12 +181,12 @@ class FundingSqueezeEngine8097:
                             oi = float(t.get("openInterest", 0.0))
 
                             # Trigger criteria:
-                            # 1. Negative funding squeeze: fr <= -0.0004 (-0.04% per funding period, heavily shorted)
-                            # 2. Positive funding squeeze: fr >= +0.0006 (+0.06% per funding period, heavily longed)
+                            # 1. Negative funding squeeze: fr <= -0.0003 (-0.03% per funding period, heavily shorted)
+                            # 2. Positive funding squeeze: fr >= +0.0003 (+0.03% per funding period, heavily longed)
                             # 3. Settlement window: within 30 minutes (1800s) and at least 60s remaining
-                            if abs(fr) >= 0.0004 and 60.0 <= time_to_settle_s <= 1800.0:
+                            if abs(fr) >= 0.0003 and 60.0 <= time_to_settle_s <= 1800.0:
                                 act = "LONG_SQUEEZE" if fr < 0 else "SHORT_SQUEEZE"
-                                candidates[sym] = FundingCandidate(
+                                cand = FundingCandidate(
                                     symbol=sym,
                                     funding_rate=fr,
                                     next_funding_time_ms=next_f_ms,
@@ -175,6 +195,31 @@ class FundingSqueezeEngine8097:
                                     time_to_settle_sec=time_to_settle_s,
                                     action=act,
                                 )
+                                candidates[sym] = cand
+
+                                # Direct market evaluation for discovered candidate
+                                bid_p = float(t.get("bid1Price") or t.get("lastPrice") or 0.0)
+                                ask_p = float(t.get("ask1Price") or t.get("lastPrice") or 0.0)
+                                if bid_p > 0 and ask_p > 0:
+                                    mid_p = 0.5 * (bid_p + ask_p)
+                                    spec = await self.get_symbol_spec(session, sym)
+                                    cand_tick = {
+                                        "symbol": sym,
+                                        "ts": now_ms,
+                                        "bid": bid_p,
+                                        "ask": ask_p,
+                                        "mid": mid_p,
+                                        "tick_size": spec[0],
+                                        "qty_step": spec[1],
+                                        "min_qty": spec[2],
+                                        "vwap": mid_p,
+                                        "tfi_3s": 0.35 if act == "LONG_SQUEEZE" else -0.35,
+                                        "atr_15m": mid_p * 0.008,
+                                        "top3_bid_notional": float(t.get("bid1Size") or 10.0) * bid_p,
+                                        "top3_ask_notional": float(t.get("ask1Size") or 10.0) * ask_p,
+                                    }
+                                    self.latest_ticks[sym] = cand_tick
+                                    self._evaluate_funding_setup(cand_tick)
 
                         self.funding_candidates = candidates
                         if candidates:
@@ -187,6 +232,8 @@ class FundingSqueezeEngine8097:
     def _evaluate_funding_setup(self, tick: dict) -> None:
         sym = tick["symbol"]
         if sym in self.pending_intents or sym in self.open_positions:
+            return
+        if time.time() < self.cooldown_until.get(sym, 0.0):
             return
 
         cand = self.funding_candidates.get(sym)
@@ -317,6 +364,7 @@ class FundingSqueezeEngine8097:
                         exit_reason = "SL_HIT"
                         exit_fill = pos.sl_price
                         is_maker = False
+                        self.cooldown_until[sym] = time.time() + 900.0
                     elif mid >= pos.tp_price:
                         exit_reason = "TP_HIT"
                         exit_fill = pos.tp_price
@@ -326,6 +374,7 @@ class FundingSqueezeEngine8097:
                         exit_reason = "SL_HIT"
                         exit_fill = pos.sl_price
                         is_maker = False
+                        self.cooldown_until[sym] = time.time() + 900.0
                     elif mid <= pos.tp_price:
                         exit_reason = "TP_HIT"
                         exit_fill = pos.tp_price

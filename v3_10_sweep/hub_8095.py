@@ -95,14 +95,18 @@ class SymbolHubState:
         self.obi_10 = (b_sz - a_sz) / (b_sz + a_sz + 1e-9)
 
         # Tick-rule flow estimation without flood of publicTrade
+        now_ms = int(time.time() * 1000)
         if "volume24h" in data and data["volume24h"]:
             new_vol = float(data["volume24h"])
-            if old_vol > 0 and new_vol >= old_vol:
+            if old_vol > 0 and new_vol > old_vol:
                 delta_q = new_vol - old_vol
                 is_buy = self.mid_price >= old_mid
-                now_ms = int(time.time() * 1000)
                 self.trades.append((now_ms, is_buy, self.mid_price, delta_q))
             self.cur_vol_24h = new_vol
+        elif self.mid_price != old_mid and old_mid > 0:
+            delta_q = max(0.05 * b_sz, self.min_qty)
+            is_buy = self.mid_price > old_mid
+            self.trades.append((now_ms, is_buy, self.mid_price, delta_q))
 
     def update_l2_book(self, msg_type: str, data: dict) -> None:
         if msg_type == "snapshot":
@@ -246,8 +250,8 @@ class DataAndTCAHub8095:
                         st.vwap_range = float(np.sum(closes[-32:] * vols[-32:]) / max(np.sum(vols[-32:]), 1e-9))
 
                         # Window for structural level: -64 to -2 (excludes current active candles)
-                        hist_lows = lows[-64:-2]
-                        hist_highs = highs[-64:-2]
+                        hist_lows = lows[-36:-2]
+                        hist_highs = highs[-36:-2]
                         s_low = float(np.min(hist_lows))
                         s_high = float(np.max(hist_highs))
                         st.swing_low = s_low
