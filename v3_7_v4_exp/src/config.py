@@ -70,7 +70,7 @@ class ScalperConfigV37V4:
     persist_state: bool = False  # Disabled by default in unit tests; enabled in daemon main()
 
     # 4. Alpha Engines Configuration
-    enable_e1_obi: bool = False       # Order Flow Imbalance (Disabled: raw M1 Z_OFI triggers excessive churn)
+    enable_e1_obi: bool = True        # Order Flow Imbalance (Active on Radar Institutional Flow >= 2.2 sigma)
     enable_e2_sweeps: bool = True     # Liquidity sweep reclaim (High edge)
     enable_e3_leadlag: bool = True    # Lead-lag beta-catchup to BTC (High edge)
 
@@ -83,7 +83,7 @@ class ScalperConfigV37V4:
     z_ofi_critical_threshold: float = 3.5 # Critical adverse threshold: 3.5 sigma
     z_ofi_window_sec: float = 30.0       # Evaluate during first 30s of trade
     min_ker_threshold: float = 0.30      # KER chop filter
-    z_ofi_entry_threshold: float = 2.5   # Trigger entry on >= +2.5 sigma (Buy) or <= -2.5 sigma (Sell)
+    z_ofi_entry_threshold: float = 2.2   # Trigger entry on >= +2.2 sigma (Buy) or <= -2.2 sigma (Sell)
 
     # 6. Bybit Endpoints
     ws_public_url: str = "wss://stream.bybit.com/v5/public/linear"
