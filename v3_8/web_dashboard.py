@@ -384,6 +384,32 @@ HTML_PAGE = """<!DOCTYPE html>
         </div>
     
 
+    <!-- 🌐 Радар рынка (Top Bybit Perpetuals) — Классификатор тренда и уровни -->
+    <div class="table-panel">
+        <div class="fsm-header" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>🌐 Радар 1h Donchian Breakout (Top Bybit Linear Perpetuals)</span>
+            <span style="font-size: 11px; font-weight: 400; color: var(--text-muted);">Решения строго на закрытии 1h бара</span>
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Тикер</th>
+                    <th>Цена (Close)</th>
+                    <th>Верхний Donchian (14h)</th>
+                    <th>До Long (%)</th>
+                    <th>Нижний Donchian (14h)</th>
+                    <th>До Short (%)</th>
+                    <th>ADX (14)</th>
+                    <th>EMA Тренд</th>
+                    <th>Статус сетапа</th>
+                </tr>
+            </thead>
+            <tbody id="radarTableBody">
+                <tr><td colspan="9" style="text-align:center; color: var(--text-muted);">Загрузка рыночных уровней Donchian...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
     <div class="table-panel">
         <div class="fsm-header">Активные позиции в рынке</div>
         <table>
@@ -627,6 +653,36 @@ HTML_PAGE = """<!DOCTYPE html>
                 document.getElementById('stage1Count').textContent = fsm.STAGE1 || 0;
                 document.getElementById('stage2Count').textContent = fsm.STAGE2 || 0;
                 document.getElementById('stage3Count').textContent = fsm.STAGE3 || 0;
+
+                // Countdown & Radar
+                const sec = data.sec_to_close || 0;
+                const mm = String(Math.floor(sec / 60)).padStart(2, '0');
+                const ss = String(sec % 60).padStart(2, '0');
+                const cdEl = document.getElementById('barCountdown');
+                if (cdEl) cdEl.innerText = `${mm}:${ss}`;
+
+                const radarData = data.market_radar || [];
+                const radarBody = document.getElementById('radarTableBody');
+                if (radarBody && radarData.length > 0) {
+                    radarBody.innerHTML = radarData.map(item => {
+                        const dLong = Number(item.dist_long || 0);
+                        const dShort = Number(item.dist_short || 0);
+                        const lColor = dLong <= 0 ? 'var(--accent-green)' : (dLong < 1.0 ? 'var(--accent-cyan)' : 'var(--text-muted)');
+                        const sColor = dShort <= 0 ? 'var(--accent-red)' : (dShort < 1.0 ? 'var(--accent-gold)' : 'var(--text-muted)');
+                        const emaColor = item.ema_trend === 'BULLISH' ? 'var(--accent-green)' : 'var(--accent-red)';
+                        return `<tr>
+                            <td style="font-weight:700; color:#38bdf8;">${item.symbol}</td>
+                            <td>$${Number(item.price || 0).toFixed(4)}</td>
+                            <td>$${Number(item.upper || 0).toFixed(4)}</td>
+                            <td style="color:${lColor}; font-weight:700;">${dLong <= 0 ? 'ПРОБОЙ' : `+${dLong.toFixed(2)}%`}</td>
+                            <td>$${Number(item.lower || 0).toFixed(4)}</td>
+                            <td style="color:${sColor}; font-weight:700;">${dShort <= 0 ? 'ПРОБОЙ' : `-${dShort.toFixed(2)}%`}</td>
+                            <td>${Number(item.adx || 0).toFixed(1)}</td>
+                            <td style="color:${emaColor}; font-weight:700;">${item.ema_trend}</td>
+                            <td><span style="font-size:11px; color:#cbd5e1;">${item.status}</span></td>
+                        </tr>`;
+                    }).join('');
+                }
 
                 // Open positions
                 const posBody = document.getElementById('posTableBody');

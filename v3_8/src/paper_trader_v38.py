@@ -297,6 +297,10 @@ class PaperTraderV38:
         for ts, bars in list(self.batches.items()):
             time_since_close = now_ms - (ts + self.bar_interval_ms)
             if time_since_close > 180000:
+                logger.info(
+                    f"[1h BAR SCANNER] Закрыт 1h бар (UTC {datetime.fromtimestamp(ts/1000, tz=timezone.utc).strftime('%H:%M')}). "
+                    f"Обработано {len(bars)} инструментов. BTC: {self.btc_trend_status}. В рынке: {len(self.engine.open_positions)} поз."
+                )
                 del self.batches[ts]
                 continue
 
@@ -312,9 +316,11 @@ class PaperTraderV38:
                     c = float(btc_bar["close"])
                     ef = float(btc_bar.get("ema_fast", 0))
                     es = float(btc_bar.get("ema_slow", 0))
-                    btc_bullish = ef > es and c > ef
-                    btc_bearish = ef < es and c < ef
-                    self.btc_trend_status = "BULLISH" if btc_bullish else ("BEARISH" if btc_bearish else "NEUTRAL")
+                    # Macro support: Longs allowed if EMA50 > EMA200 or Close > EMA50
+                    btc_bullish = (ef > es and c >= min(ef, es) * 0.995) or (c >= ef)
+                    # Shorts allowed if EMA50 < EMA200 or Close < EMA50
+                    btc_bearish = (ef < es and c <= max(ef, es) * 1.005) or (c <= ef)
+                    self.btc_trend_status = "BULLISH" if (ef > es and c > ef) else ("BEARISH" if (ef < es and c < ef) else "NEUTRAL")
 
                 blocked_symbols = set()
                 nc = getattr(self, "news_core", None)
@@ -390,9 +396,44 @@ class PaperTraderV38:
             tot_count = len(self.engine.closed_trades)
             win_rate = (win_count / tot_count * 100.0) if tot_count > 0 else 0.0
 
+            radar = []
+            sec_to_close = int(3600 - (time.time() % 3600))
+            for sym in self.symbols:
+                df = self.candle_buffers.get(sym)
+                c_val = float(current_prices.get(sym, Decimal("0")))
+                if df is not None and len(df) >= 12:
+                    last = df.iloc[-1]
+                    c = c_val if c_val > 0 else float(last["close"])
+                    u = float(last.get("upper", 0.0))
+                    l = float(last.get("lower", 0.0))
+                    ef = float(last.get("ema_fast", 0.0))
+                    es = float(last.get("ema_slow", 0.0))
+                    adx = float(last.get("adx", 20.0))
+                    dist_long = ((u - c) / c * 100.0) if c > 0 and u > 0 else 0.0
+                    dist_short = ((c - l) / c * 100.0) if c > 0 and l > 0 else 0.0
+                    if dist_long <= 0.0:
+                        status_str = "Пробой Long! Ожидание бара"
+                    elif dist_short <= 0.0:
+                        status_str = "Пробой Short! Ожидание бара"
+                    else:
+                        status_str = f"До Long: +{dist_long:.2f}%"
+                    radar.append({
+                        "symbol": sym,
+                        "price": c,
+                        "upper": u,
+                        "dist_long": round(dist_long, 2),
+                        "lower": l,
+                        "dist_short": round(dist_short, 2),
+                        "adx": round(adx, 1),
+                        "ema_trend": "BULLISH" if ef > es else "BEARISH",
+                        "status": status_str,
+                    })
+
             return {
                 "version": VERSION,
                 "version_name": VERSION_NAME,
+                "market_radar": radar,
+                "sec_to_close": sec_to_close,
                 "port": PORT,
                 "timeframe": TIMEFRAME,
                 "mode": "PAPER_STREAM_V38_NEWDRAGON",
@@ -452,6 +493,7 @@ class PaperTraderV38:
             self.stream.start()
 
             last_export = 0.0
+            last_heartbeat = 0.0
             while True:
                 try:
                     try:
@@ -485,6 +527,14 @@ class PaperTraderV38:
                         status = self.get_status()
                         atomic_json(LIVE_STATUS_FILE, status)
                         self.save_persistent_state()
+                    if now - last_heartbeat >= 60.0:
+                        last_heartbeat = now
+                        mins_left = int((3600 - (time.time() % 3600)) // 60)
+                        logger.info(
+                            f"[1h MONITOR] Мониторинг {len(self.symbols)} тикеров Bybit V5 | "
+                            f"BTC: {self.btc_trend_status} | В рынке: {len(self.engine.open_positions)} поз. | "
+                            f"До закрытия 1h бара: ~{mins_left} мин."
+                        )
 
                 except Exception as e:
                     logger.debug(f"Stream error: {e}")
