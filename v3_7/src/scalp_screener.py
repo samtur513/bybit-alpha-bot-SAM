@@ -46,7 +46,7 @@ NON_CRYPTO_OR_TOXIC_SYMBOLS = {
     "AMZNUSDT", "GOOGLUSDT", "METAUSDT", "MSFTUSDT", "PLTRUSDT", "COINUSDT", "INTCUSDT",
     "SKHYUSDT", "AMDUSDT", "BABAUSDT", "BIDUUSDT", "PDDUSDT", "TCEHYUSDT",
     "CLANKERUSDT", "PUMPFUNUSDT", "ACTUSDT", "FARTCOINUSDT",
-    "AKEUSDT", "TRUMPUSDT", "ELSAUSDT", "WLDUSDT"  # Высокотоксичные мем-токены с ложными L2-стаканами
+    "AKEUSDT", "TRUMPUSDT", "ELSAUSDT", "WLDUSDT", "UAIUSDT"  # Высокотоксичные мем-токены с ложными L2-стаканами
 }
 
 
@@ -142,7 +142,8 @@ class UniverseScreener:
                     atr_5m = float(np.mean(tr[-14:]))
                     natr_5m = atr_5m / closes[-1]
 
-                    if sym != self.cfg.leader_symbol and natr_5m < 0.0035:
+                    min_natr = 0.0020 if sym in TIER1_INSTITUTIONAL_SYMBOLS else 0.0035
+                    if sym != self.cfg.leader_symbol and natr_5m < min_natr:
                         continue
 
                     corr_btc, beta_btc = 1.0, 1.0

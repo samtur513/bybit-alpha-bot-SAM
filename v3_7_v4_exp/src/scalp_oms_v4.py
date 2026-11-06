@@ -205,12 +205,14 @@ class ScalpOMSV4(ScalpOMS):
                     )
                     elapsed_scratch_ms = (now_ms - getattr(pos, "scratch_start_ms", now_ms)) if getattr(pos, "scratch_stage", 0) == 1 else 0
 
-                    if critical_flow or elapsed_scratch_ms >= 500:
+                    cur_pnl_pct = (curr_p - pos.entry_price) / pos.entry_price if is_long else (pos.entry_price - curr_p) / pos.entry_price
+
+                    if critical_flow or (elapsed_scratch_ms >= 15000 and cur_pnl_pct <= -0.0010):
                         # Stage 2 / Critical flow: emergency market dump
                         self.scratch_count += 1
                         logger.warning(
                             f"[OFI_FAST_SCRATCH] {sym} {pos.side} экстренный сброс в рынок! "
-                            f"Hold={hold_sec:.1f}s | Z_OFI={z_ofi:.2f}"
+                            f"Hold={hold_sec:.1f}s | Z_OFI={z_ofi:.2f} | PnL={cur_pnl_pct*100:.2f}%"
                         )
                         await self._close_position(pos, curr_p, is_maker=False, reason="OFI_FAST_SCRATCH")
                         continue
@@ -303,6 +305,9 @@ class ScalpOMSV4(ScalpOMS):
 
         self.daily_pnl_usdt += net_usdt
         total_trade_net_usdt = pos.tp1_realized_pnl_usdt + net_usdt
+
+        # Mandatory symbol cooldown to prevent churning (min 180s = 3 min)
+        self.cooldown_until[pos.symbol] = time.time() + 180.0
 
         if total_trade_net_usdt < 0:
             self.consecutive_losses[pos.symbol] = self.consecutive_losses.get(pos.symbol, 0) + 1

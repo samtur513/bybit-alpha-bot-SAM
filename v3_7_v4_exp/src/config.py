@@ -70,20 +70,20 @@ class ScalperConfigV37V4:
     persist_state: bool = False  # Disabled by default in unit tests; enabled in daemon main()
 
     # 4. Alpha Engines Configuration
-    enable_e1_obi: bool = True        # Order Flow Imbalance (Z_OFI & OBI Breakout)
-    enable_e2_sweeps: bool = True     # Liquidity sweep reclaim
-    enable_e3_leadlag: bool = True    # Lead-lag beta-catchup to BTC
+    enable_e1_obi: bool = False       # Order Flow Imbalance (Disabled: raw M1 Z_OFI triggers excessive churn)
+    enable_e2_sweeps: bool = True     # Liquidity sweep reclaim (High edge)
+    enable_e3_leadlag: bool = True    # Lead-lag beta-catchup to BTC (High edge)
 
     # 5. NewDragon v4 UniversalRisk minNotional & Z_OFI Scratch
     enforce_min_notional: bool = True
     min_notional_alts: float = 5.0
     min_notional_btc: float = 100.0
     enable_z_ofi_scratch: bool = True
-    z_ofi_scratch_threshold: float = 1.5  # Trigger scratch when adverse flow exceeds 1.5 sigma
-    z_ofi_critical_threshold: float = 2.5
-    z_ofi_window_sec: float = 15.0       # Evaluate during first 15s of trade
+    z_ofi_scratch_threshold: float = 2.0  # Trigger scratch when adverse flow exceeds 2.0 sigma
+    z_ofi_critical_threshold: float = 3.5 # Critical adverse threshold: 3.5 sigma
+    z_ofi_window_sec: float = 30.0       # Evaluate during first 30s of trade
     min_ker_threshold: float = 0.30      # KER chop filter
-    z_ofi_entry_threshold: float = 2.0   # Trigger entry on >= +2.0 sigma (Buy) or <= -2.0 sigma (Sell)
+    z_ofi_entry_threshold: float = 2.5   # Trigger entry on >= +2.5 sigma (Buy) or <= -2.5 sigma (Sell)
 
     # 6. Bybit Endpoints
     ws_public_url: str = "wss://stream.bybit.com/v5/public/linear"
