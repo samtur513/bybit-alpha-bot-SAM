@@ -1,0 +1,512 @@
+"""
+Web Dashboard for v3.7-v4-exp: NewDragon Scalp Lab (Port 8093).
+Displays:
+- Live Status & Microstructure Telemetry
+- Historical Performance & WFV Audit Card (2.8 Years, Zero-Lookahead PIT Certified)
+- Live Time-Series Equity Curve (Chart.js)
+- Real-Time Order Flow Imbalance (Z_OFI) & Microstructure Radar
+- Active Scalp Positions & Closed Trades History
+- ReusableThreadingTCPServer with SO_REUSEADDR
+"""
+
+import asyncio
+from collections import deque
+from datetime import datetime, timezone
+import http.server
+import json
+import logging
+from pathlib import Path
+import socketserver
+import sys
+import threading
+import time
+
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+BASE_DIR = Path(__file__).resolve().parent
+REPO_ROOT = BASE_DIR.parent
+for p in [str(REPO_ROOT), str(BASE_DIR)]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+import v3_7_v4_exp.src.core_scalper_v4 as core_scalper_v4
+from v3_7_v4_exp.src.config import PORT, VERSION_NAME, LIVE_STATUS_FILE
+from .scratch.universal_dashboard_standard import (
+    build_telemetry_html,
+    build_historical_audit_html,
+    build_chart_html,
+    build_closed_trades_html,
+)
+
+LOG_BUFFER = deque(maxlen=300)
+
+
+class BufferHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            LOG_BUFFER.append(msg)
+        except Exception:
+            pass
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+root_logger = logging.getLogger()
+buf_handler = BufferHandler()
+buf_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+root_logger.addHandler(buf_handler)
+
+logger = logging.getLogger("WebDashboardV37V4Exp")
+
+TELEMETRY_SNIPPET = build_telemetry_html(
+    version_title="V3.7-V4 NEWDRAGON SCALP LAB",
+    default_strategy="M1/15m Scalper OMS + UniversalRisk minNotional Guard + 2-Stage Z_OFI Fast Scratch",
+    default_tf="M1/15m",
+)
+AUDIT_SNIPPET = build_historical_audit_html("v37_v4_exp")
+CHART_SNIPPET = build_chart_html()
+CLOSED_TRADES_SNIPPET = build_closed_trades_html()
+
+HTML_PAGE = f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bybit Multi-Alpha v3.7-v4 NewDragon Scalp Lab | Port {PORT}</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {{
+            --bg-dark: #080c14;
+            --bg-card: #0f172a;
+            --bg-card-hover: #1e293b;
+            --accent-pink: #ec4899;
+            --accent-cyan: #00f2fe;
+            --accent-green: #10b981;
+            --accent-red: #f43f5e;
+            --accent-gold: #f59e0b;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --border: #1e293b;
+            --font-mono: 'JetBrains Mono', monospace;
+            --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        }}
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{
+            background: var(--bg-dark);
+            color: var(--text-main);
+            font-family: var(--font-sans);
+            padding: 24px;
+            min-height: 100vh;
+        }}
+        .container {{ max-width: 1440px; margin: 0 auto; }}
+        header {{
+            display: flex; justify-content: space-between; align-items: center;
+            padding-bottom: 20px; border-bottom: 1px solid var(--border); margin-bottom: 24px;
+        }}
+        .logo-wrap {{ display: flex; align-items: center; gap: 14px; }}
+        .badge-dragon {{
+            background: linear-gradient(135deg, #ec4899, #8b5cf6);
+            color: #fff; padding: 6px 12px; border-radius: 8px;
+            font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px;
+        }}
+        .title {{ font-size: 22px; font-weight: 800; letter-spacing: -0.5px; }}
+        .subtitle {{ font-size: 12px; color: var(--text-muted); font-family: var(--font-mono); margin-top: 4px; }}
+        .status-pill {{
+            display: flex; align-items: center; gap: 8px;
+            background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3);
+            padding: 6px 14px; border-radius: 999px; font-size: 12px; font-weight: 700; color: var(--accent-green);
+        }}
+        .status-dot {{ width: 8px; height: 8px; background: var(--accent-green); border-radius: 50%; box-shadow: 0 0 10px var(--accent-green); }}
+
+        /* Top 5 Stat Boxes */
+        .stat-grid {{
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px; margin-bottom: 24px;
+        }}
+        .stat-card {{
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: 12px; padding: 18px; text-align: center;
+        }}
+        .stat-val {{ font-size: 24px; font-weight: 800; font-family: var(--font-mono); }}
+        .stat-lbl {{ font-size: 11px; text-transform: uppercase; color: var(--text-muted); margin-top: 4px; letter-spacing: 0.5px; }}
+
+        /* Table */
+        .table-wrap {{
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: 12px; padding: 18px; margin-bottom: 24px; overflow-x: auto;
+        }}
+        .table-head {{
+            display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;
+        }}
+        .table-title {{ font-size: 13px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px; }}
+        table {{ width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 12px; }}
+        th {{ padding: 10px 8px; text-align: left; border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 11px; text-transform: uppercase; }}
+        td {{ padding: 12px 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.04); }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo-wrap">
+                <span class="badge-dragon">NewDragon Scalp OMS</span>
+                <div>
+                    <h1 class="title">Bybit Multi-Alpha v3.7-v4 NewDragon Scalp Lab</h1>
+                    <div class="subtitle">M1/15m Microstructure | minNotional Guard | 2-Stage Z_OFI Fast Scratch | Port {PORT}</div>
+                </div>
+            </div>
+            <div class="status-pill">
+                <span class="status-dot"></span>
+                <span id="engine-status">ONLINE (PAPER)</span>
+            </div>
+        </header>
+
+        <!-- Top 5 Stat Boxes -->
+        <div class="stat-grid">
+            <div class="stat-card">
+                <div class="stat-val" id="val-equity" style="color: var(--accent-cyan);">$300.00</div>
+                <div class="stat-lbl">Капитал (Equity)</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-val" id="val-pnl" style="color: var(--accent-green);">+$0.00</div>
+                <div class="stat-lbl">Чистый PnL</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-val" id="val-scratches" style="color: var(--accent-pink);">0</div>
+                <div class="stat-lbl">Z_OFI Fast Scratches</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-val" id="val-positions" style="color: #f8fafc;">0 / 0</div>
+                <div class="stat-lbl">В рынке / Очередь</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-val" id="val-wr" style="color: var(--accent-pink);">0.0% (0)</div>
+                <div class="stat-lbl">Винрейт / Сделок</div>
+            </div>
+        </div>
+
+        {TELEMETRY_SNIPPET}
+
+        {AUDIT_SNIPPET}
+
+        {CHART_SNIPPET}
+
+        <!-- Microstructure & Z_OFI Radar Table -->
+        <div class="table-wrap">
+            <div class="table-head">
+                <div class="table-title">⚡ Радар микроструктуры и Z_OFI Order Flow</div>
+                <span id="monitored-count-badge" style="font-family: var(--font-mono); font-size: 11px; color: var(--accent-pink); font-weight: 700;">12 тикеров</span>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Тикер</th>
+                        <th>Mid Price</th>
+                        <th>Спред (Ticks)</th>
+                        <th>KER (Эффективность)</th>
+                        <th>Z_OFI Flow</th>
+                        <th>Статус потока</th>
+                    </tr>
+                </thead>
+                <tbody id="micro-radar-body">
+                    <tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 18px;">Подключение к потокам L2 Orderbook...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Active Scalp Positions Table -->
+        <div class="table-wrap">
+            <div class="table-head">
+                <div class="table-title">🎯 Активные позиции скальпинга (OMS)</div>
+                <span id="open-count-badge" style="font-family: var(--font-mono); font-size: 11px; color: var(--accent-pink); font-weight: 700;">0 / 2 MAX</span>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Тикер</th>
+                        <th>Движок</th>
+                        <th>Сторона</th>
+                        <th>Объем</th>
+                        <th>Вход</th>
+                        <th>Стоп-Лосс</th>
+                        <th>TP1 (50% Maker)</th>
+                        <th>TP2 (Runner)</th>
+                        <th>Hold Time</th>
+                        <th>PnL ($)</th>
+                    </tr>
+                </thead>
+                <tbody id="open-positions-body">
+                    <tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 20px;">Нет открытых позиций скальпинга.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        {CLOSED_TRADES_SNIPPET}
+
+    </div>
+
+    <script>
+        let equityChart = null;
+
+        function initEquityChart() {{
+            const canvas = document.getElementById('equityChart');
+            if (!canvas || typeof Chart === 'undefined') return;
+            const ctx = canvas.getContext('2d');
+            equityChart = new Chart(ctx, {{
+                type: 'line',
+                data: {{
+                    labels: ['Старт'],
+                    datasets: [{{
+                        label: 'Эквити ($)',
+                        data: [300.0],
+                        borderColor: '#ec4899',
+                        backgroundColor: 'rgba(236, 72, 153, 0.08)',
+                        fill: true,
+                        tension: 0.25,
+                        borderWidth: 2,
+                        pointRadius: 4
+                    }}]
+                }},
+                options: {{
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {{ legend: {{ display: false }} }},
+                    scales: {{
+                        x: {{ grid: {{ color: 'rgba(255, 255, 255, 0.04)' }}, ticks: {{ color: '#64748b' }} }},
+                        y: {{ grid: {{ color: 'rgba(255, 255, 255, 0.04)' }}, ticks: {{ color: '#94a3b8', callback: (v) => '$' + Number(v).toFixed(2) }} }}
+                    }}
+                }}
+            }});
+        }}
+
+        function updateChart(eq, trades) {{
+            if (!equityChart) return;
+            const pts = [300.0];
+            const lbls = ['Старт'];
+            let run = 300.0;
+            if (trades && trades.length > 0) {{
+                trades.forEach((t, i) => {{
+                    run += (t.net_pnl || t.pnl_usdt || 0.0);
+                    pts.push(Number(run.toFixed(2)));
+                    lbls.push('#' + (i + 1) + ' ' + (t.symbol || ''));
+                }});
+            }}
+            if (pts.length === 1 || Math.abs(pts[pts.length - 1] - eq) > 0.01) {{
+                pts.push(Number(eq.toFixed(2)));
+                lbls.push('Текущее');
+            }}
+            equityChart.data.labels = lbls;
+            equityChart.data.datasets[0].data = pts;
+            equityChart.data.datasets[0].borderColor = eq >= 300.0 ? '#ec4899' : '#ef4444';
+            equityChart.update();
+        }}
+
+        async function pollStatus() {{
+            try {{
+                const res = await fetch('/api/status');
+                if (!res.ok) return;
+                const d = await res.json();
+
+                const eq = d.equity || 300.0;
+                document.getElementById('val-equity').innerText = '$' + eq.toFixed(2);
+                const pnl = d.realized_pnl || 0.0;
+                const pnlEl = document.getElementById('val-pnl');
+                pnlEl.innerText = (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toFixed(2);
+                pnlEl.style.color = pnl >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+
+                document.getElementById('val-scratches').innerText = d.scratch_count || 0;
+                const activeCnt = d.active_positions_count || Object.keys(d.active_positions || {{}}).length;
+                const pendCnt = d.pending_orders_count || Object.keys(d.pending_orders || {{}}).length;
+                document.getElementById('val-positions').innerText = activeCnt + ' / ' + pendCnt;
+                document.getElementById('val-wr').innerText = (d.win_rate || 0.0) + '% (' + (d.trades_count || 0) + ')';
+                document.getElementById('open-count-badge').innerText = activeCnt + ' / 2 MAX';
+
+                const chartEq = document.getElementById('chart-curr-equity');
+                if (chartEq) chartEq.innerText = '$' + eq.toFixed(2);
+
+                // Radar
+                const states = d.microstructure_states || {{}};
+                const radarBody = document.getElementById('micro-radar-body');
+                const sKeys = Object.keys(states);
+                if (sKeys.length > 0) {{
+                    let rHtml = '';
+                    for (const s of sKeys) {{
+                        const st = states[s];
+                        const z = st.z_ofi || 0.0;
+                        const ker = st.ker || 0.50;
+                        let flowDesc = 'Нейтральный';
+                        let flowCol = '#94a3b8';
+                        if (z >= 1.5) {{ flowDesc = 'Институциональный BUY'; flowCol = '#10b981'; }}
+                        else if (z <= -1.5) {{ flowDesc = 'Институциональный SELL'; flowCol = '#ef4444'; }}
+
+                        rHtml += `<tr>
+                            <td style="font-weight:700; color:#38bdf8;">${{s}}</td>
+                            <td>$${{st.mid_price.toFixed(4)}}</td>
+                            <td>${{st.spread_ticks.toFixed(1)}}</td>
+                            <td><span style="color:${{ker >= 0.30 ? '#10b981' : '#f59e0b'}};">${{ker.toFixed(2)}}</span></td>
+                            <td style="font-weight:700; color:${{flowCol}};">${{z >= 0 ? '+' : ''}}${{z.toFixed(2)}}σ</td>
+                            <td style="color:${{flowCol}};">${{flowDesc}}</td>
+                        </tr>`;
+                    }}
+                    radarBody.innerHTML = rHtml;
+                }}
+
+                // Active positions
+                const openPos = d.active_positions || {{}};
+                const posKeys = Object.keys(openPos);
+                const openBody = document.getElementById('open-positions-body');
+                if (posKeys.length === 0) {{
+                    openBody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 20px;">Нет открытых позиций скальпинга.</td></tr>';
+                }} else {{
+                    let pRows = '';
+                    for (const s of posKeys) {{
+                        const p = openPos[s];
+                        const sideCol = p.side === 'Buy' ? '#10b981' : '#ef4444';
+                        pRows += `<tr>
+                            <td style="font-weight:700; color:#38bdf8;">${{s}}</td>
+                            <td><span style="font-size:11px; color:#cbd5e1;">${{p.engine_id || 'OMS'}}</span></td>
+                            <td style="font-weight:700; color:${{sideCol}};">${{p.side}}</td>
+                            <td>${{p.qty}}</td>
+                            <td>$${{p.entry_price.toFixed(4)}}</td>
+                            <td style="color:#f59e0b;">$${{p.sl_price.toFixed(4)}}</td>
+                            <td style="color:#00f2fe;">$${{p.tp1_price.toFixed(4)}}</td>
+                            <td style="color:#ec4899;">$${{p.tp2_price.toFixed(4)}}</td>
+                            <td>${{(p.hold_sec || 0).toFixed(1)}}s</td>
+                            <td style="font-weight:700; color:${{p.unrealized_pnl >= 0 ? '#10b981' : '#ef4444'}};">${{p.unrealized_pnl >= 0 ? '+' : ''}}${{p.unrealized_pnl.toFixed(2)}}</td>
+                        </tr>`;
+                    }}
+                    openBody.innerHTML = pRows;
+                }}
+
+                // Closed trades
+                const closed = d.closed_trades || [];
+                const closedCountEl = document.getElementById('closed-trades-count');
+                if (closedCountEl) closedCountEl.innerText = closed.length + ' сделок';
+                const closedBody = document.getElementById('closed-table-body');
+                if (closedBody) {{
+                    if (closed.length === 0) {{
+                        closedBody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 20px;">Нет закрытых сделок. Накопление торговой истории...</td></tr>';
+                    }} else {{
+                        let cHtml = '';
+                        for (const t of closed.slice(-15).reverse()) {{
+                            const col = (t.net_pnl || t.pnl_usdt) >= 0 ? '#10b981' : '#ef4444';
+                            const sideCol = (t.side === 'LONG' || t.side === 'Buy') ? '#10b981' : '#ef4444';
+                            const dStr = t.closed_at ? new Date(t.closed_at).toLocaleTimeString() : '--:--:--';
+                            const pnlVal = t.net_pnl !== undefined ? t.net_pnl : (t.pnl_usdt || 0.0);
+                            cHtml += `<tr>
+                                <td>${{dStr}} UTC</td>
+                                <td style="font-weight: 700; color: #38bdf8;">${{t.symbol}}</td>
+                                <td style="color: ${{sideCol}}; font-weight: 700;">${{t.side}}</td>
+                                <td>${{t.entry_price ? t.entry_price.toFixed(4) : '--'}}</td>
+                                <td>${{t.exit_price ? t.exit_price.toFixed(4) : '--'}}</td>
+                                <td style="color: ${{col}}; font-weight: 700;">${{pnlVal >= 0 ? '+' : ''}}${{pnlVal.toFixed(2)}}$</td>
+                                <td><span style="font-size: 11px; color: #cbd5e1;">${{t.exit_reason || t.reason || '--'}}</span></td>
+                            </tr>`;
+                        }}
+                        closedBody.innerHTML = cHtml;
+                    }}
+                }}
+
+                updateChart(eq, closed);
+            }} catch (err) {{
+                console.error('Error polling status:', err);
+            }}
+        }}
+
+        window.addEventListener('DOMContentLoaded', () => {{
+            initEquityChart();
+            pollStatus();
+            setInterval(pollStatus, 2000);
+        }});
+    </script>
+</body>
+</html>
+"""
+
+
+class DashboardHandler(http.server.BaseHTTPRequestHandler):
+    def _send_payload(self, payload: bytes, content_type: str = "text/html; charset=utf-8", status: int = 200):
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def do_GET(self):
+        if self.path in ("/", "/index.html") or self.path.startswith("/?"):
+            self._send_payload(HTML_PAGE.encode("utf-8"), "text/html; charset=utf-8")
+        elif self.path == "/favicon.ico":
+            self._send_payload(b"", "image/x-icon", 204)
+        elif self.path in ("/api/status", "/api/state"):
+            if core_scalper_v4.GLOBAL_OMS is not None:
+                st = core_scalper_v4.GLOBAL_OMS.get_status()
+                # Attach microstructure radar info
+                states_summary = {}
+                for sym, s_obj in core_scalper_v4.GLOBAL_OMS.states.items():
+                    states_summary[sym] = {
+                        "mid_price": s_obj.mid_price,
+                        "spread_ticks": s_obj.spread_ticks,
+                        "z_ofi": getattr(s_obj, "get_z_ofi", lambda: 0.0)(),
+                        "ker": getattr(s_obj, "get_ker", lambda: 0.50)(),
+                    }
+                st["microstructure_states"] = states_summary
+            elif LIVE_STATUS_FILE.exists():
+                try:
+                    with open(LIVE_STATUS_FILE, "r", encoding="utf-8") as f:
+                        st = json.load(f)
+                except Exception:
+                    st = {"status": "INITIALIZING", "equity": 300.0, "port": PORT}
+            else:
+                st = {"status": "INITIALIZING", "equity": 300.0, "port": PORT}
+            payload = json.dumps(st, default=str).encode("utf-8")
+            self._send_payload(payload, "application/json; charset=utf-8")
+        elif self.path == "/api/logs":
+            payload = json.dumps(list(LOG_BUFFER)).encode("utf-8")
+            self._send_payload(payload, "application/json; charset=utf-8")
+        else:
+            self._send_payload(b"Not Found", "text/plain", 404)
+
+    def log_message(self, format, *args):
+        pass
+
+
+class ReusableThreadingTCPServer(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+
+def run_scalper_async():
+    asyncio.run(core_scalper_v4.main())
+
+
+def run_server():
+    t = threading.Thread(target=run_scalper_async, daemon=True)
+    t.start()
+    logger.info("Launched v3.7-v4 Bybit Scalper async loop...")
+
+    socketserver.TCPServer.allow_reuse_address = True
+    server = ReusableThreadingTCPServer(("0.0.0.0", PORT), DashboardHandler)
+    logger.info(f"{VERSION_NAME} live on http://127.0.0.1:{PORT}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        logger.info("Stopping dashboard...")
+    finally:
+        server.server_close()
+
+
+if __name__ == "__main__":
+    run_server()

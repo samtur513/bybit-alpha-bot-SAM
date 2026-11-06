@@ -17,15 +17,22 @@ class TestMetaDashboard(unittest.TestCase):
         self.agg = MetaAggregator()
 
     def test_engines_configuration(self):
-        self.assertEqual(len(ENGINES), 13)
+        self.assertEqual(len(ENGINES), 15)
         ports = [e["port"] for e in ENGINES]
         self.assertIn(8080, ports)
+        self.assertIn(8082, ports)
+        self.assertIn(8093, ports)
         self.assertIn(8094, ports)
         self.assertEqual(META_PORT, 8085)
         # Check v3.13 configuration on port 8080
         e8080 = next(e for e in ENGINES if e["port"] == 8080)
         self.assertEqual(e8080["id"], "v313")
         self.assertEqual(e8080["name"], "v3.13 Sector Arb")
+        # Check experimental engines on 8082 and 8093
+        e8082 = next(e for e in ENGINES if e["port"] == 8082)
+        self.assertEqual(e8082["id"], "v3_v4_exp")
+        e8093 = next(e for e in ENGINES if e["port"] == 8093)
+        self.assertEqual(e8093["id"], "v37_v4_exp")
         # Check v3.14 configuration on port 8094
         e8094 = next(e for e in ENGINES if e["port"] == 8094)
         self.assertEqual(e8094["id"], "v314_dispersion")

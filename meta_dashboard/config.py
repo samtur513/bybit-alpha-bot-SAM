@@ -152,4 +152,24 @@ ENGINES = [
         "strategy": "Extreme Funding Rate Squeeze (|FR| >= 0.04%) + Clearing Dump Defense",
         "color": "#f59e0b",  # amber
     },
+    {
+        "id": "v3_v4_exp",
+        "name": "v3-v4 NewDragon Trend",
+        "tag": "1h/4h Trend + NewDragon v4 True 1R + FSM Exit",
+        "version": "4.0.0-exp1",
+        "timeframe": "1h/4h",
+        "port": 8082,
+        "strategy": "True 1R Sizer + 4-Stage Adaptive Exit FSM (Maker TP 40-70% + MFE Breakeven) + News Shield",
+        "color": "#a855f7",  # purple
+    },
+    {
+        "id": "v37_v4_exp",
+        "name": "v3.7-v4 NewDragon Scalp",
+        "tag": "M1/15m Scalp OMS + minNotional Guard + Z_OFI Scratch",
+        "version": "4.0.0-exp2",
+        "timeframe": "M1/15m",
+        "port": 8093,
+        "strategy": "UniversalRisk minNotional Guard + 2-Stage Z_OFI Fast Scratch + Dynamic Breakeven Ratchet",
+        "color": "#ec4899",  # pink / magenta
+    },
 ]

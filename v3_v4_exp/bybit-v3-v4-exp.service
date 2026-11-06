@@ -1,0 +1,21 @@
+[Unit]
+Description=Bybit Multi-Alpha v3-v4 NewDragon Trend Lab (Port 8082)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/bybit-bot
+EnvironmentFile=-/opt/bybit-bot/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/bybit-bot
+Environment=PORT_V3_V4_EXP=8082
+Environment=PAPER_TRADING=true
+Environment=USE_MNT_DISCOUNT=true
+Environment=EQUITY_USDT=300.0
+ExecStart=/opt/bybit-bot/venv/bin/python /opt/bybit-bot/v3_v4_exp/web_dashboard.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
