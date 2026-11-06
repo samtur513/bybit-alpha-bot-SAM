@@ -97,9 +97,9 @@ class ScalperConfigV39:
     e1_max_spread_ticks: float = 3.0
     e1_max_hold_sec: float = 900.0
 
-    e2_min_depth_pct: float = 0.0012
+    e2_min_depth_pct: float = 0.0008
     e2_max_depth_atr_mult: float = 0.85
-    e2_k_abs_threshold: float = 1.5
+    e2_k_abs_threshold: float = 1.2
     e2_max_sweep_time_sec: float = 90.0
     e2_max_risk_pct: float = 0.0060
     e2_min_risk_pct: float = 0.0008
@@ -108,8 +108,8 @@ class ScalperConfigV39:
     e3_btc_impulse_ret: float = 0.0006
     e3_btc_tfi_threshold: float = 0.35
     e3_alt_reaction_cap: float = 0.40
-    e3_min_lag_spread: float = 0.0015
-    e3_min_beta: float = 0.80
+    e3_min_lag_spread: float = 0.0014
+    e3_min_beta: float = 0.75
     e3_min_corr: float = 0.55
     e3_max_spread_ticks: float = 2.5
     e3_max_hold_sec: float = 600.0

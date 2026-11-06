@@ -316,7 +316,7 @@ HTML_PAGE = """<!DOCTYPE html>
                 </div>
             </div>
             <div style="font-size: 11px; color: var(--text-muted, #94a3b8); font-family: 'JetBrains Mono', monospace; line-height: 1.5; border-top: 1px solid var(--border, #1e293b); padding-top: 8px;">
-                ⚙️ <strong style="color: #f8fafc;">Спецификация стратегии:</strong> Секундный Lead-Lag арбитраж запаздывания бета-альткоинов к импульсам BTC (|дельта| >= 0.35%), исполнение исключительно через Post-Only Maker лимиты (0.0324% комиссия).
+                ⚙️ <strong style="color: #f8fafc;">Спецификация стратегии:</strong> Секундный Lead-Lag арбитраж E3 (импульс BTC >= 0.06%) + E2 Liquidity Sweeps + NewDragon minNotional Guard ($5 alts / $100 BTC) + Post-Only Maker TP1 (+0.50% / +1.20%).
             </div>
         </div>
     
