@@ -61,6 +61,10 @@ class UniversalRiskBridge:
         max_leverage: float = 10.0,
         atr_1h: float = 0.0,
         composite_score: float = 1.0,
+        current_portfolio_heat: float = 0.0,
+        max_portfolio_heat: float = 0.045,
+        active_correlated_positions: int = 0,
+        max_correlated_positions: int = 2,
     ) -> Tuple[float, Optional[str]]:
         """
         Calculates contract order quantity for Torg_Bot_3.
@@ -82,6 +86,10 @@ class UniversalRiskBridge:
             regime=market_regime,
             asset_volatility=0.025,
             inv_vol_sum=40.0,
+            current_portfolio_heat=current_portfolio_heat,
+            max_portfolio_heat=max_portfolio_heat,
+            active_correlated_positions=active_correlated_positions,
+            max_correlated_positions=max_correlated_positions,
         )
         sig = SignalOutput(
             symbol=symbol,
@@ -98,6 +106,10 @@ class UniversalRiskBridge:
                 reason = "Drawdown >= 20% (Emergency Halt)"
             elif market_regime.lower() == "shock":
                 reason = "Market Regime is Shock (Entries Prohibited)"
+            elif active_correlated_positions >= max_correlated_positions:
+                reason = f"Correlation cluster cap reached (max {max_correlated_positions} correlated positions)"
+            elif current_portfolio_heat >= max_portfolio_heat:
+                reason = f"Portfolio heat limit ({max_portfolio_heat*100:.1f}%) reached"
             else:
                 reason = f"Order notional below minNotional (${min_notional}) or risk budget exhausted"
             return 0.0, reason
@@ -150,6 +162,9 @@ class AdaptiveExitBridge:
         atr_1h: float,
         z_ofi: float = 0.0,
         shock_prob: float = 0.0,
+        trend_score: float = 0.0,
+        is_strong_trend: bool = False,
+        scratch_z_ofi_threshold: float = -1.5,
     ) -> ExitAction:
         """Evaluates bar against registered position."""
         tracker = self._active_trackers.get(symbol)
@@ -168,6 +183,9 @@ class AdaptiveExitBridge:
             atr_1h=atr_1h,
             z_ofi=z_ofi,
             shock_prob=shock_prob,
+            trend_score=trend_score,
+            is_strong_trend=is_strong_trend,
+            scratch_z_ofi_threshold=scratch_z_ofi_threshold,
         )
 
         if action.action_type == "FULL_CLOSE_SCRATCH":

@@ -17,7 +17,7 @@ class TestMetaDashboard(unittest.TestCase):
         self.agg = MetaAggregator()
 
     def test_engines_configuration(self):
-        self.assertEqual(len(ENGINES), 16)
+        self.assertEqual(len(ENGINES), 13)
         ports = [e["port"] for e in ENGINES]
         self.assertIn(8080, ports)
         self.assertIn(8094, ports)
@@ -32,8 +32,8 @@ class TestMetaDashboard(unittest.TestCase):
         self.assertEqual(e8094["name"], "v3.14 Basket Dispersion")
 
     def test_position_normalization_dict_and_list(self):
-        # Mock engine response for v3.1.1 (dict open_positions)
-        mock_data_v311 = {
+        # Mock engine response for v3.4 (dict open_positions)
+        mock_data_v34 = {
             "equity": 305.50,
             "initial_capital": 300.0,
             "open_positions": {
@@ -65,15 +65,15 @@ class TestMetaDashboard(unittest.TestCase):
             ],
         }
 
-        engine_v311 = next(e for e in ENGINES if e["id"] == "v311")
+        engine_v34 = next(e for e in ENGINES if e["id"] == "v34")
         engine_v32 = next(e for e in ENGINES if e["id"] == "v32")
 
         with patch("urllib.request.urlopen") as mock_urlopen:
             # 1. Test dict format
             mock_resp = MagicMock()
-            mock_resp.read.return_value = json_bytes(mock_data_v311)
+            mock_resp.read.return_value = json_bytes(mock_data_v34)
             mock_urlopen.return_value.__enter__.return_value = mock_resp
-            st1 = self.agg._fetch_engine_status(engine_v311)
+            st1 = self.agg._fetch_engine_status(engine_v34)
             self.assertEqual(len(st1["open_positions"]), 1)
             self.assertEqual(st1["open_positions"][0]["symbol"], "SOLUSDT")
             self.assertEqual(st1["open_positions"][0]["direction"], "SHORT")
@@ -102,13 +102,13 @@ class TestMetaDashboard(unittest.TestCase):
             e["id"]: {"capital": 300.0, "net_pnl": 0.0, "online": True, "open_positions": []}
             for e in ENGINES
         }
-        self.agg.latest_states["v21"]["capital"] = 303.0
-        self.agg.latest_states["v21"]["net_pnl"] = 3.0
-        self.agg.latest_states["v21"]["open_positions"] = [{"unrealized_pnl": 2.0}]
+        self.agg.latest_states["v32"]["capital"] = 303.0
+        self.agg.latest_states["v32"]["net_pnl"] = 3.0
+        self.agg.latest_states["v32"]["open_positions"] = [{"unrealized_pnl": 2.0}]
 
-        self.agg.latest_states["v311"]["capital"] = 305.0
-        self.agg.latest_states["v311"]["net_pnl"] = 5.0
-        self.agg.latest_states["v311"]["open_positions"] = [{"unrealized_pnl": 4.0}]
+        self.agg.latest_states["v34"]["capital"] = 305.0
+        self.agg.latest_states["v34"]["net_pnl"] = 5.0
+        self.agg.latest_states["v34"]["open_positions"] = [{"unrealized_pnl": 4.0}]
 
         snap = self.agg.get_snapshot()
 

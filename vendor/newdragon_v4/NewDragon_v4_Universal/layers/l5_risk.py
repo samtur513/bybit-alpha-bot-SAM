@@ -130,12 +130,26 @@ class UniversalPositionSizer:
         if m_regime <= 0.0:
             return 0.0
 
+        # Correlation Cluster Guard: limit high-correlation positions
+        if portfolio.active_correlated_positions >= portfolio.max_correlated_positions:
+            return 0.0
+
+        # Portfolio Heat Guard: cap total open risk across all positions
+        if portfolio.current_portfolio_heat >= portfolio.max_portfolio_heat:
+            return 0.0
+
         signal_scale = abs(signal.composite_score)
         if signal_scale <= 0.0:
             return 0.0
 
         r_pct = self.calculate_adaptive_risk_pct(capital)
         r_budget = capital * r_pct * m_regime * m_dd * signal_scale
+        if r_budget <= 0.0:
+            return 0.0
+
+        # Bound r_budget by remaining portfolio heat capacity
+        heat_capacity_usd = max(0.0, (portfolio.max_portfolio_heat - portfolio.current_portfolio_heat) * capital)
+        r_budget = min(r_budget, heat_capacity_usd)
         if r_budget <= 0.0:
             return 0.0
 

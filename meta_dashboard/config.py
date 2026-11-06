@@ -1,11 +1,19 @@
 """
 Configuration for Bybit Multi-Alpha Meta-Dashboard (Port 8085).
-Monitors and aggregates all 5 active engines:
-- Port 8080: v2.0 (1h Baseline Breakout, 18 coins)
-- Port 8081: v2.1 (4h Breakout + News Core v1.1, 18 coins)
-- Port 8082: v3.1.1 (1h Breakout + Dynamic Universe + News Core v1.2)
-- Port 8083: v3.2 (Dual-Regime Hybrid: Trend + Calibrated IRAS Range Maker)
-- Port 8084: v3.1.4 (4h Breakout Champion + Dynamic Universe + News Core v1.2)
+Monitors and aggregates all 13 active production engines (v3.0 Production Fleet):
+1. Port 8080: v3.13 Sector Arb (Beta-Neutral)
+2. Port 8083: v3.2 Dual-Regime (Donchian Trend + Calibrated IRAS Maker)
+3. Port 8084: v3.1.4 Champion 4h Breakout
+4. Port 8086: v3.3 Turbo Risk (Adaptive Streak Gearing 1.5%-3.2%)
+5. Port 8087: v3.4 ZF-8 Quant (8-Speed Transmission G1-G8)
+6. Port 8088: v3.5 Alpha Pairs (Market-Neutral CAR-CSMOM Top 2 vs Bottom 2)
+7. Port 8089: v3.6 Omega ZF-8 Dual-Regime
+8. Port 8090: v3.7 Master Sweeps (Liquidity Sweep + Anti-Compression + OBI Guard)
+9. Port 8091: v3.8 NewDragon Trend (True 1R Sizer + 4-Stage Exit)
+10. Port 8092: v3.9 NewDragon Scalp (Pure Lead-Lag Beta-Catchup to BTC)
+11. Port 8094: v3.14 Basket Dispersion (BTC+ETH Benchmark Dispersion)
+12. Port 8096: v3.12 Cross-Basis (Spot-Perp Basis Dislocation)
+13. Port 8097: v3.11 Funding Squeeze (|FR| >= 0.04% Squeeze)
 """
 
 import os
@@ -23,26 +31,6 @@ ENGINES = [
         "port": 8080,
         "strategy": "Beta-Neutral Sector Pairs + 2-Stage Exit + News v1.2",
         "color": "#06b6d4",  # cyan
-    },
-    {
-        "id": "v21",
-        "name": "v2.1 Static 4h",
-        "tag": "4h Breakout + News v1.2",
-        "version": "2.1",
-        "timeframe": "4h",
-        "port": 8081,
-        "strategy": "Donchian 30 bars (Static 18 Coins) + News Core v1.2",
-        "color": "#38bdf8",  # sky blue
-    },
-    {
-        "id": "v311",
-        "name": "v3.1.1 Trend 1h",
-        "tag": "1h Breakout + Dynamic Screener + News v1.2",
-        "version": "3.1.1",
-        "timeframe": "1h",
-        "port": 8082,
-        "strategy": "Dynamic Universe Screener + 1h Donchian + News Core v1.2",
-        "color": "#a855f7",  # purple
     },
     {
         "id": "v32",
@@ -106,12 +94,12 @@ ENGINES = [
     },
     {
         "id": "v37",
-        "name": "v3.7 HFT Scalper",
-        "tag": "15m/M1 L2 Microstructure + Sweep + Lead-Lag",
-        "version": "3.7",
+        "name": "v3.7 Master Sweeps",
+        "tag": "15m/M1 Sweeps + Anti-Compression + OBI Guard",
+        "version": "3.7.1",
         "timeframe": "15m/M1",
         "port": 8090,
-        "strategy": "Orderbook L2 (50 levels) + Sweep Absorption + Lead-Lag Beta + News Guard",
+        "strategy": "Liquidity Sweep Reversion (Anti-Compression Gate) + OBI Gate (KER >= 0.30)",
         "color": "#ec4899",  # hot pink
     },
     {
@@ -135,24 +123,14 @@ ENGINES = [
         "color": "#8b5cf6",  # violet
     },
     {
-        "id": "v310",
-        "name": "v3.10 Sweep Pod",
-        "tag": "15m Sweep Reversion + 4-Part TCA",
-        "version": "3.10",
-        "timeframe": "15m",
-        "port": 8098,
-        "strategy": "Liquidity Sweep Reversion + Anti-Compression + Post-Only Maker Reclaim",
-        "color": "#06b6d4",  # cyan
-    },
-    {
-        "id": "v311_funding",
-        "name": "v3.11 Funding Squeeze",
-        "tag": "Pre-Funding Squeeze + T-1s Eject",
-        "version": "3.11",
-        "timeframe": "15m",
-        "port": 8097,
-        "strategy": "Extreme Funding Rate Squeeze (|FR| >= 0.04%) + Clearing Dump Defense",
-        "color": "#f59e0b",  # amber
+        "id": "v314_dispersion",
+        "name": "v3.14 Basket Dispersion",
+        "tag": "Synthetic Basket + Funding Carry (5-30m)",
+        "version": "3.14",
+        "timeframe": "5-30m",
+        "port": 8094,
+        "strategy": "BTC+ETH Benchmark Dispersion + Funding Carry + 2-Stage Exit",
+        "color": "#10b981",  # emerald green
     },
     {
         "id": "v312",
@@ -165,13 +143,13 @@ ENGINES = [
         "color": "#a855f7",  # purple
     },
     {
-        "id": "v314_dispersion",
-        "name": "v3.14 Basket Dispersion",
-        "tag": "Synthetic Basket + Funding Carry (5-30m)",
-        "version": "3.14",
-        "timeframe": "5-30m",
-        "port": 8094,
-        "strategy": "BTC+ETH Benchmark Dispersion + Funding Carry + 2-Stage Exit",
-        "color": "#10b981",  # emerald green
+        "id": "v311_funding",
+        "name": "v3.11 Funding Squeeze",
+        "tag": "Pre-Funding Squeeze + T-1s Eject",
+        "version": "3.11",
+        "timeframe": "15m",
+        "port": 8097,
+        "strategy": "Extreme Funding Rate Squeeze (|FR| >= 0.04%) + Clearing Dump Defense",
+        "color": "#f59e0b",  # amber
     },
 ]

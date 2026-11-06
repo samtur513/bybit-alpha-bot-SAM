@@ -44,6 +44,10 @@ class PortfolioState:
     cvar_95_pct: float = 0.05
     expected_mu: float = 0.015
     expected_var: float = 0.025
+    current_portfolio_heat: float = 0.0       # Sum of open position risk / capital
+    max_portfolio_heat: float = 0.045         # Max 4.5% total open risk
+    active_correlated_positions: int = 0      # Open positions in same direction with BTC corr > 0.7
+    max_correlated_positions: int = 2         # Max 2 concurrent correlated positions
 
 
 @dataclass

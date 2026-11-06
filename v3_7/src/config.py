@@ -84,9 +84,10 @@ class ScalperConfig:
     e1_max_spread_ticks: float = 2.5
     e1_max_hold_sec: float = 900.0  # 15 минут
 
-    # 7. Пороги Движка 2 (Liquidity Sweep & Absorption Reversion)
+    # 7. Пороги Движка 2 (Liquidity Sweep & Absorption Reversion - Master Sweeps v3.7 + v3.10)
     e2_min_depth_pct: float = 0.0012
-    e2_max_depth_atr_mult: float = 0.85
+    e2_max_depth_atr_mult: float = 0.75     # Потолок глубины из v3.10: если прокол > 0.75 ATR -> истинный пробой, отмена
+    e2_max_er_compression: float = 0.55    # Анти-компрессионный фильтр из v3.10: блокировка при сжатии в уровень (KER > 0.55)
     e2_k_abs_threshold: float = 1.6
     e2_max_sweep_time_sec: float = 90.0
     e2_max_risk_pct: float = 0.0060

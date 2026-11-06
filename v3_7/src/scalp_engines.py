@@ -168,6 +168,12 @@ class ThreeEnginesEvaluate:
         if m.atr_15m <= 0 or m.hurst_15m > 0.62:
             return None
 
+        # Анти-компрессионный фильтр (перенесен из v3.10 Sweep Pod):
+        # Если рынок агрессивно сжимается в уровень (KER > 0.45), вход блокируется (истинный направленный пробой)
+        max_er_comp = getattr(self.cfg, "e2_max_er_compression", 0.45)
+        if getattr(m, "er_15m", 0.0) > max_er_comp:
+            return None
+
         btc_ret_5s, _, _ = btc_state.get_depletion_and_return(now_ms, 5000)
         if abs(btc_ret_5s) > 0.0045:
             return None
