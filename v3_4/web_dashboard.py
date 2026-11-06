@@ -868,6 +868,7 @@ HTML_PAGE = """<!DOCTYPE html>
                 if (!res.ok) return;
                 const data = await res.json();
                 updateCommonChartAndClosed(data);
+                syncPaperTestStatsAndChart(data);
 
                 // Telemetry
                 const equity = data.capital || data.portfolio_equity || 300.0;

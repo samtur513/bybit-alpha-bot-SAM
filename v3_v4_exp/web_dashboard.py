@@ -353,100 +353,130 @@ HTML_PAGE = f"""<!DOCTYPE html>
     </div>
 
     <script>
+        let equityChart = null;
 
-    function formatChartTs(ts) {{
-        if (!ts) return '';
-        const ms = typeof ts === 'number' ? (ts < 1e11 ? ts * 1000 : ts) : Date.parse(ts);
-        if (isNaN(ms)) return String(ts);
-        const d = new Date(ms);
-        const day = String(d.getUTCDate()).padStart(2, '0');
-        const mon = String(d.getUTCMonth() + 1).padStart(2, '0');
-        const hr = String(d.getUTCHours()).padStart(2, '0');
-        const min = String(d.getUTCMinutes()).padStart(2, '0');
-        return `${{day}}.${{mon}} ${{hr}}:${{min}}`;
-    }}
-
-    function syncPaperTestStatsAndChart(data) {{
-        if (!data) return;
-        const eq = Number(data.capital || data.equity || data.equity_usdt || 300.0);
-        const initCap = Number(data.initial_capital || 300.0);
-        const netPnl = eq - initCap;
-        const roiPct = (netPnl / initCap) * 100.0;
-        const rawTrades = data.closed_trades || [];
-        const trades = [...rawTrades].sort((a, b) => {{
-            const ta = a.exit_time || a.closed_at_ms || a.timestamp || 0;
-            const tb = b.exit_time || b.closed_at_ms || b.timestamp || 0;
-            return ta - tb;
-        }});
-
-        const wins = trades.filter(t => (t.net_pnl || t.net_pnl_usdt || 0) > 0);
-        const losses = trades.filter(t => (t.net_pnl || t.net_pnl_usdt || 0) < 0);
-        const grossWin = wins.reduce((acc, t) => acc + Number(t.net_pnl || t.net_pnl_usdt || 0), 0);
-        const grossLoss = Math.abs(losses.reduce((acc, t) => acc + Number(t.net_pnl || t.net_pnl_usdt || 0), 0));
-        const pf = grossLoss > 0 ? (grossWin / grossLoss) : (grossWin > 0 ? 99.9 : 1.0);
-        const wr = trades.length > 0 ? ((wins.length / trades.length) * 100.0) : Number(data.win_rate || data.win_rate_pct || 0);
-        const dd = Number(data.max_drawdown_pct || data.drawdown_pct || 0.0);
-        const rf = dd > 0 ? (netPnl / (initCap * dd / 100.0)) : (netPnl >= 0 ? 1.0 : -1.0);
-
-        const roiEl = document.getElementById('paper-roi');
-        if (roiEl) {{
-            roiEl.innerText = (roiPct >= 0 ? '+' : '') + roiPct.toFixed(2) + '% (' + (netPnl >= 0 ? '+$' : '-$') + Math.abs(netPnl).toFixed(2) + ')';
-            roiEl.style.color = roiPct >= 0 ? '#10b981' : '#ef4444';
+        
+        function formatChartTs(ts) {{
+            if (!ts) return '';
+            const ms = typeof ts === 'number' ? (ts < 1e11 ? ts * 1000 : ts) : Date.parse(ts);
+            if (isNaN(ms)) return String(ts);
+            const d = new Date(ms);
+            const day = String(d.getUTCDate()).padStart(2, '0');
+            const mon = String(d.getUTCMonth() + 1).padStart(2, '0');
+            const hr = String(d.getUTCHours()).padStart(2, '0');
+            const min = String(d.getUTCMinutes()).padStart(2, '0');
+            return `${{day}}.${{mon}} ${{hr}}:${{min}}`;
         }}
-        const wrEl = document.getElementById('paper-wr');
-        if (wrEl) wrEl.innerText = wr.toFixed(1) + '% (' + wins.length + '/' + trades.length + ')';
-        const pfEl = document.getElementById('paper-pf');
-        if (pfEl) pfEl.innerText = grossLoss > 0 ? pf.toFixed(2) : (grossWin > 0 ? '∞' : '1.00');
-        const ddEl = document.getElementById('paper-dd');
-        if (ddEl) ddEl.innerText = dd.toFixed(2) + '%';
-        const rfEl = document.getElementById('paper-sharpe');
-        if (rfEl) rfEl.innerText = trades.length >= 2 ? rf.toFixed(2) : '--';
-        const trEl = document.getElementById('paper-trades');
-        if (trEl) trEl.innerText = trades.length;
 
-        const firstTradeTs = trades.length > 0 ? (trades[0].exit_time || trades[0].closed_at_ms || trades[0].timestamp) : 0;
-        const startMs = firstTradeTs ? (firstTradeTs < 1e11 ? firstTradeTs * 1000 : firstTradeTs) : (Date.now() - 86400000 * 1.5);
-        const durHours = Math.max(0.1, (Date.now() - startMs) / 3600000);
-        const durStr = durHours >= 24 ? `${{Math.floor(durHours / 24)}}д ${{Math.floor(durHours % 24)}}ч` : `${{durHours.toFixed(1)}}ч`;
-
-        const startEl = document.getElementById('paper-start-time');
-        if (startEl) startEl.innerText = formatChartTs(startMs) + ' UTC';
-        const currEl = document.getElementById('paper-current-time');
-        if (currEl) currEl.innerText = formatChartTs(Date.now()) + ' UTC';
-        const durEl = document.getElementById('paper-duration');
-        if (durEl) durEl.innerText = durStr;
-
-        const chartCurrEq = document.getElementById('chart-curr-equity');
-        if (chartCurrEq) chartCurrEq.innerText = '$' + eq.toFixed(2);
-
-        const chartObj = window.equityChartInstance || window.equityChart || window.chartInstance;
-        if (chartObj) {{
-            const labels = [formatChartTs(startMs - 3600000) + ' (Старт)'];
-            const points = [initCap];
-            let run = initCap;
-            trades.forEach((t, i) => {{
-                run += Number(t.net_pnl || t.net_pnl_usdt || 0.0);
-                const ts = t.exit_time || t.closed_at_ms || t.timestamp;
-                labels.push(formatChartTs(ts) + ' (#' + (i + 1) + ' ' + (t.symbol || '') + ')');
-                points.push(Number(run.toFixed(2)));
+        function syncPaperTestStatsAndChart(data) {{
+            if (!data) return;
+            const eq = Number(data.capital || data.equity || data.equity_usdt || 300.0);
+            const initCap = Number(data.initial_capital || 300.0);
+            const netPnl = eq - initCap;
+            const roiPct = (netPnl / initCap) * 100.0;
+            const rawTrades = data.closed_trades || [];
+            const trades = [...rawTrades].sort((a, b) => {{
+                const ta = a.exit_time || a.closed_at_ms || a.timestamp || 0;
+                const tb = b.exit_time || b.closed_at_ms || b.timestamp || 0;
+                return ta - tb;
             }});
-            if (points.length === 1 || Math.abs(points[points.length - 1] - eq) > 0.001) {{
-                labels.push(formatChartTs(Date.now()) + ' (Сейчас)');
-                points.push(Number(eq.toFixed(2)));
+
+            const wins = trades.filter(t => (t.net_pnl || t.net_pnl_usdt || 0) > 0);
+            const losses = trades.filter(t => (t.net_pnl || t.net_pnl_usdt || 0) < 0);
+            const grossWin = wins.reduce((acc, t) => acc + Number(t.net_pnl || t.net_pnl_usdt || 0), 0);
+            const grossLoss = Math.abs(losses.reduce((acc, t) => acc + Number(t.net_pnl || t.net_pnl_usdt || 0), 0));
+            const pf = grossLoss > 0 ? (grossWin / grossLoss) : (grossWin > 0 ? 99.9 : 1.0);
+            const wr = trades.length > 0 ? ((wins.length / trades.length) * 100.0) : Number(data.win_rate || data.win_rate_pct || 0);
+            const dd = Number(data.max_drawdown_pct || data.drawdown_pct || 0.0);
+            const rf = dd > 0 ? (netPnl / (initCap * dd / 100.0)) : (netPnl >= 0 ? 1.0 : -1.0);
+
+            const roiEl = document.getElementById('paper-roi');
+            if (roiEl) {{
+                roiEl.innerText = (roiPct >= 0 ? '+' : '') + roiPct.toFixed(2) + '% (' + (netPnl >= 0 ? '+$' : '-$') + Math.abs(netPnl).toFixed(2) + ')';
+                roiEl.style.color = roiPct >= 0 ? '#10b981' : '#ef4444';
             }}
-            chartObj.data.labels = labels;
-            chartObj.data.datasets[0].data = points;
-            const isProfit = eq >= initCap;
-            chartObj.data.datasets[0].borderColor = isProfit ? '#00f2fe' : '#ef4444';
-            chartObj.data.datasets[0].pointBackgroundColor = isProfit ? '#00f2fe' : '#ef4444';
-            chartObj.data.datasets[0].backgroundColor = isProfit ? 'rgba(0, 242, 254, 0.08)' : 'rgba(239, 68, 68, 0.08)';
-            chartObj.update();
+            const wrEl = document.getElementById('paper-wr');
+            if (wrEl) wrEl.innerText = wr.toFixed(1) + '% (' + wins.length + '/' + trades.length + ')';
+            const pfEl = document.getElementById('paper-pf');
+            if (pfEl) pfEl.innerText = grossLoss > 0 ? pf.toFixed(2) : (grossWin > 0 ? '∞' : '1.00');
+            const ddEl = document.getElementById('paper-dd');
+            if (ddEl) ddEl.innerText = dd.toFixed(2) + '%';
+            const rfEl = document.getElementById('paper-sharpe');
+            if (rfEl) rfEl.innerText = trades.length >= 2 ? rf.toFixed(2) : '--';
+            const trEl = document.getElementById('paper-trades');
+            if (trEl) trEl.innerText = trades.length;
+
+            const firstTradeTs = trades.length > 0 ? (trades[0].exit_time || trades[0].closed_at_ms || trades[0].timestamp) : 0;
+            const startMs = firstTradeTs ? (firstTradeTs < 1e11 ? firstTradeTs * 1000 : firstTradeTs) : (Date.now() - 86400000 * 1.5);
+            const durHours = Math.max(0.1, (Date.now() - startMs) / 3600000);
+            const durStr = durHours >= 24 ? `${{Math.floor(durHours / 24)}}д ${{Math.floor(durHours % 24)}}ч` : `${{durHours.toFixed(1)}}ч`;
+
+            const startEl = document.getElementById('paper-start-time');
+            if (startEl) startEl.innerText = formatChartTs(startMs) + ' UTC';
+            const currEl = document.getElementById('paper-current-time');
+            if (currEl) currEl.innerText = formatChartTs(Date.now()) + ' UTC';
+            const durEl = document.getElementById('paper-duration');
+            if (durEl) durEl.innerText = durStr;
+
+            const chartCurrEq = document.getElementById('chart-curr-equity');
+            if (chartCurrEq) chartCurrEq.innerText = '$' + eq.toFixed(2);
+
+            if (equityChart) {{
+                const labels = [formatChartTs(startMs - 3600000) + ' (Старт)'];
+                const points = [initCap];
+                let run = initCap;
+                trades.forEach((t, i) => {{
+                    run += Number(t.net_pnl || t.net_pnl_usdt || 0.0);
+                    const ts = t.exit_time || t.closed_at_ms || t.timestamp;
+                    labels.push(formatChartTs(ts) + ' (#' + (i + 1) + ' ' + (t.symbol || '') + ')');
+                    points.push(Number(run.toFixed(2)));
+                }});
+                if (points.length === 1 || Math.abs(points[points.length - 1] - eq) > 0.001) {{
+                    labels.push(formatChartTs(Date.now()) + ' (Сейчас)');
+                    points.push(Number(eq.toFixed(2)));
+                }}
+                equityChart.data.labels = labels;
+                equityChart.data.datasets[0].data = points;
+                const isProfit = eq >= initCap;
+                equityChart.data.datasets[0].borderColor = isProfit ? '#a855f7' : '#ef4444';
+                equityChart.data.datasets[0].pointBackgroundColor = isProfit ? '#a855f7' : '#ef4444';
+                equityChart.data.datasets[0].backgroundColor = isProfit ? 'rgba(168, 85, 247, 0.08)' : 'rgba(239, 68, 68, 0.08)';
+                equityChart.update();
+            }}
         }}
-    }}
 
+        function initEquityChart() {{
+            const canvas = document.getElementById('equityChart');
+            if (!canvas || typeof Chart === 'undefined') return;
+            const ctx = canvas.getContext('2d');
+            equityChart = new Chart(ctx, {{
+                type: 'line',
+                data: {{
+                    labels: ['Старт'],
+                    datasets: [{{
+                        label: 'Эквити ($)',
+                        data: [300.0],
+                        borderColor: '#a855f7',
+                        backgroundColor: 'rgba(168, 85, 247, 0.08)',
+                        fill: true,
+                        tension: 0.25,
+                        borderWidth: 2,
+                        pointRadius: 4
+                    }}]
+                }},
+                options: {{
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {{ legend: {{ display: false }} }},
+                    scales: {{
+                        x: {{ grid: {{ color: 'rgba(255, 255, 255, 0.04)' }}, ticks: {{ color: '#64748b' }} }},
+                        y: {{ grid: {{ color: 'rgba(255, 255, 255, 0.04)' }}, ticks: {{ color: '#94a3b8', callback: (v) => '$' + Number(v).toFixed(2) }} }}
+                    }}
+                }}
+            }});
+        }}
 
-
-    function updateChart(eq, trades) {{
+        function updateChart(eq, trades) {{
             if (!equityChart) return;
             const pts = [300.0];
             const lbls = ['Старт'];
@@ -473,6 +503,7 @@ HTML_PAGE = f"""<!DOCTYPE html>
                 const res = await fetch('/api/status');
                 if (!res.ok) return;
                 const d = await res.json();
+                syncPaperTestStatsAndChart(d);
 
                 const eq = d.equity || 300.0;
                 document.getElementById('val-equity').innerText = '$' + eq.toFixed(2);

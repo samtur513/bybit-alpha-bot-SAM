@@ -580,6 +580,7 @@ HTML_PAGE = """<!DOCTYPE html>
                 const res = await fetch('/api/status');
                 if (!res.ok) return;
                 const d = await res.json();
+                syncPaperTestStatsAndChart(d);
 
                 // Equity & PnL
                 const eq = d.portfolio_equity || d.capital || 300.0;

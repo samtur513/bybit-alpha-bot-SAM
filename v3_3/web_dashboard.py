@@ -747,6 +747,7 @@ HTML_PAGE = """<!DOCTYPE html>
                 const resp = await fetch('/api/status');
                 const data = await resp.json();
                 updateCommonChartAndClosed(data);
+                syncPaperTestStatsAndChart(data);
 
                 document.getElementById('clock-utc').textContent = data.datetime_utc || new Date().toISOString();
                 document.getElementById('equity-val').textContent = '$' + (data.capital || 300.0).toFixed(2);

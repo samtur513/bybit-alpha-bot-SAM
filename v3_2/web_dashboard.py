@@ -703,6 +703,7 @@ HTML_PAGE = """<!DOCTYPE html>
                 const res = await fetch('/api/status');
                 if (!res.ok) return;
                 const data = await res.json();
+                syncPaperTestStatsAndChart(data);
 
                 // Metrics
                 const equity = data.portfolio_equity || data.capital || 300.0;

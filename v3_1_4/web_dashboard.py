@@ -900,6 +900,7 @@ HTML_PAGE = """<!DOCTYPE html>
                 const res = await fetch('/api/status');
                 const data = await res.json();
                 updateCommonChartAndClosed(data);
+                syncPaperTestStatsAndChart(data);
 
                 document.getElementById('metric-capital').innerText = formatMoney(data.capital);
                 const pnlEl = document.getElementById('metric-pnl');

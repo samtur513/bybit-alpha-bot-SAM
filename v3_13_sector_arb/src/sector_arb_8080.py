@@ -1150,6 +1150,7 @@ class SectorArbEngine8080:
                 const res = await fetch('/api/status');
                 if (!res.ok) return;
                 const data = await res.json();
+                syncPaperTestStatsAndChart(data);
 
                 // 1. KPIs
                 const eq = Number(data.equity || 300.0);

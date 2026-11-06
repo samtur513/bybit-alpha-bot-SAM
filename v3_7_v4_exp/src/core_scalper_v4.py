@@ -183,7 +183,7 @@ async def run_public_stream(
                                 for alt_sym, alt_st in states.items():
                                     if alt_sym == btc_sym:
                                         continue
-                                    sig3 = evaluator.evaluate_engine3_leadlag_arbitrage(alt_st, btc_state, now_ms)
+                                    sig3 = evaluator.evaluate_engine3_lead_lag(alt_st, btc_state, now_ms)
                                     if sig3:
                                         await oms.submit_signal(sig3)
                         else:

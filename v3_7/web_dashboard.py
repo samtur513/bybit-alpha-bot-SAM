@@ -667,6 +667,7 @@ HTML_PAGE = """<!DOCTYPE html>
                 const res = await fetch('/api/status');
                 if (!res.ok) throw new Error("HTTP " + res.status);
                 const data = await res.json();
+                syncPaperTestStatsAndChart(data);
 
                 const initCap = Number(data.initial_capital || 300.0);
                 const currEq = Number(data.equity || 300.0);

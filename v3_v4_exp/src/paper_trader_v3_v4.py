@@ -304,9 +304,43 @@ class PaperTraderV3V4Exp:
         self.last_processed_bar_ts[sym] = ts
         self.batches.setdefault(ts, {})[sym] = df.iloc[-1].to_dict()
 
+    def _process_bar_batch(self, ts: int, bars: Dict[str, Any]) -> None:
+        """Processes a synchronized batch of bars across symbols."""
+        prices = self.get_live_prices()
+        btc_bar = bars.get("BTCUSDT")
+        btc_bullish = True
+        btc_bearish = True
+        if btc_bar:
+            c = float(btc_bar["close"])
+            ef = float(btc_bar.get("ema_fast", 0))
+            es = float(btc_bar.get("ema_slow", 0))
+            btc_bullish = ef > es and c > ef
+            btc_bearish = ef < es and c < ef
+            self.btc_trend_status = "BULLISH" if btc_bullish else ("BEARISH" if btc_bearish else "NEUTRAL")
+
+        blocked_symbols = set()
+        nc = getattr(self, "news_core", None)
+        if nc:
+            bar_dt = datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
+            for s in self.symbols:
+                st = nc.get_status(s, bar_dt)
+                if st.get("block_new_entries"):
+                    blocked_symbols.add(s)
+
+        open_prices = {s: prices.get(s, Decimal(str(b["close"]))) for s, b in bars.items()}
+
+        self.engine.process_bar_event(
+            timestamp=ts,
+            bars=bars,
+            next_open_prices=open_prices,
+            manage_positions=True,
+            btc_bullish=btc_bullish,
+            btc_bearish=btc_bearish,
+            blocked_symbols=blocked_symbols,
+        )
+
     def _signals(self) -> None:
         """Evaluates signals on closed 1h bars."""
-        prices = self.get_live_prices()
         now_ms = int(time.time() * 1000)
         for ts, bars in list(self.batches.items()):
             time_since_close = now_ms - (ts + self.bar_interval_ms)
@@ -319,37 +353,7 @@ class PaperTraderV3V4Exp:
             has_quorum = ("BTCUSDT" in bars) and (len(bars) >= max(3, int(len(self.symbols) * 0.70)))
 
             if self.ready and (has_all_bars or (grace_period_expired and has_quorum)):
-                btc_bar = bars.get("BTCUSDT")
-                btc_bullish = True
-                btc_bearish = True
-                if btc_bar:
-                    c = float(btc_bar["close"])
-                    ef = float(btc_bar.get("ema_fast", 0))
-                    es = float(btc_bar.get("ema_slow", 0))
-                    btc_bullish = ef > es and c > ef
-                    btc_bearish = ef < es and c < ef
-                    self.btc_trend_status = "BULLISH" if btc_bullish else ("BEARISH" if btc_bearish else "NEUTRAL")
-
-                blocked_symbols = set()
-                nc = getattr(self, "news_core", None)
-                if nc:
-                    bar_dt = datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
-                    for s in self.symbols:
-                        st = nc.get_status(s, bar_dt)
-                        if st.get("block_new_entries"):
-                            blocked_symbols.add(s)
-
-                open_prices = {s: prices.get(s, Decimal(str(b["close"]))) for s, b in bars.items()}
-
-                self.engine.process_bar_event(
-                    timestamp=ts,
-                    bars=bars,
-                    next_open_prices=open_prices,
-                    manage_positions=True,
-                    btc_bullish=btc_bullish,
-                    btc_bearish=btc_bearish,
-                    blocked_symbols=blocked_symbols,
-                )
+                self._process_bar_batch(ts, bars)
                 del self.batches[ts]
 
     def get_status(self) -> Dict[str, Any]:
@@ -478,6 +482,19 @@ class PaperTraderV3V4Exp:
                     else:
                         self.btc_trend_status = "NEUTRAL"
                 logger.info(f"Loaded historical candles for {len(self.candle_buffers)} symbols. BTC: {self.btc_trend_status}")
+                # Evaluate the latest closed bar immediately on startup
+                if self.candle_buffers:
+                    latest_timestamps = [int(df.timestamp.iloc[-1]) for df in self.candle_buffers.values() if len(df) > 0]
+                    if latest_timestamps:
+                        target_ts = max(set(latest_timestamps), key=latest_timestamps.count)
+                        initial_bars = {
+                            s: df.iloc[-1].to_dict()
+                            for s, df in self.candle_buffers.items()
+                            if len(df) > 0 and int(df.timestamp.iloc[-1]) == target_ts
+                        }
+                        if len(initial_bars) >= max(3, int(len(self.symbols) * 0.70)):
+                            with self.lock:
+                                self._process_bar_batch(target_ts, initial_bars)
             except Exception as e:
                 logger.warning(f"History load warning: {e}")
                 self.ready = True

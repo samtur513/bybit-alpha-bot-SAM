@@ -600,7 +600,7 @@ HTML_PAGE = """<!DOCTYPE html>
                 const res = await fetch('/api/status');
                 if (!res.ok) return;
                 const data = await res.json();
-                updateEquityChart(data);
+                syncPaperTestStatsAndChart(data);
 
                 document.getElementById('equityVal').textContent = '$' + (data.capital || 300).toFixed(2);
                 const pnl = data.total_net_pnl || 0;

@@ -573,7 +573,7 @@ HTML_PAGE = """<!DOCTYPE html>
                 const res = await fetch('/api/status');
                 if (!res.ok) return;
                 const data = await res.json();
-                updateEquityChart(data);
+                syncPaperTestStatsAndChart(data);
 
                 document.getElementById('equityVal').textContent = '$' + (data.capital || data.equity || 300).toFixed(2);
                 const pnl = data.realized_pnl !== undefined ? data.realized_pnl : (data.daily_pnl_usdt || 0);
