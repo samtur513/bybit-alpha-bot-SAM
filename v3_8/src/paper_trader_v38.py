@@ -383,6 +383,7 @@ class PaperTraderV38:
                     "net_pnl": float(t.net_pnl),
                     "exit_reason": t.exit_reason,
                     "hold_hours": round(t.hold_hours, 1),
+                    "exit_time": getattr(t, "exit_time", 0),
                 })
 
             win_count = sum(1 for t in self.engine.closed_trades if t.net_pnl > 0)

@@ -265,6 +265,7 @@ class PaperTraderV35:
                     "net_pnl": float(t.net_pnl),
                     "reason": t.reason,
                     "exit_price": float(t.exit_price),
+                    "exit_time": getattr(t, "exit_ts", 0),
                 })
 
             # Calculate Beta ~ 0 metrics

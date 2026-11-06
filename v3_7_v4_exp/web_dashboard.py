@@ -237,45 +237,45 @@ HTML_PAGE = f"""<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- 📊 Исторические итоги и аудит валидации (WFV & Backtest Audit) -->
-        <div style="background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 18px; margin-bottom: 24px;">
+        <!-- 📊 Итоги и накопленная статистика Paper-теста -->
+        <div style="background: var(--bg-card, #0f172a); border: 1px solid var(--border, #1e293b); border-radius: 12px; padding: 18px; margin-bottom: 24px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 8px;">
                 <div style="display: flex; align-items: center; gap: 10px;">
-                    <h3 style="margin: 0; font-size: 13px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px;">📊 Исторические итоги и аудит валидации (v3.7-v4-exp NewDragon Scalp Lab)</h3>
-                    <span style="font-size: 10px; font-weight: 700; background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); padding: 2px 8px; border-radius: 4px;">ZERO-LOOKAHEAD PIT CERTIFIED</span>
+                    <h3 style="margin: 0; font-size: 13px; font-weight: 700; text-transform: uppercase; color: var(--text-muted, #94a3b8); letter-spacing: 0.5px;">📊 Итоги и накопленная статистика Paper-теста (v3.7-v4 NewDragon Scalp Lab (Port 8093))</h3>
+                    <span style="font-size: 10px; font-weight: 700; background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); padding: 2px 8px; border-radius: 4px;">LIVE PAPER TEST</span>
                 </div>
-                <div style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);">
-                    Дата аудита: <strong style="color: #38bdf8;">2026-11-06 12:00 UTC</strong> | Период: <strong style="color: #f8fafc;">2024–2026 (2.8 года, Bybit Perpetuals)</strong>
+                <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-muted, #94a3b8);">
+                    Старт: <strong id="paper-start-time" style="color: #38bdf8;">--.--.---- --:-- UTC</strong> | Сейчас: <strong id="paper-current-time" style="color: #f8fafc;">--.--.---- --:-- UTC</strong> | Время работы: <strong id="paper-duration" style="color: #00f2fe;">--</strong>
                 </div>
             </div>
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 12px;">
-                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 10px; text-align: center;">
-                    <div style="font-size: 18px; font-weight: 800; color: #10b981; font-family: var(--font-mono);">+98.4%</div>
-                    <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted); margin-top: 2px;">Чистая доходность</div>
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border, #1e293b); border-radius: 8px; padding: 10px; text-align: center;">
+                    <div id="paper-roi" style="font-size: 18px; font-weight: 800; color: #10b981; font-family: 'JetBrains Mono', monospace;">+0.00% ($0.00)</div>
+                    <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted, #94a3b8); margin-top: 2px;">Чистая доходность</div>
                 </div>
-                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 10px; text-align: center;">
-                    <div style="font-size: 18px; font-weight: 800; color: #38bdf8; font-family: var(--font-mono);">64.2%</div>
-                    <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted); margin-top: 2px;">Винрейт (WR)</div>
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border, #1e293b); border-radius: 8px; padding: 10px; text-align: center;">
+                    <div id="paper-wr" style="font-size: 18px; font-weight: 800; color: #38bdf8; font-family: 'JetBrains Mono', monospace;">0.0% (0)</div>
+                    <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted, #94a3b8); margin-top: 2px;">Винрейт (WR)</div>
                 </div>
-                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 10px; text-align: center;">
-                    <div style="font-size: 18px; font-weight: 800; color: #f59e0b; font-family: var(--font-mono);">2.18</div>
-                    <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted); margin-top: 2px;">Профит-фактор (PF)</div>
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border, #1e293b); border-radius: 8px; padding: 10px; text-align: center;">
+                    <div id="paper-pf" style="font-size: 18px; font-weight: 800; color: #f59e0b; font-family: 'JetBrains Mono', monospace;">1.00</div>
+                    <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted, #94a3b8); margin-top: 2px;">Профит-фактор (PF)</div>
                 </div>
-                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 10px; text-align: center;">
-                    <div style="font-size: 18px; font-weight: 800; color: #ef4444; font-family: var(--font-mono);">3.8%</div>
-                    <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted); margin-top: 2px;">Макс. просадка (DD)</div>
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border, #1e293b); border-radius: 8px; padding: 10px; text-align: center;">
+                    <div id="paper-dd" style="font-size: 18px; font-weight: 800; color: #ef4444; font-family: 'JetBrains Mono', monospace;">0.0%</div>
+                    <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted, #94a3b8); margin-top: 2px;">Макс. просадка (DD)</div>
                 </div>
-                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 10px; text-align: center;">
-                    <div style="font-size: 18px; font-weight: 800; color: #a855f7; font-family: var(--font-mono);">2.52</div>
-                    <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted); margin-top: 2px;">Коэф. Шарпа</div>
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border, #1e293b); border-radius: 8px; padding: 10px; text-align: center;">
+                    <div id="paper-sharpe" style="font-size: 18px; font-weight: 800; color: #a855f7; font-family: 'JetBrains Mono', monospace;">--</div>
+                    <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted, #94a3b8); margin-top: 2px;">Коэф. отдачи</div>
                 </div>
-                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 10px; text-align: center;">
-                    <div style="font-size: 18px; font-weight: 800; color: #00f2fe; font-family: var(--font-mono);">1,640</div>
-                    <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted); margin-top: 2px;">Всего сделок</div>
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border, #1e293b); border-radius: 8px; padding: 10px; text-align: center;">
+                    <div id="paper-trades" style="font-size: 18px; font-weight: 800; color: #00f2fe; font-family: 'JetBrains Mono', monospace;">0</div>
+                    <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted, #94a3b8); margin-top: 2px;">Всего сделок в тесте</div>
                 </div>
             </div>
-            <div style="font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); line-height: 1.5; border-top: 1px solid var(--border); padding-top: 8px;">
-                ⚙️ <strong style="color: #f8fafc;">Спецификация аудита:</strong> M1/15m Scalper OMS + NewDragon UniversalRisk minNotional Guard ($5 alts / $100 BTC) + 2-Stage Z_OFI Fast Scratch (15s Window, Z_OFI <= -1.5).
+            <div style="font-size: 11px; color: var(--text-muted, #94a3b8); font-family: 'JetBrains Mono', monospace; line-height: 1.5; border-top: 1px solid var(--border, #1e293b); padding-top: 8px;">
+                ⚙️ <strong style="color: #f8fafc;">Спецификация стратегии:</strong> M1/15m Scalper OMS + NewDragon UniversalRisk minNotional Guard ($5 alts / $100 BTC) + 2-Stage Z_OFI Fast Scratch (15s Window, Z_OFI <= -1.5) + Dynamic Breakeven Ratchet.
             </div>
         </div>
 
@@ -376,40 +376,100 @@ HTML_PAGE = f"""<!DOCTYPE html>
     </div>
 
     <script>
-        let equityChart = null;
 
-        function initEquityChart() {{
-            const canvas = document.getElementById('equityChart');
-            if (!canvas || typeof Chart === 'undefined') return;
-            const ctx = canvas.getContext('2d');
-            equityChart = new Chart(ctx, {{
-                type: 'line',
-                data: {{
-                    labels: ['Старт'],
-                    datasets: [{{
-                        label: 'Эквити ($)',
-                        data: [300.0],
-                        borderColor: '#ec4899',
-                        backgroundColor: 'rgba(236, 72, 153, 0.08)',
-                        fill: true,
-                        tension: 0.25,
-                        borderWidth: 2,
-                        pointRadius: 4
-                    }}]
-                }},
-                options: {{
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {{ legend: {{ display: false }} }},
-                    scales: {{
-                        x: {{ grid: {{ color: 'rgba(255, 255, 255, 0.04)' }}, ticks: {{ color: '#64748b' }} }},
-                        y: {{ grid: {{ color: 'rgba(255, 255, 255, 0.04)' }}, ticks: {{ color: '#94a3b8', callback: (v) => '$' + Number(v).toFixed(2) }} }}
-                    }}
-                }}
-            }});
+    function formatChartTs(ts) {{
+        if (!ts) return '';
+        const ms = typeof ts === 'number' ? (ts < 1e11 ? ts * 1000 : ts) : Date.parse(ts);
+        if (isNaN(ms)) return String(ts);
+        const d = new Date(ms);
+        const day = String(d.getUTCDate()).padStart(2, '0');
+        const mon = String(d.getUTCMonth() + 1).padStart(2, '0');
+        const hr = String(d.getUTCHours()).padStart(2, '0');
+        const min = String(d.getUTCMinutes()).padStart(2, '0');
+        return `${{day}}.${{mon}} ${{hr}}:${{min}}`;
+    }}
+
+    function syncPaperTestStatsAndChart(data) {{
+        if (!data) return;
+        const eq = Number(data.capital || data.equity || data.equity_usdt || 300.0);
+        const initCap = Number(data.initial_capital || 300.0);
+        const netPnl = eq - initCap;
+        const roiPct = (netPnl / initCap) * 100.0;
+        const rawTrades = data.closed_trades || [];
+        const trades = [...rawTrades].sort((a, b) => {{
+            const ta = a.exit_time || a.closed_at_ms || a.timestamp || 0;
+            const tb = b.exit_time || b.closed_at_ms || b.timestamp || 0;
+            return ta - tb;
+        }});
+
+        const wins = trades.filter(t => (t.net_pnl || t.net_pnl_usdt || 0) > 0);
+        const losses = trades.filter(t => (t.net_pnl || t.net_pnl_usdt || 0) < 0);
+        const grossWin = wins.reduce((acc, t) => acc + Number(t.net_pnl || t.net_pnl_usdt || 0), 0);
+        const grossLoss = Math.abs(losses.reduce((acc, t) => acc + Number(t.net_pnl || t.net_pnl_usdt || 0), 0));
+        const pf = grossLoss > 0 ? (grossWin / grossLoss) : (grossWin > 0 ? 99.9 : 1.0);
+        const wr = trades.length > 0 ? ((wins.length / trades.length) * 100.0) : Number(data.win_rate || data.win_rate_pct || 0);
+        const dd = Number(data.max_drawdown_pct || data.drawdown_pct || 0.0);
+        const rf = dd > 0 ? (netPnl / (initCap * dd / 100.0)) : (netPnl >= 0 ? 1.0 : -1.0);
+
+        const roiEl = document.getElementById('paper-roi');
+        if (roiEl) {{
+            roiEl.innerText = (roiPct >= 0 ? '+' : '') + roiPct.toFixed(2) + '% (' + (netPnl >= 0 ? '+$' : '-$') + Math.abs(netPnl).toFixed(2) + ')';
+            roiEl.style.color = roiPct >= 0 ? '#10b981' : '#ef4444';
         }}
+        const wrEl = document.getElementById('paper-wr');
+        if (wrEl) wrEl.innerText = wr.toFixed(1) + '% (' + wins.length + '/' + trades.length + ')';
+        const pfEl = document.getElementById('paper-pf');
+        if (pfEl) pfEl.innerText = grossLoss > 0 ? pf.toFixed(2) : (grossWin > 0 ? '∞' : '1.00');
+        const ddEl = document.getElementById('paper-dd');
+        if (ddEl) ddEl.innerText = dd.toFixed(2) + '%';
+        const rfEl = document.getElementById('paper-sharpe');
+        if (rfEl) rfEl.innerText = trades.length >= 2 ? rf.toFixed(2) : '--';
+        const trEl = document.getElementById('paper-trades');
+        if (trEl) trEl.innerText = trades.length;
 
-        function updateChart(eq, trades) {{
+        const firstTradeTs = trades.length > 0 ? (trades[0].exit_time || trades[0].closed_at_ms || trades[0].timestamp) : 0;
+        const startMs = firstTradeTs ? (firstTradeTs < 1e11 ? firstTradeTs * 1000 : firstTradeTs) : (Date.now() - 86400000 * 1.5);
+        const durHours = Math.max(0.1, (Date.now() - startMs) / 3600000);
+        const durStr = durHours >= 24 ? `${{Math.floor(durHours / 24)}}д ${{Math.floor(durHours % 24)}}ч` : `${{durHours.toFixed(1)}}ч`;
+
+        const startEl = document.getElementById('paper-start-time');
+        if (startEl) startEl.innerText = formatChartTs(startMs) + ' UTC';
+        const currEl = document.getElementById('paper-current-time');
+        if (currEl) currEl.innerText = formatChartTs(Date.now()) + ' UTC';
+        const durEl = document.getElementById('paper-duration');
+        if (durEl) durEl.innerText = durStr;
+
+        const chartCurrEq = document.getElementById('chart-curr-equity');
+        if (chartCurrEq) chartCurrEq.innerText = '$' + eq.toFixed(2);
+
+        const chartObj = window.equityChartInstance || window.equityChart || window.chartInstance;
+        if (chartObj) {{
+            const labels = [formatChartTs(startMs - 3600000) + ' (Старт)'];
+            const points = [initCap];
+            let run = initCap;
+            trades.forEach((t, i) => {{
+                run += Number(t.net_pnl || t.net_pnl_usdt || 0.0);
+                const ts = t.exit_time || t.closed_at_ms || t.timestamp;
+                labels.push(formatChartTs(ts) + ' (#' + (i + 1) + ' ' + (t.symbol || '') + ')');
+                points.push(Number(run.toFixed(2)));
+            }});
+            if (points.length === 1 || Math.abs(points[points.length - 1] - eq) > 0.001) {{
+                labels.push(formatChartTs(Date.now()) + ' (Сейчас)');
+                points.push(Number(eq.toFixed(2)));
+            }}
+            chartObj.data.labels = labels;
+            chartObj.data.datasets[0].data = points;
+            const isProfit = eq >= initCap;
+            chartObj.data.datasets[0].borderColor = isProfit ? '#00f2fe' : '#ef4444';
+            chartObj.data.datasets[0].pointBackgroundColor = isProfit ? '#00f2fe' : '#ef4444';
+            chartObj.data.datasets[0].backgroundColor = isProfit ? 'rgba(0, 242, 254, 0.08)' : 'rgba(239, 68, 68, 0.08)';
+            chartObj.update();
+        }}
+    }}
+
+
+
+    function updateChart(eq, trades) {{
             if (!equityChart) return;
             const pts = [300.0];
             const lbls = ['Старт'];

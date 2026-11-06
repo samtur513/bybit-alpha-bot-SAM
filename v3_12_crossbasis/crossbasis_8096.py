@@ -508,12 +508,25 @@ class CrossBasisEngine8096:
         async def handle_index(request):
             stats = await self.ledger.get_summary_stats(MODULE_ID)
 
-            # Query recent closed trades for table & chart
+            # Query all closed trades for table, chart & paper metrics
             import aiosqlite
             closed_trades_rows = []
-            chart_labels = ["Старт"]
-            chart_points = [300.0]
-            run_eq = 300.0
+            chart_labels = []
+            chart_points = []
+            init_cap = 300.0
+            curr_eq = float(self.equity_usdt)
+            net_pnl = curr_eq - init_cap
+            roi_pct = (net_pnl / init_cap) * 100.0
+            paper_roi_str = f"{'+' if roi_pct >= 0 else ''}{roi_pct:.2f}% ({'+$' if net_pnl >= 0 else '-$'}{abs(net_pnl):.2f})"
+            paper_roi_color = "#10b981" if roi_pct >= 0 else "#ef4444"
+            
+            paper_wr_str = "0.0% (0/0)"
+            paper_pf_str = "1.00"
+            paper_dd_str = "0.00%"
+            paper_sharpe_str = "--"
+            tot_trades = 0
+            first_ts = int(time.time() * 1000)
+
             try:
                 async with aiosqlite.connect(self.ledger.db_path) as db:
                     db.row_factory = aiosqlite.Row
@@ -523,11 +536,47 @@ class CrossBasisEngine8096:
                         (MODULE_ID,)
                     ) as cur:
                         all_trades = await cur.fetchall()
+                        tot_trades = len(all_trades)
+                        wins = [t for t in all_trades if float(t["pnl_net_total_usdt"] or 0.0) > 0]
+                        losses = [t for t in all_trades if float(t["pnl_net_total_usdt"] or 0.0) < 0]
+                        gross_win = sum(float(t["pnl_net_total_usdt"] or 0.0) for t in wins)
+                        gross_loss = abs(sum(float(t["pnl_net_total_usdt"] or 0.0) for t in losses))
+                        if gross_loss > 0:
+                            paper_pf_str = f"{(gross_win / gross_loss):.2f}"
+                        elif gross_win > 0:
+                            paper_pf_str = "∞"
+                        else:
+                            paper_pf_str = "1.00"
+                        if tot_trades > 0:
+                            paper_wr_str = f"{(len(wins) / tot_trades * 100.0):.1f}% ({len(wins)}/{tot_trades})"
+
+                        if all_trades:
+                            first_ts = all_trades[0]["closed_at_ms"] or first_ts
+
+                        peak = init_cap
+                        max_dd = 0.0
+                        run_eq = init_cap
+
+                        start_dt_short = datetime.fromtimestamp((first_ts - 3600000)/1000, tz=timezone.utc).strftime("%d.%m %H:%M")
+                        chart_labels.append(f"{start_dt_short} (Старт)")
+                        chart_points.append(init_cap)
+
                         for i, t in enumerate(all_trades):
                             net = float(t["pnl_net_total_usdt"] or 0.0)
                             run_eq += net
-                            chart_labels.append(f"#{i+1} {t['symbol']}")
+                            if run_eq > peak:
+                                peak = run_eq
+                            cur_dd = (peak - run_eq) / peak * 100.0 if peak > 0 else 0.0
+                            if cur_dd > max_dd:
+                                max_dd = cur_dd
+
+                            t_dt = datetime.fromtimestamp(t["closed_at_ms"]/1000, tz=timezone.utc).strftime("%d.%m %H:%M") if t["closed_at_ms"] else f"#{i+1}"
+                            chart_labels.append(f"{t_dt} (#{i+1} {t['symbol']})")
                             chart_points.append(round(run_eq, 2))
+
+                        paper_dd_str = f"{max_dd:.2f}%"
+                        recovery_factor = f"{(net_pnl / (init_cap * max_dd / 100.0)):.2f}" if max_dd > 0 else ("1.00" if net_pnl >= 0 else "-1.00")
+                        paper_sharpe_str = recovery_factor if tot_trades >= 2 else "--"
 
                         recent = list(reversed(all_trades))[:15]
                         for t in recent:
@@ -548,9 +597,15 @@ class CrossBasisEngine8096:
             except Exception as e:
                 logger.error(f"Error reading closed trades for UI: {e}")
 
-            if not chart_labels or abs(chart_points[-1] - self.equity_usdt) > 0.001:
-                chart_labels.append("Текущее")
-                chart_points.append(round(self.equity_usdt, 2))
+            now_dt_short = datetime.now(timezone.utc).strftime("%d.%m %H:%M")
+            if not chart_labels or abs(chart_points[-1] - curr_eq) > 0.001:
+                chart_labels.append(f"{now_dt_short} (Сейчас)")
+                chart_points.append(round(curr_eq, 2))
+
+            start_dt_full = datetime.fromtimestamp(first_ts/1000, tz=timezone.utc).strftime("%d.%m.%Y %H:%M")
+            now_dt_full = datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M")
+            dur_h = max(0.1, (time.time() - first_ts/1000) / 3600.0)
+            dur_str = f"{int(dur_h // 24)}д {int(dur_h % 24)}ч" if dur_h >= 24 else f"{dur_h:.1f}ч"
 
             closed_tbody = "".join(closed_trades_rows) if closed_trades_rows else "<tr><td colspan='7' style='text-align:center; color:#64748b; padding:16px;'>No closed trades recorded yet.</td></tr>"
             radar_rows = ""
@@ -710,50 +765,49 @@ class CrossBasisEngine8096:
         </div>
     
 
-        <!-- 📊 Исторические итоги и аудит валидации (WFV & Backtest Audit) -->
+        <!-- 📊 Итоги и накопленная статистика Paper-теста -->
         <div style="background: var(--bg-card, #0f172a); border: 1px solid var(--border, #1e293b); border-radius: 12px; padding: 18px; margin-bottom: 24px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 8px;">
                 <div style="display: flex; align-items: center; gap: 10px;">
-                    <h3 style="margin: 0; font-size: 13px; font-weight: 700; text-transform: uppercase; color: var(--text-muted, #94a3b8); letter-spacing: 0.5px;">📊 Исторические итоги и аудит валидации (v3.12 Cross-Basis Arbitrage)</h3>
-                    <span style="font-size: 10px; font-weight: 700; background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); padding: 2px 8px; border-radius: 4px;">ZERO-LOOKAHEAD PIT CERTIFIED</span>
+                    <h3 style="margin: 0; font-size: 13px; font-weight: 700; text-transform: uppercase; color: var(--text-muted, #94a3b8); letter-spacing: 0.5px;">📊 Итоги и накопленная статистика Paper-теста (v3.12 Cross-Basis Arbitrage)</h3>
+                    <span style="font-size: 10px; font-weight: 700; background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); padding: 2px 8px; border-radius: 4px;">LIVE PAPER TEST</span>
                 </div>
                 <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-muted, #94a3b8);">
-                    Дата аудита: <strong style="color: #38bdf8;">2026-11-05 15:00 UTC</strong> | Период: <strong style="color: #f8fafc;">2024–2026 (2 года, Bybit Perpetuals)</strong>
+                    Старт: <strong style="color: #38bdf8;">{start_dt_full} UTC</strong> | Сейчас: <strong style="color: #f8fafc;">{now_dt_full} UTC</strong> | Время работы: <strong style="color: #00f2fe;">{dur_str}</strong>
                 </div>
             </div>
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 12px;">
                 <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border, #1e293b); border-radius: 8px; padding: 10px; text-align: center;">
-                    <div style="font-size: 18px; font-weight: 800; color: #10b981; font-family: 'JetBrains Mono', monospace;">+86.4%</div>
+                    <div style="font-size: 18px; font-weight: 800; color: {paper_roi_color}; font-family: 'JetBrains Mono', monospace;">{paper_roi_str}</div>
                     <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted, #94a3b8); margin-top: 2px;">Чистая доходность</div>
                 </div>
                 <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border, #1e293b); border-radius: 8px; padding: 10px; text-align: center;">
-                    <div style="font-size: 18px; font-weight: 800; color: #38bdf8; font-family: 'JetBrains Mono', monospace;">71.2%</div>
+                    <div style="font-size: 18px; font-weight: 800; color: #38bdf8; font-family: 'JetBrains Mono', monospace;">{paper_wr_str}</div>
                     <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted, #94a3b8); margin-top: 2px;">Винрейт (WR)</div>
                 </div>
                 <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border, #1e293b); border-radius: 8px; padding: 10px; text-align: center;">
-                    <div style="font-size: 18px; font-weight: 800; color: #f59e0b; font-family: 'JetBrains Mono', monospace;">2.60</div>
+                    <div style="font-size: 18px; font-weight: 800; color: #f59e0b; font-family: 'JetBrains Mono', monospace;">{paper_pf_str}</div>
                     <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted, #94a3b8); margin-top: 2px;">Профит-фактор (PF)</div>
                 </div>
                 <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border, #1e293b); border-radius: 8px; padding: 10px; text-align: center;">
-                    <div style="font-size: 18px; font-weight: 800; color: #ef4444; font-family: 'JetBrains Mono', monospace;">2.8%</div>
+                    <div style="font-size: 18px; font-weight: 800; color: #ef4444; font-family: 'JetBrains Mono', monospace;">{paper_dd_str}</div>
                     <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted, #94a3b8); margin-top: 2px;">Макс. просадка (DD)</div>
                 </div>
                 <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border, #1e293b); border-radius: 8px; padding: 10px; text-align: center;">
-                    <div style="font-size: 18px; font-weight: 800; color: #a855f7; font-family: 'JetBrains Mono', monospace;">3.10</div>
-                    <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted, #94a3b8); margin-top: 2px;">Коэф. Шарпа</div>
+                    <div style="font-size: 18px; font-weight: 800; color: #a855f7; font-family: 'JetBrains Mono', monospace;">{paper_sharpe_str}</div>
+                    <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted, #94a3b8); margin-top: 2px;">Коэф. отдачи</div>
                 </div>
                 <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border, #1e293b); border-radius: 8px; padding: 10px; text-align: center;">
-                    <div style="font-size: 18px; font-weight: 800; color: #00f2fe; font-family: 'JetBrains Mono', monospace;">720</div>
-                    <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted, #94a3b8); margin-top: 2px;">Всего сделок</div>
+                    <div style="font-size: 18px; font-weight: 800; color: #00f2fe; font-family: 'JetBrains Mono', monospace;">{tot_trades}</div>
+                    <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted, #94a3b8); margin-top: 2px;">Всего сделок в тесте</div>
                 </div>
             </div>
             <div style="font-size: 11px; color: var(--text-muted, #94a3b8); font-family: 'JetBrains Mono', monospace; line-height: 1.5; border-top: 1px solid var(--border, #1e293b); padding-top: 8px;">
-                ⚙️ <strong style="color: #f8fafc;">Спецификация аудита:</strong> Эксплуатация краткосрочных расхождений базиса Spot-Perp, чистая альфа сужения спреда без направленного рыночного риска к движению цены базового актива.
+                ⚙️ <strong style="color: #f8fafc;">Спецификация стратегии:</strong> Эксплуатация краткосрочных расхождений базиса Spot-Perp, чистая альфа сужения спреда без направленного рыночного риска к движению цены базового актива.
             </div>
         </div>
-    
 
-                <!-- 📈 Live Equity & PnL Curve -->
+        <!-- 📈 Live Equity & PnL Curve -->
                 <div class="card" style="margin-bottom: 20px;">
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 12px;">
                         <h3 style="margin:0; font-size:13px; font-weight:700; text-transform:uppercase; color:#94a3b8; letter-spacing:0.5px;">📈 Динамика депозита и результатов сделок (Live PnL Curve)</h3>
