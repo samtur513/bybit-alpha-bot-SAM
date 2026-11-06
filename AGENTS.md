@@ -54,3 +54,33 @@ Single-context domain documentation (`GLOSSARY.md` + `docs/adr/`). See `docs/age
    - **Lazy ZeroMQ Socket Initialization**: Never instantiate `zmq.asyncio.Context()` or bind/connect sockets in synchronous class `__init__`. Always initialize ZeroMQ lazily inside an async method (e.g. `init_zmq()`) after `asyncio.run()` has established the running loop.
    - **Windows Selector Policy**: On Windows (`win32`), always invoke `asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())` to support pyzmq selectors.
    - **Explicit PYTHONPATH in Systemd**: Always declare `Environment="PYTHONPATH=/opt/bybit-bot:/opt/bybit-bot/<module>"` in service definitions to guarantee clean cross-directory imports.
+9. **Bybit V5 WebSocket Keepalive Invariant**:
+   - Bybit V5 public linear and spot WebSockets do NOT send RFC 6455 pong control frames. Never use `ping_interval=20` with default python `websockets.connect()`, as it times out and crashes with code 1011 (`keepalive ping timeout`).
+   - ALWAYS configure: `websockets.connect(url, ping_interval=None, ping_timeout=None, max_queue=4096, close_timeout=5)` and spawn a concurrent asyncio background task that sends application JSON `{"op": "ping"}` every 20 seconds.
+10. **Anti-Chop Cooldown & Re-Entry Isolation Invariants**:
+    - **Post-Exit Cooldown**: Never allow immediate re-entry on the same asset or pair. Always enforce an explicit cooldown (`cooldown_until = now + 300s` on normal exit, `600s` on Stop Loss / Time Stop) to eliminate machine-gun stop-loss churn.
+    - **Relative Statistical Stops**: Stop-loss conditions on $Z$-score or spread dislocation must always be relative to entry ($Z \ge \max(SL\_Z, Z_{entry} + \Delta Z)$ for Short Spread; $Z \le \min(-SL\_Z, Z_{entry} - \Delta Z)$ for Long Spread), preventing instant 0.1s stop outs when entering on high-variance extremes.
+    - **Test Isolation**: Wrap disk state loading and saving with `if "pytest" not in sys.modules:` to ensure unit tests remain 100% isolated and never pollute live state files.
+
+## Fleet Systemd Service Directory (VPS `150.241.98.70`)
+
+| Port | Strategy / Role | Systemd Service Unit Name | Working Directory |
+| :--- | :--- | :--- | :--- |
+| **8080** | v3.13 Sector Arbitrage | `bybit-bot.service` | `/opt/bybit-bot/v3_13_sector_arb` |
+| **8082** | v3-v4 NewDragon Trend Lab | `bybit-v3-v4-exp.service` | `/opt/bybit-bot/v3_v4_exp` |
+| **8083** | v3.2 Dual-Regime IRAS | `bybit-v32.service` | `/opt/bybit-bot/v3_2` |
+| **8084** | v3.1.4 Champion 4h | `bybit-v314.service` | `/opt/bybit-bot/v3_1_4` |
+| **8085** | Meta-Dashboard | `bybit-meta-dashboard.service` | `/opt/bybit-bot/meta_dashboard` |
+| **8086** | v3.3 Turbo Streak Risk | `bybit-v33.service` | `/opt/bybit-bot/v3_3` |
+| **8087** | v3.4 ZF-8 Quant | `bybit-v34.service` | `/opt/bybit-bot/v3_4` |
+| **8088** | v3.5 Alpha Pairs | `bybit-v35.service` | `/opt/bybit-bot/v3_5` |
+| **8089** | v3.6 Omega ZF-8 | `bybit-v36.service` | `/opt/bybit-bot/v3_6` |
+| **8090** | v3.7 Master Sweeps | `bybit-v37.service` | `/opt/bybit-bot/v3_7` |
+| **8091** | v3.8 NewDragon Trend Lab | `bybit-bot-v38.service` | `/opt/bybit-bot/v3_8` |
+| **8092** | v3.9 NewDragon Scalp Lab | `bybit-bot-v39.service` | `/opt/bybit-bot/v3_9` |
+| **8093** | v3.7-v4 NewDragon Scalp Lab | `bybit-v37-v4-exp.service` | `/opt/bybit-bot/v3_7_v4_exp` |
+| **8094** | v3.14 Basket Dispersion | `bybit-dispersion-8094.service`| `/opt/bybit-bot/v3_14_basket_dispersion` |
+| **8095** | Data & TCA Hub | `bybit-hub-8095.service` | `/opt/bybit-bot/v3_10_sweep` |
+| **8096** | v3.12 Spot-Perp Cross-Basis | `bybit-crossbasis-8096.service`| `/opt/bybit-bot/v3_12_crossbasis` |
+| **8097** | v3.11 Funding Squeeze | `bybit-funding-8097.service` | `/opt/bybit-bot/v3_11_funding` |
+| **8098** | Master Sweeps L2 | `bybit-sweep-8098.service` | `/opt/bybit-bot/v3_10_sweep` |
