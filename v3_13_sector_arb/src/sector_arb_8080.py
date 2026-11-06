@@ -344,7 +344,7 @@ class SectorArbEngine8080:
         if abs(z) < MIN_Z_ENTRY or abs(disloc) < dyn_hurdle:
             return
 
-        # REGIME A: Cross-Sectional Momentum (KER >= 0.35)
+        # REGIME A: Cross-Sectional Momentum (Strict KER >= 0.50 to avoid false breakout churn)
         if st.regime == "MOMENTUM":
             direction = "LONG_SPREAD" if z > 0 else "SHORT_SPREAD"
             logger.info(
@@ -355,7 +355,7 @@ class SectorArbEngine8080:
             st.pending_spike = None
             return
 
-        # REGIME B: Range / Exhaustion Mean-Reversion (KER < 0.35)
+        # REGIME B: Range / Exhaustion Mean-Reversion (KER < 0.50)
         if st.pending_spike is None:
             direction = "SHORT_SPREAD" if z > 0 else "LONG_SPREAD"
             st.pending_spike = PendingSpikeSetup(

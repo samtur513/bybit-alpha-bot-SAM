@@ -46,7 +46,7 @@ MIN_Z_ENTRY = 1.85                  # 1.85 sigma entry threshold (96.4% confiden
 PULLBACK_REVERSAL_CONFIRM_PCT = 0.20 # 20% confirmed retracement from spike extreme in Mean-Reversion
 MIN_SPIKE_DISLOCATION_PCT = 0.0035  # 35 bps minimum dislocation (3.5x maker/taker fee hurdle)
 STD_MULTIPLIER_HURDLE = 1.40        # Dynamic hurdle: max(MIN_SPIKE_DISLOCATION_PCT, 1.40 * spread_std)
-KER_TREND_THRESHOLD = 0.35          # Kaufman Efficiency Ratio >= 0.35: Trend/Momentum, < 0.35: Mean-Reversion
+KER_TREND_THRESHOLD = 0.50          # Kaufman Efficiency Ratio >= 0.35: Trend/Momentum, < 0.35: Mean-Reversion
 
 # Exit Parameters (2-Stage Smart Exit & Guaranteed Profit-Taking)
 TP1_Z_THRESHOLD = 0.70              # Stage 1: 50% partial TP when Z <= 0.70 in Mean-Reversion
