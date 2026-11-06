@@ -94,17 +94,40 @@ class ScalperConfigV37V4:
     max_active_symbols: int = 12
 
     # 8. Engine Parameters
+    # E1 Breakout (optional)
+    e1_depletion_threshold: float = 0.35
+    e1_max_hold_sec: float = 900.0
+    e1_max_spread_ticks: float = 2.5
+    e1_min_er_15m: float = 0.30
+    e1_min_natr_5m: float = 0.0035
+    e1_obi_threshold: float = 0.60
+    e1_tfi_threshold: float = 0.55
+    e1_volume_surge_mult: float = 2.0
+
+    # E2 Liquidity Sweeps
     e2_min_depth_pct: float = 0.0012
     e2_max_depth_atr_mult: float = 0.85
+    e2_k_abs_threshold: float = 1.6
+    e2_max_er_compression: float = 0.55
+    e2_max_risk_pct: float = 0.0060
+    e2_min_risk_pct: float = 0.0008
+    e2_max_sweep_time_sec: float = 90.0
     e2_reclaim_ticks: float = 2.0
     e2_tp1_ratio: float = 0.50
     e2_tp1_atr_mult: float = 0.60
     e2_tp2_atr_mult: float = 1.20
     e2_max_hold_sec: float = 900.0
 
+    # E3 Lead-Lag Beta Catchup
+    e3_alt_reaction_cap: float = 0.40
+    e3_btc_impulse_ret: float = 0.0009
+    e3_btc_tfi_threshold: float = 0.40
     e3_leader_delta_threshold: float = 0.0035
     e3_alt_lag_ratio: float = 0.40
     e3_min_beta: float = 0.80
+    e3_min_corr: float = 0.60
+    e3_max_spread_ticks: float = 3.0
+    e3_min_lag_spread: float = 0.0018
     e3_tp1_atr_mult: float = 0.50
     e3_tp2_atr_mult: float = 1.20
     e3_max_hold_sec: float = 600.0
