@@ -149,3 +149,47 @@ async def test_v37_v4_dynamic_breakeven_ratchet():
     # Stop loss must be ratcheted to BE + 0.05% (150.075)
     assert pos.is_breakeven_set is True
     assert pos.sl_price > 150.0
+
+
+@pytest.mark.asyncio
+async def test_v37_v4_oms_status_and_limit_fill():
+    cfg = ScalperConfigV37V4(equity_usdt=300.0)
+    meta = InstrumentMeta(symbol="NEARUSDT", tick_size=0.01, qty_step=0.1, min_qty=0.1)
+    state = SymbolMicrostructureStateV4("NEARUSDT", meta)
+    state.mid_price = 4.0
+    state.best_bid = 3.99
+    state.best_ask = 4.01
+    state.sorted_bids = [(3.99, 1000.0)]
+    state.sorted_asks = [(4.01, 1000.0)]
+
+    oms = ScalpOMSV4(cfg, {"NEARUSDT": state})
+
+    intent = SignalIntent(
+        engine_id="E2_SWEEP",
+        priority=1,
+        symbol="NEARUSDT",
+        side="Buy",
+        entry_price=3.99,
+        sl_price=3.90,
+        tp1_price=4.10,
+        tp2_price=4.20,
+        max_hold_sec=300.0,
+    )
+    ok = await oms.submit_signal(intent)
+    assert ok is True
+    assert "NEARUSDT" in oms.pending_orders
+
+    # Simulate market trade eating the queue ahead of our limit buy order
+    oms.on_market_trade(symbol="NEARUSDT", is_buy=False, price=3.99, qty=1050.0)
+
+    # Order should be filled and moved to active positions
+    assert "NEARUSDT" not in oms.pending_orders
+    assert "NEARUSDT" in oms.active_positions
+
+    st = oms.get_status()
+    assert st["port"] == 8093
+    assert st["active_positions_count"] == 1
+    assert "NEARUSDT" in st["active_positions"]
+    assert "NEARUSDT" in st["open_positions"]
+    assert st["status"] == "RUNNING"
+

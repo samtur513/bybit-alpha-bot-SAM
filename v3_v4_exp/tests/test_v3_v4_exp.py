@@ -216,3 +216,37 @@ def test_v3_v4_exp_mfe_breakeven_protection():
     assert pos.current_stop == pytest.approx(expected_stop, rel=1e-4)
     assert engine.trackers["SOLUSDT"].is_mfe_be_locked is True
     assert engine.fsm_stage_stats["STAGE1_MFE_BE"] == 1
+
+
+def test_paper_trader_v3_v4_init_and_status():
+    from unittest.mock import MagicMock, patch
+    from v3_v4_exp.src.paper_trader_v3_v4 import PaperTraderV3V4Exp
+
+    with patch("v3_v4_exp.src.paper_trader_v3_v4.BybitClient") as mock_client:
+        mock_instance = mock_client.return_value
+        mock_instance.get_instruments_info.return_value = [
+            {
+                "symbol": "BTCUSDT",
+                "lotSizeFilter": {"qtyStep": "0.001", "minOrderQty": "0.001", "maxOrderQty": "100", "minNotionalValue": "100.0"},
+                "priceFilter": {"tickSize": "0.10"},
+            },
+            {
+                "symbol": "SOLUSDT",
+                "lotSizeFilter": {"qtyStep": "0.01", "minOrderQty": "0.01", "maxOrderQty": "1000", "minNotionalValue": "5.0"},
+                "priceFilter": {"tickSize": "0.01"},
+            },
+        ]
+        daemon = PaperTraderV3V4Exp(symbols=["BTCUSDT", "SOLUSDT"])
+
+    assert daemon.engine.initial_capital == Decimal("300.0")
+    assert daemon.news_core is not None
+    assert daemon.instrument_rules["BTCUSDT"]["minNotional"] == Decimal("100.0")
+    assert daemon.instrument_rules["SOLUSDT"]["minNotional"] == Decimal("5.0")
+
+    st = daemon.get_status()
+    assert st["port"] == 8082
+    assert st["status"] == "RUNNING"
+    assert st["equity"] == 300.0
+    assert "BTCUSDT" in st["monitored_symbols"]
+    assert "SOLUSDT" in st["monitored_symbols"]
+

@@ -101,8 +101,12 @@ class PaperTraderV3V4Exp:
         if not initial_syms:
             initial_syms = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "NEARUSDT", "SUIUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT"]
 
-        self.monitored_symbols = list(set(initial_syms) | {"BTCUSDT"})
-        self._load_instrument_rules()
+        if "BTCUSDT" not in initial_syms:
+            initial_syms.insert(0, "BTCUSDT")
+
+        self.symbols = list(dict.fromkeys(initial_syms))
+        self.monitored_symbols = self.symbols
+        self._load_instrument_specs()
 
         # Engine initialization
         self.engine = CoreV3V4ExpEngine(
@@ -116,58 +120,59 @@ class PaperTraderV3V4Exp:
             bar_interval_ms=self.bar_interval_ms,
         )
 
-        # News Core Shield
-        news_cfg = NewsConfig(
-            min_urgency=2,
-            regime_guard_enabled=True,
-            emergency_eject_enabled=True,
-            auto_resume_delay_seconds=300,
-        )
-        self.news_core = NewsCore(news_cfg)
+        # Buffers and streaming state
+        self.candle_buffers: Dict[str, pd.DataFrame] = {}
+        self.last_processed_bar_ts: Dict[str, int] = {s: 0 for s in self.symbols}
+        self.prices: Dict[str, Decimal] = {}
+        self.price_times: Dict[str, float] = {}
+        self.batches: Dict[int, Dict[str, Any]] = {}
+        self.ready = False
+        self.btc_trend_status = "NEUTRAL"
 
-        # Market Stream
-        self.stream = MarketStream(
-            symbols=self.monitored_symbols,
-            timeframe=TIMEFRAME,
-            candle_interval=CANDLE_INTERVAL,
-        )
+        # News Core Defensive Shield v1.2
+        cfg = NewsConfig.defensive_only()
+        self.news_core = NewsCore(cfg)
 
         self.running = False
         self.thread: Optional[threading.Thread] = None
         self._load_persisted_state()
+        self.stream = MarketStream(self.symbols, interval=CANDLE_INTERVAL)
 
-    def _load_instrument_rules(self) -> None:
-        """Fetches instrument rules for monitored coins."""
+    def _load_instrument_specs(self) -> None:
+        """Fetches instrument rules for linear perpetual contracts."""
         try:
-            for s in self.monitored_symbols:
-                info = self.client.get_instrument_info(category="linear", symbol=s)
-                if info and "result" in info and "list" in info["result"] and info["result"]["list"]:
-                    item = info["result"]["list"][0]
-                    lot = item.get("lotSizeFilter", {})
-                    price = item.get("priceFilter", {})
-                    min_notional = Decimal(str(lot.get("minNotionalValue", "5.0") or "5.0"))
-                    if s == "BTCUSDT":
-                        min_notional = Decimal("100.0")
+            info = self.client.get_instruments_info(category="linear")
+            for item in info:
+                s = item.get("symbol")
+                if not s or s not in self.symbols:
+                    continue
+                lot = item.get("lotSizeFilter", {})
+                price = item.get("priceFilter", {})
+                min_n = Decimal(str(lot.get("minNotionalValue", "5.0") or "5.0"))
+                if s == "BTCUSDT":
+                    min_n = Decimal("100.0")
 
-                    self.instrument_rules[s] = {
-                        "qtyStep": Decimal(str(lot.get("qtyStep", "0.001"))),
-                        "minOrderQty": Decimal(str(lot.get("minOrderQty", "0.001"))),
-                        "maxOrderQty": Decimal(str(lot.get("maxOrderQty", "1000000"))),
-                        "tickSize": Decimal(str(price.get("tickSize", "0.01"))),
-                        "minNotional": min_notional,
-                    }
+                self.instrument_rules[s] = {
+                    "qtyStep": Decimal(str(lot.get("qtyStep", "0.001"))),
+                    "minOrderQty": Decimal(str(lot.get("minOrderQty", "0.001"))),
+                    "maxOrderQty": Decimal(str(lot.get("maxOrderQty", "1000000"))),
+                    "tickSize": Decimal(str(price.get("tickSize", "0.01"))),
+                    "minNotional": min_n,
+                }
+            logger.info(f"Loaded contract specifications for {len(self.instrument_rules)} symbols.")
         except Exception as e:
             logger.warning(f"Error fetching instrument rules: {e}")
-            for s in self.monitored_symbols:
-                if s not in self.instrument_rules:
-                    min_n = Decimal("100.0") if s == "BTCUSDT" else Decimal("5.0")
-                    self.instrument_rules[s] = {
-                        "qtyStep": Decimal("0.001"),
-                        "minOrderQty": Decimal("0.001"),
-                        "maxOrderQty": Decimal("1000000"),
-                        "tickSize": Decimal("0.01"),
-                        "minNotional": min_n,
-                    }
+
+        for s in self.symbols:
+            if s not in self.instrument_rules:
+                min_n = Decimal("100.0") if s == "BTCUSDT" else Decimal("5.0")
+                self.instrument_rules[s] = {
+                    "qtyStep": Decimal("0.001"),
+                    "minOrderQty": Decimal("0.001"),
+                    "maxOrderQty": Decimal("1000000"),
+                    "tickSize": Decimal("0.01"),
+                    "minNotional": min_n,
+                }
 
     def _load_persisted_state(self) -> None:
         if not PERSISTENT_STATE_FILE.exists():
@@ -191,128 +196,168 @@ class PaperTraderV3V4Exp:
                 "max_drawdown_pct": str(self.engine.max_drawdown_pct),
                 "closed_trades_count": len(self.engine.closed_trades),
                 "open_positions_count": len(self.engine.open_positions),
+                "fsm_stage_stats": self.engine.fsm_stage_stats,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
             atomic_json(PERSISTENT_STATE_FILE, data)
         except Exception as e:
             logger.warning(f"State persistence failed: {e}")
 
-    def start(self) -> None:
-        self.running = True
-        self.stream.start()
-        self.thread = threading.Thread(target=self._run_loop, name="PaperTraderV3V4ExpLoop", daemon=True)
-        self.thread.start()
-        logger.info(f"PaperTraderV3V4Exp daemon started on port {PORT}.")
-
-    def stop(self) -> None:
-        self.running = False
-        self.stream.stop()
-        if self.thread:
-            self.thread.join(timeout=3.0)
-        self._persist_state()
-        logger.info("PaperTraderV3V4Exp daemon stopped.")
-
-    def _run_loop(self) -> None:
-        """Main evaluation loop."""
-        last_eval_hour = -1
-        while self.running:
-            try:
-                now = datetime.now(timezone.utc)
-                # Check 1h bar boundary
-                if now.minute == 0 and now.second < 15 and now.hour != last_eval_hour:
-                    last_eval_hour = now.hour
-                    self._evaluate_closed_bar()
-                self._update_live_status()
-            except Exception as e:
-                logger.error(f"Error in paper trader loop: {e}", exc_info=True)
-            time.sleep(2.0)
-
-    def _evaluate_closed_bar(self) -> None:
+    def get_live_prices(self) -> Dict[str, Decimal]:
+        """Returns snapshot of current mark prices."""
         with self.lock:
-            # Build bars dict with indicators
-            bars: Dict[str, Dict[str, Any]] = {}
-            next_prices: Dict[str, Decimal] = {}
+            return dict(self.prices)
 
-            for sym in self.monitored_symbols:
-                candles = self.stream.get_candles(sym, limit=60)
-                if len(candles) < 35:
-                    continue
-                df = pd.DataFrame(candles)
-                for col in ["open", "high", "low", "close", "volume"]:
-                    df[col] = df[col].astype(float)
+    def _compute_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Computes Donchian Channel, ATR, EMAs, and ADX for 1h candles with Zero-Lookahead PIT."""
+        res = df.copy()
+        high = res["high"]
+        low = res["low"]
+        close = res["close"]
 
-                close = df["close"].iloc[-2]  # closed bar
-                high = df["high"].iloc[-2]
-                low = df["low"].iloc[-2]
-                opening = df["open"].iloc[-2]
+        # Zero-lookahead Donchian channel using shift(1)
+        res["upper"] = high.rolling(DONCHIAN_WINDOW).max().shift(1)
+        res["lower"] = low.rolling(DONCHIAN_WINDOW).min().shift(1)
 
-                # Donchian channel
-                upper = df["high"].shift(1).rolling(DONCHIAN_WINDOW).max().iloc[-2]
-                lower = df["low"].shift(1).rolling(DONCHIAN_WINDOW).min().iloc[-2]
-                ema50 = df["close"].ewm(span=50, adjust=False).mean().iloc[-2]
-                ema200 = df["close"].ewm(span=200, adjust=False).mean().iloc[-2]
+        # 20-bar extremes for trailing / Chandelier stops
+        res["highest_20"] = high.rolling(DONCHIAN_WINDOW).max().shift(1)
+        res["lowest_20"] = low.rolling(DONCHIAN_WINDOW).min().shift(1)
+        res["prev_high"] = high.shift(1)
+        res["prev_low"] = low.shift(1)
 
-                tr = np.maximum(df["high"] - df["low"], np.maximum(abs(df["high"] - df["close"].shift(1)), abs(df["low"] - df["close"].shift(1))))
-                atr = tr.rolling(14).mean().iloc[-2]
-                adx = calculate_adx(df["high"], df["low"], df["close"], window=14).iloc[-2]
+        # EMAs
+        res["ema_fast"] = close.ewm(span=50, adjust=False).mean()
+        res["ema_slow"] = close.ewm(span=200, adjust=False).mean()
 
-                bars[sym] = {
-                    "open": opening,
-                    "high": high,
-                    "low": low,
-                    "close": close,
-                    "upper": upper,
-                    "lower": lower,
-                    "ema_fast": ema50,
-                    "ema_slow": ema200,
-                    "atr": atr if np.isfinite(atr) and atr > 0 else (close * 0.02),
-                    "volume": df["volume"].iloc[-2],
-                    "volume_sma": df["volume"].rolling(20).mean().iloc[-2],
-                    "adx": adx if np.isfinite(adx) else 20.0,
-                    "prev_high": df["high"].iloc[-3],
-                    "prev_low": df["low"].iloc[-3],
-                    "highest_20": df["high"].rolling(20).max().iloc[-2],
-                    "lowest_20": df["low"].rolling(20).min().iloc[-2],
-                }
-                next_prices[sym] = Decimal(str(df["close"].iloc[-1]))
+        # ATR
+        tr1 = high - low
+        tr2 = (high - close.shift(1)).abs()
+        tr3 = (low - close.shift(1)).abs()
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        res["atr"] = tr.rolling(14).mean()
 
-            # Trend filters
-            btc_bullish = True
-            btc_bearish = True
-            if "BTCUSDT" in bars:
-                b_btc = bars["BTCUSDT"]
-                btc_bullish = b_btc["close"] > b_btc["ema_fast"] > b_btc["ema_slow"]
-                btc_bearish = b_btc["close"] < b_btc["ema_fast"] < b_btc["ema_slow"]
+        # Volume SMA
+        res["volume_sma"] = res["volume"].rolling(20).mean()
 
-            # Process bar event
-            ts = int(time.time() * 1000)
-            self.engine.process_bar_event(
-                timestamp=ts,
-                bars=bars,
-                next_open_prices=next_prices,
-                manage_positions=True,
-                btc_bullish=btc_bullish,
-                btc_bearish=btc_bearish,
-            )
-            self._persist_state()
-
-    def _update_live_status(self) -> None:
+        # ADX
         try:
-            status = self.get_status()
-            atomic_json(LIVE_STATUS_FILE, status)
-        except Exception as e:
-            logger.debug(f"Live status export failed: {e}")
+            res["adx"] = calculate_adx(high, low, close, period=14)
+        except Exception:
+            res["adx"] = 25.0
+
+        return res
+
+    def _fetch_history(self) -> Dict[str, pd.DataFrame]:
+        """Fetches historical 1h klines for technical indicators."""
+        buffers = {}
+        now = int(time.time() * 1000)
+        try:
+            now = self.client.get_server_time()
+        except Exception:
+            pass
+
+        for sym in self.symbols:
+            try:
+                raw = self.client.get_kline(sym, interval=CANDLE_INTERVAL, limit=100)
+                records = [
+                    dict(
+                        timestamp=int(k[0]),
+                        **{name: float(k[i]) for i, name in enumerate(("open", "high", "low", "close", "volume", "turnover"), 1)},
+                    )
+                    for k in raw
+                    if int(k[0]) + self.bar_interval_ms <= now
+                ]
+                if not records:
+                    continue
+                df = (
+                    pd.DataFrame(records)
+                    .sort_values("timestamp")
+                    .drop_duplicates("timestamp")
+                    .reset_index(drop=True)
+                )
+                if len(df) >= min(DONCHIAN_WINDOW, 20):
+                    df = self._compute_indicators(df)
+                    buffers[sym] = df
+            except Exception as e:
+                logger.warning(f"Error fetching history for {sym}: {e}")
+        return buffers
+
+    def _on_bar(self, sym: str, bar: Dict[str, Any]) -> None:
+        """Handles confirmed 1h bar from Bybit WebSocket."""
+        ts = int(bar.get("start", 0))
+        previous = self.last_processed_bar_ts.get(sym, 0)
+        if ts <= previous:
+            return
+        record = dict(
+            timestamp=ts,
+            **{k: float(bar[k]) for k in ("open", "high", "low", "close", "volume", "turnover") if k in bar},
+        )
+        df = self.candle_buffers.get(sym)
+        if df is None:
+            return
+        df = pd.concat(
+            [df[["timestamp", "open", "high", "low", "close", "volume", "turnover"]], pd.DataFrame([record])],
+            ignore_index=True,
+        ).tail(200)
+        df = self._compute_indicators(df)
+        self.candle_buffers[sym] = df
+        self.last_processed_bar_ts[sym] = ts
+        self.batches.setdefault(ts, {})[sym] = df.iloc[-1].to_dict()
+
+    def _signals(self) -> None:
+        """Evaluates signals on closed 1h bars."""
+        prices = self.get_live_prices()
+        now_ms = int(time.time() * 1000)
+        for ts, bars in list(self.batches.items()):
+            time_since_close = now_ms - (ts + self.bar_interval_ms)
+            if time_since_close > 180000:
+                del self.batches[ts]
+                continue
+
+            has_all_bars = set(bars) == set(self.symbols)
+            grace_period_expired = time_since_close >= 30000
+            has_quorum = ("BTCUSDT" in bars) and (len(bars) >= max(3, int(len(self.symbols) * 0.70)))
+
+            if self.ready and (has_all_bars or (grace_period_expired and has_quorum)):
+                btc_bar = bars.get("BTCUSDT")
+                btc_bullish = True
+                btc_bearish = True
+                if btc_bar:
+                    c = float(btc_bar["close"])
+                    ef = float(btc_bar.get("ema_fast", 0))
+                    es = float(btc_bar.get("ema_slow", 0))
+                    btc_bullish = ef > es and c > ef
+                    btc_bearish = ef < es and c < ef
+                    self.btc_trend_status = "BULLISH" if btc_bullish else ("BEARISH" if btc_bearish else "NEUTRAL")
+
+                blocked_symbols = set()
+                nc = getattr(self, "news_core", None)
+                if nc:
+                    bar_dt = datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
+                    for s in self.symbols:
+                        st = nc.get_status(s, bar_dt)
+                        if st.get("block_new_entries"):
+                            blocked_symbols.add(s)
+
+                open_prices = {s: prices.get(s, Decimal(str(b["close"]))) for s, b in bars.items()}
+
+                self.engine.process_bar_event(
+                    timestamp=ts,
+                    bars=bars,
+                    next_open_prices=open_prices,
+                    manage_positions=True,
+                    btc_bullish=btc_bullish,
+                    btc_bearish=btc_bearish,
+                    blocked_symbols=blocked_symbols,
+                )
+                del self.batches[ts]
 
     def get_status(self) -> Dict[str, Any]:
         with self.lock:
-            # Build current mark prices
-            current_prices = {}
-            for s in self.monitored_symbols:
-                ticker = self.stream.get_ticker(s)
-                if ticker and "last_price" in ticker:
-                    current_prices[s] = Decimal(str(ticker["last_price"]))
-
+            current_prices = dict(self.prices)
             eq = self.engine.get_equity(current_prices)
+            peak = self.engine.peak_equity
+            dd = float(self.engine.max_drawdown_pct)
             net_pnl = eq - self.engine.initial_capital
             pnl_pct = (net_pnl / self.engine.initial_capital) * Decimal("100")
 
@@ -323,20 +368,22 @@ class PaperTraderV3V4Exp:
                     u_pnl = pos.current_qty * (mark - pos.entry_price)
                 else:
                     u_pnl = pos.current_qty * (pos.entry_price - mark)
+                u_pnl -= pos.current_qty * mark * self.taker_fee
 
                 tracker_item = self.engine.trackers.get(s)
                 stage_label = tracker_item.stage_name if tracker_item else "Stage 0"
-                tp_maker = str(tracker_item.target_tp_maker) if tracker_item else "0.0"
+                tp_maker = float(tracker_item.target_tp_maker) if tracker_item else 0.0
                 dyn_ratio = tracker_item.dynamic_tp_ratio if tracker_item else STAGE2_DEFAULT_CLOSE_PCT
 
                 positions_dict[s] = {
+                    "symbol": s,
                     "direction": "LONG" if pos.direction == 1 else "SHORT",
                     "qty": float(pos.current_qty),
                     "initial_qty": float(pos.initial_qty),
                     "entry_price": float(pos.entry_price),
                     "current_price": float(mark),
                     "current_stop": float(pos.current_stop),
-                    "target_tp_maker": float(tp_maker),
+                    "target_tp_maker": round(tp_maker, 4),
                     "dynamic_tp_ratio": float(dyn_ratio),
                     "unrealized_pnl": round(float(u_pnl), 2),
                     "bars_held": pos.bars_held,
@@ -345,16 +392,18 @@ class PaperTraderV3V4Exp:
                 }
 
             trades_list = []
-            for t in self.engine.closed_trades[-30:]:
+            for t in reversed(self.engine.closed_trades[-30:]):
                 trades_list.append({
                     "symbol": t.symbol,
                     "side": "LONG" if t.direction == 1 else "SHORT",
+                    "direction": "LONG" if t.direction == 1 else "SHORT",
                     "entry_price": float(t.entry_price),
                     "exit_price": float(t.exit_price),
                     "qty": float(t.final_qty),
                     "net_pnl": round(float(t.net_pnl), 2),
                     "exit_reason": t.exit_reason,
                     "exit_time": t.exit_time,
+                    "hold_hours": round(getattr(t, "hold_hours", 0.0), 1),
                 })
 
             wr = 0.0
@@ -370,26 +419,118 @@ class PaperTraderV3V4Exp:
                 "port": PORT,
                 "mode": "PAPER_TRADING",
                 "status": "RUNNING" if not self.engine.trading_halted else "CIRCUIT_BREAKER_HALT",
-                "stream_ready": True,
+                "stream_ready": self.ready,
                 "bybit_ws_connected": True,
-                "monitored_symbols_count": len(self.monitored_symbols),
-                "monitored_symbols": self.monitored_symbols,
+                "monitored_symbols_count": len(self.symbols),
+                "monitored_symbols": self.symbols,
+                "btc_trend_status": self.btc_trend_status,
                 "initial_capital": float(self.engine.initial_capital),
                 "capital": round(float(self.engine.realized_equity), 2),
                 "equity": round(float(eq), 2),
+                "peak_equity": round(float(peak), 2),
                 "realized_pnl": round(float(self.engine.realized_equity - self.engine.initial_capital), 2),
                 "unrealized_pnl": round(float(eq - self.engine.realized_equity), 2),
                 "net_pnl": round(float(net_pnl), 2),
+                "total_net_pnl": round(float(net_pnl), 2),
                 "pnl_pct": round(float(pnl_pct), 2),
                 "max_drawdown_pct": round(float(self.engine.max_drawdown_pct), 2),
+                "drawdown_pct": round(float(self.engine.max_drawdown_pct), 2),
                 "portfolio_heat_pct": round(heat * 100, 2),
                 "win_rate": wr,
+                "win_rate_pct": wr,
                 "trades_count": len(self.engine.closed_trades),
+                "closed_trades_count": len(self.engine.closed_trades),
+                "open_positions_count": len(positions_dict),
                 "open_positions": positions_dict,
                 "closed_trades": trades_list,
                 "fsm_stage_stats": self.engine.fsm_stage_stats,
                 "news_defense_active": True,
                 "news_shield": True,
-                "news_cached_count": self.news_core.cache_count,
+                "news_cached_count": getattr(self.news_core, "cache_count", 0),
                 "timeframe": "1h",
+                "last_update": datetime.now(timezone.utc).isoformat(),
             }
+
+    def start(self) -> None:
+        """Starts background streaming and trading loop."""
+        self.running = True
+        logger.info(f"Starting {VERSION_NAME} daemon on Port {PORT}...")
+
+        def init_and_loop():
+            try:
+                self.candle_buffers = self._fetch_history()
+                for sym, df in self.candle_buffers.items():
+                    if len(df) > 0:
+                        self.last_processed_bar_ts[sym] = int(df.timestamp.iloc[-1])
+                        c = Decimal(str(df.close.iloc[-1]))
+                        self.prices[sym] = c
+                self.ready = True
+                btc_df = self.candle_buffers.get("BTCUSDT")
+                if btc_df is not None and len(btc_df) > 0:
+                    last = btc_df.iloc[-1]
+                    c = float(last["close"])
+                    ef = float(last.get("ema_fast", 0))
+                    es = float(last.get("ema_slow", 0))
+                    if ef > es and c > ef:
+                        self.btc_trend_status = "BULLISH"
+                    elif ef < es and c < ef:
+                        self.btc_trend_status = "BEARISH"
+                    else:
+                        self.btc_trend_status = "NEUTRAL"
+                logger.info(f"Loaded historical candles for {len(self.candle_buffers)} symbols. BTC: {self.btc_trend_status}")
+            except Exception as e:
+                logger.warning(f"History load warning: {e}")
+                self.ready = True
+
+            self.stream.start()
+
+            last_export = 0.0
+            while self.running:
+                try:
+                    try:
+                        kind, sym, ts, data, received = self.stream.events.get(timeout=0.2)
+                    except queue.Empty:
+                        kind = None
+
+                    if kind == "reset":
+                        self.ready = False
+                        new_buffers = self._fetch_history()
+                        with self.lock:
+                            self.candle_buffers = new_buffers
+                            self.ready = True
+                    elif kind:
+                        with self.lock:
+                            if kind == "price":
+                                price = Decimal(str(data))
+                                if price.is_finite() and price > 0:
+                                    self.prices[sym] = price
+                                    self.price_times[sym] = received
+                                    self.engine._observe(self.prices)
+                            elif kind == "bar":
+                                self._on_bar(sym, data)
+
+                    with self.lock:
+                        self._signals()
+
+                    now = time.time()
+                    if now - last_export >= 2.0:
+                        last_export = now
+                        status = self.get_status()
+                        atomic_json(LIVE_STATUS_FILE, status)
+                        self._persist_state()
+
+                except Exception as e:
+                    logger.debug(f"Stream error: {e}")
+                    time.sleep(0.5)
+
+        self.thread = threading.Thread(target=init_and_loop, name="PaperTraderV3V4ExpLoop", daemon=True)
+        self.thread.start()
+        logger.info(f"PaperTraderV3V4Exp daemon running on port {PORT}.")
+
+    def stop(self) -> None:
+        self.running = False
+        self.stream.stop()
+        if self.thread:
+            self.thread.join(timeout=3.0)
+        self._persist_state()
+        logger.info("PaperTraderV3V4Exp daemon stopped.")

@@ -604,7 +604,10 @@ class ReusableThreadingTCPServer(socketserver.ThreadingTCPServer):
 
 
 def run_scalper_async():
-    asyncio.run(core_scalper_v4.main())
+    try:
+        asyncio.run(core_scalper_v4.main())
+    except Exception as e:
+        logger.error(f"Fatal error in scalper async loop: {e}", exc_info=True)
 
 
 def run_server():

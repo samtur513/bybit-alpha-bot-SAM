@@ -1,6 +1,7 @@
 """
 v3.7-v4-exp Bybit NewDragon Scalp Core Daemon.
-Integrates UniversalRisk minNotional Guard and 2-Stage Z_OFI Order Flow Imbalance Fast Scratch.
+Integrates UniversalRisk minNotional Guard, 2-Stage Z_OFI Order Flow Imbalance Fast Scratch,
+KER Chop Gate, and High-Fidelity L2 Queue Simulation.
 """
 
 import asyncio
@@ -92,6 +93,18 @@ async def position_monitor_task(oms: ScalpOMSV4) -> None:
         await asyncio.sleep(0.025)  # 25ms HFT evaluation frequency
 
 
+async def periodic_metrics_update_task(screener: UniverseScreener, states: Dict[str, SymbolMicrostructureStateV4]) -> None:
+    """Refreshes swing levels and technical metrics periodically without interrupting stream."""
+    while True:
+        try:
+            await asyncio.sleep(900.0)
+            metas = {sym: st.meta for sym, st in states.items()}
+            await screener.refresh_instrument_metrics(metas)
+            logger.info(f"[METRICS_REFRESH] Refreshed metrics for {len(metas)} symbols.")
+        except Exception as e:
+            logger.warning(f"Error in metrics refresh task: {e}")
+
+
 async def run_public_stream(
     cfg: ScalperConfigV37V4,
     states: Dict[str, SymbolMicrostructureStateV4],
@@ -124,31 +137,63 @@ async def run_public_stream(
 
                 logger.info(f"Subscribed to {len(topics)} topics across {len(chunks)} chunks.")
 
-                async for raw_msg in ws:
-                    msg = orjson.loads(raw_msg)
-                    if "topic" not in msg:
-                        continue
-                    topic = msg["topic"]
-                    data = msg.get("data", {})
-                    ts_ms = msg.get("ts", int(time.time() * 1000))
+                # Keepalive ping task
+                async def ping_bybit():
+                    while True:
+                        await asyncio.sleep(20.0)
+                        try:
+                            await ws.send(orjson.dumps({"op": "ping"}).decode("utf-8"))
+                        except Exception:
+                            break
 
-                    if topic.startswith("orderbook.50."):
-                        sym = topic.split(".")[-1]
+                ping_task = asyncio.create_task(ping_bybit())
+                try:
+                    async for raw_msg in ws:
+                        msg = orjson.loads(raw_msg)
+                        topic = msg.get("topic", "")
+                        if not topic:
+                            continue
+
+                        now_ms = int(msg.get("ts", time.time() * 1000))
+                        parts = topic.split(".")
+                        sym = parts[-1]
                         st = states.get(sym)
-                        if st:
-                            st.apply_orderbook(msg.get("type", "delta"), data, ts_ms)
-                            # Evaluate signals on orderbook updates
-                            btc_st = states.get(btc_sym)
-                            intent = evaluator.evaluate_all(st, btc_st, ts_ms)
+                        if not st:
+                            continue
+
+                        if topic.startswith("orderbook"):
+                            st.apply_orderbook(msg.get("type", "delta"), msg.get("data", {}), now_ms)
+                        elif topic.startswith("publicTrade"):
+                            trade_data = msg.get("data", [])
+                            st.apply_trades(trade_data)
+                            for tr in trade_data:
+                                is_buy = tr.get("S") == "Buy" or tr.get("side") == "Buy"
+                                price = float(tr.get("p", tr.get("price", 0.0)))
+                                qty = float(tr.get("v", tr.get("size", 0.0)))
+                                oms.on_market_trade(sym, is_buy, price, qty)
+
+                        btc_state = states.get(btc_sym)
+                        if not btc_state:
+                            continue
+
+                        # Signal Evaluation:
+                        # 1. If BTC updated and E3 Lead-Lag enabled: check all altcoins
+                        if sym == btc_sym:
+                            if getattr(cfg, "enable_e3_leadlag", True):
+                                for alt_sym, alt_st in states.items():
+                                    if alt_sym == btc_sym:
+                                        continue
+                                    sig3 = evaluator.evaluate_engine3_leadlag_arbitrage(alt_st, btc_state, now_ms)
+                                    if sig3:
+                                        await oms.submit_signal(sig3)
+                        else:
+                            # 2. Altcoin updated: evaluate E2 and E3 with KER chop filter
+                            intent = evaluator.evaluate_all(st, btc_state, now_ms)
                             if intent:
-                                await oms.on_signal(intent)
+                                await oms.submit_signal(intent)
 
-                    elif topic.startswith("publicTrade."):
-                        sym = topic.split(".")[-1]
-                        st = states.get(sym)
-                        if st and isinstance(data, list):
-                            for tr in data:
-                                st.apply_trade(tr)
+                finally:
+                    ping_task.cancel()
 
         except (websockets.ConnectionClosed, Exception) as e:
             logger.warning(f"WebSocket public connection lost: {e}. Reconnecting in 3s...")
@@ -159,25 +204,39 @@ async def main() -> None:
     global GLOBAL_OMS
     cfg = ScalperConfigV37V4()
 
-    screener = UniverseScreener(
-        min_turnover_24h_usdt=10_000_000.0,
-        max_symbols=cfg.max_active_symbols,
-        blacklist=["AKEUSDT", "TRUMPUSDT", "ELSAUSDT", "WLDUSDT"],
+    logger.info(
+        f"Starting BybitScalpCore v3.7-v4 | "
+        f"Maker={cfg.fee_maker*100:.4f}%, Taker={cfg.fee_taker*100:.4f}% | "
+        f"Mode={'PAPER_TRADING' if cfg.paper_trading else 'LIVE_REAL'}"
     )
-    symbols = screener.get_top_universe()
-    if cfg.leader_symbol not in symbols:
-        symbols.insert(0, cfg.leader_symbol)
 
-    logger.info(f"Initialized v3.7-v4 Universe with {len(symbols)} coins: {symbols}")
+    screener = UniverseScreener(cfg)
+    try:
+        metas = await screener.build_active_universe()
+    except Exception as e:
+        logger.warning(f"Screening error: {e}")
+        metas = {}
+
+    if not metas:
+        fallback_syms = [cfg.leader_symbol, "ETHUSDT", "SOLUSDT", "NEARUSDT", "SUIUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT"]
+        metas = {}
+        for s in fallback_syms:
+            metas[s] = InstrumentMeta(
+                symbol=s,
+                tick_size=0.1 if "BTC" in s else 0.01,
+                qty_step=0.001,
+                min_qty=0.001,
+                natr_5m=0.005,
+                atr_5m=1.0,
+                atr_15m=1.75,
+                hurst_15m=0.5,
+                er_15m=0.3,
+            )
+
+    logger.info(f"Initialized v3.7-v4 Universe with {len(metas)} coins: {list(metas.keys())}")
 
     states: Dict[str, SymbolMicrostructureStateV4] = {}
-    for sym in symbols:
-        meta = InstrumentMeta(
-            symbol=sym,
-            tick_size=0.01 if "BTC" not in sym else 0.1,
-            qty_step=0.001 if "BTC" not in sym else 0.001,
-            min_qty=0.001,
-        )
+    for sym, meta in metas.items():
         states[sym] = SymbolMicrostructureStateV4(sym, meta)
 
     evaluator = ScalpEnginesV4(cfg)
@@ -188,6 +247,7 @@ async def main() -> None:
         asyncio.create_task(position_monitor_task(oms)),
         asyncio.create_task(status_export_task(oms)),
         asyncio.create_task(gc_guardian_task(oms)),
+        asyncio.create_task(periodic_metrics_update_task(screener, states)),
         asyncio.create_task(run_public_stream(cfg, states, evaluator, oms)),
     ]
 

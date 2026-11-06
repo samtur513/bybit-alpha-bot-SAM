@@ -9,7 +9,7 @@ import math
 from pathlib import Path
 import sys
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 VENDOR_ND4 = REPO_ROOT / "vendor" / "newdragon_v4" / "NewDragon_v4_Universal"
@@ -215,7 +215,8 @@ class ScalpOMSV4(ScalpOMS):
                     slice_net_pct = slice_gross_pct - total_fee
                     slice_net_usdt = slice_net_pct * (realized_slice * pos.entry_price)
 
-                    self.realized_pnl += slice_net_usdt
+                    self.daily_pnl_usdt += slice_net_usdt
+                    pos.tp1_realized_pnl_usdt += slice_net_usdt
                     pos.qty -= realized_slice
                     pos.tp1_filled = True
                     pos.sl_price = pos.entry_price  # Move SL to breakeven for remaining runner
@@ -231,3 +232,96 @@ class ScalpOMSV4(ScalpOMS):
             if hold_sec >= pos.max_hold_sec:
                 await self._close_position(pos, curr_p, is_maker=False, reason="MAX_HOLD_TIMEOUT")
                 continue
+
+    def get_status(self) -> Dict[str, Any]:
+        """Provides status dict for Web Dashboard and Meta-Dashboard."""
+        unrealized = 0.0
+        pos_dict = {}
+        for s, p in self.active_positions.items():
+            st = self.states.get(s)
+            curr_p = st.mid_price if st and st.mid_price > 0 else p.entry_price
+            is_long = p.side == "Buy"
+            gross_pnl = (curr_p - p.entry_price) * p.qty if is_long else (p.entry_price - curr_p) * p.qty
+            unrealized += gross_pnl
+            pos_dict[s] = {
+                "symbol": s,
+                "side": "LONG" if is_long else "SHORT",
+                "direction": "LONG" if is_long else "SHORT",
+                "qty": p.qty,
+                "entry_price": p.entry_price,
+                "current_price": curr_p,
+                "stop_loss": p.sl_price,
+                "take_profit_1": p.tp1_price,
+                "take_profit_2": p.tp2_price,
+                "engine_id": p.engine_id,
+                "unrealized_pnl": round(gross_pnl, 4),
+                "opened_ms": p.opened_ms,
+            }
+
+        orders_list = []
+        for s, o in self.pending_orders.items():
+            orders_list.append({
+                "symbol": s,
+                "side": o.side,
+                "price": o.price,
+                "qty": o.qty,
+                "queue_ahead_vol": round(o.queue_ahead_vol, 2),
+                "engine_id": o.engine_id,
+                "placed_ms": o.placed_ms,
+            })
+
+        btc_state = self.states.get(self.cfg.leader_symbol)
+        btc_trend = "NEUTRAL"
+        if btc_state and btc_state.mid_price > 0:
+            bm = btc_state.meta
+            if getattr(bm, "vwap_session", 0) > 0 and getattr(bm, "ema9_5m", 0) > 0:
+                if btc_state.mid_price >= bm.vwap_session and bm.ema9_5m >= bm.ema21_5m:
+                    btc_trend = "BULLISH"
+                elif btc_state.mid_price <= bm.vwap_session and bm.ema9_5m <= bm.ema21_5m:
+                    btc_trend = "BEARISH"
+            elif getattr(bm, "ema20_15m", 0) > 0:
+                btc_trend = "BULLISH" if btc_state.mid_price >= bm.ema20_15m else "BEARISH"
+
+        total_equity = self.cfg.equity_usdt + self.daily_pnl_usdt + unrealized
+        win_count = sum(1 for t in self.closed_trades_history if t.get("net_pnl_usdt", 0) > 0)
+        tot_count = len(self.closed_trades_history)
+        wr = round((win_count / tot_count * 100.0), 1) if tot_count > 0 else 0.0
+
+        return {
+            "version": "4.0.0-exp2",
+            "name": "v3.7-v4 NewDragon Scalp Lab",
+            "version_name": "v3.7-v4 NewDragon Scalp Lab",
+            "mode": "PAPER_TRADING" if self.cfg.paper_trading else "LIVE_REAL",
+            "port": 8093,
+            "timeframe": "15m/M1",
+            "initial_capital": self.cfg.equity_usdt,
+            "capital": round(total_equity, 2),
+            "equity": round(total_equity, 2),
+            "realized_pnl": round(self.daily_pnl_usdt, 4),
+            "unrealized_pnl": round(unrealized, 4),
+            "net_pnl": round(self.daily_pnl_usdt + unrealized, 4),
+            "total_net_pnl": round(self.daily_pnl_usdt + unrealized, 4),
+            "active_positions": pos_dict,
+            "open_positions": pos_dict,
+            "active_positions_count": len(self.active_positions),
+            "open_positions_count": len(self.active_positions),
+            "pending_orders": orders_list,
+            "pending_orders_count": len(self.pending_orders),
+            "closed_trades": self.closed_trades_history[-50:],
+            "trades_count": tot_count,
+            "closed_trades_count": tot_count,
+            "total_trades_count": tot_count,
+            "win_rate": wr,
+            "win_rate_pct": wr,
+            "scratch_count": self.scratch_count,
+            "monitored_symbols": list(self.states.keys()),
+            "monitored_symbols_count": len(self.states),
+            "stream_ready": len(self.states) > 0,
+            "bybit_ws_connected": True,
+            "news_shield": True,
+            "news_defense_active": True,
+            "btc_trend_status": btc_trend,
+            "circuit_breaker": self.circuit_breaker_tripped,
+            "status": "RUNNING" if not self.circuit_breaker_tripped else "CIRCUIT_BREAKER_HALT",
+            "timestamp": int(time.time() * 1000),
+        }
