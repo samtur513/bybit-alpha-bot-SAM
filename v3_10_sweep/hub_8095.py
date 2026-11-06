@@ -296,64 +296,82 @@ class DataAndTCAHub8095:
 
         while True:
             try:
-                async with websockets.connect(WS_PUBLIC_LINEAR, ping_interval=20, max_queue=2048) as ws:
+                async with websockets.connect(
+                    WS_PUBLIC_LINEAR,
+                    ping_interval=None,
+                    ping_timeout=None,
+                    max_queue=4096,
+                    close_timeout=5,
+                ) as ws:
                     for chunk in topic_chunks:
                         await ws.send(orjson.dumps({"op": "subscribe", "args": chunk}).decode("utf-8"))
                         await asyncio.sleep(0.05)
 
                     logger.info(f"Подключен к Bybit WS (Clean Tickers). Трансляция для {len(self.states)} пар.")
+                    async def ping_bybit():
+                        while True:
+                            await asyncio.sleep(20.0)
+                            try:
+                                await ws.send(orjson.dumps({"op": "ping"}).decode("utf-8"))
+                            except Exception:
+                                break
 
-                    async for raw in ws:
-                        msg = orjson.loads(raw)
-                        topic = msg.get("topic", "")
-                        if not topic or not topic.startswith("tickers"):
-                            continue
-                        now_ms = int(msg.get("ts", time.time() * 1000))
-                        sym = topic.split(".")[-1]
-                        st = self.states.get(sym)
-                        if not st:
-                            continue
-
-                        st.update_ticker(msg.get("data", {}))
-
-                        # THROTTLING GATE: Broadcast max 2.5 Hz (400ms) per symbol
-                        # Keeps 1-core VPS CPU < 1.5% while maintaining quantitative accuracy
-                        if (now_ms - st.last_pub_ms) < 400:
-                            continue
-
-                        if st.mid_price <= 0 or st.atr_15m <= 0:
-                            continue
-
-                        st.last_pub_ms = now_ms
-                        tfi_3s, buy_3s, sell_3s = st.compute_flow(now_ms, 3000)
-                        payload = {
-                            "ts": now_ms,
-                            "symbol": sym,
-                            "bid": st.best_bid,
-                            "ask": st.best_ask,
-                            "mid": st.mid_price,
-                            "obi": st.obi_10,
-                            "tfi_3s": tfi_3s,
-                            "buy_3s": buy_3s,
-                            "sell_3s": sell_3s,
-                            "avg_1m_vol": st.avg_1m_vol,
-                            "atr_15m": st.atr_15m,
-                            "vwap": st.vwap_range,
-                            "swing_low": st.swing_low,
-                            "swing_high": st.swing_high,
-                            "low_touches": st.low_touches,
-                            "high_touches": st.high_touches,
-                            "low_comp_ratio": st.low_compression_ratio,
-                            "high_comp_ratio": st.high_compression_ratio,
-                            "tick_size": st.tick_size,
-                            "qty_step": st.qty_step,
-                            "min_qty": st.min_qty,
-                            "top3_bid_notional": st.top3_bid_notional,
-                            "top3_ask_notional": st.top3_ask_notional,
-                        }
-                        if self.pub_sock:
-                            await self.pub_sock.send_multipart([sym.encode("utf-8"), orjson.dumps(payload)])
-                            self.ticks_broadcasted += 1
+                    ping_task = asyncio.create_task(ping_bybit())
+                    try:
+    
+                        async for raw in ws:
+                            msg = orjson.loads(raw)
+                            topic = msg.get("topic", "")
+                            if not topic or not topic.startswith("tickers"):
+                                continue
+                            now_ms = int(msg.get("ts", time.time() * 1000))
+                            sym = topic.split(".")[-1]
+                            st = self.states.get(sym)
+                            if not st:
+                                continue
+    
+                            st.update_ticker(msg.get("data", {}))
+    
+                            # THROTTLING GATE: Broadcast max 2.5 Hz (400ms) per symbol
+                            # Keeps 1-core VPS CPU < 1.5% while maintaining quantitative accuracy
+                            if (now_ms - st.last_pub_ms) < 400:
+                                continue
+    
+                            if st.mid_price <= 0 or st.atr_15m <= 0:
+                                continue
+    
+                            st.last_pub_ms = now_ms
+                            tfi_3s, buy_3s, sell_3s = st.compute_flow(now_ms, 3000)
+                            payload = {
+                                "ts": now_ms,
+                                "symbol": sym,
+                                "bid": st.best_bid,
+                                "ask": st.best_ask,
+                                "mid": st.mid_price,
+                                "obi": st.obi_10,
+                                "tfi_3s": tfi_3s,
+                                "buy_3s": buy_3s,
+                                "sell_3s": sell_3s,
+                                "avg_1m_vol": st.avg_1m_vol,
+                                "atr_15m": st.atr_15m,
+                                "vwap": st.vwap_range,
+                                "swing_low": st.swing_low,
+                                "swing_high": st.swing_high,
+                                "low_touches": st.low_touches,
+                                "high_touches": st.high_touches,
+                                "low_comp_ratio": st.low_compression_ratio,
+                                "high_comp_ratio": st.high_compression_ratio,
+                                "tick_size": st.tick_size,
+                                "qty_step": st.qty_step,
+                                "min_qty": st.min_qty,
+                                "top3_bid_notional": st.top3_bid_notional,
+                                "top3_ask_notional": st.top3_ask_notional,
+                            }
+                            if self.pub_sock:
+                                await self.pub_sock.send_multipart([sym.encode("utf-8"), orjson.dumps(payload)])
+                                self.ticks_broadcasted += 1
+                    finally:
+                        ping_task.cancel()
             except Exception as e:
                 logger.error(f"Обрыв Bybit WS: {e}. Переподключение через 2 сек...")
                 await asyncio.sleep(2.0)

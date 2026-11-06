@@ -197,32 +197,50 @@ class CrossBasisEngine8096:
 
         while True:
             try:
-                async with websockets.connect(WS_PUBLIC_SPOT, ping_interval=20, max_queue=2048) as ws:
+                async with websockets.connect(
+                    WS_PUBLIC_SPOT,
+                    ping_interval=None,
+                    ping_timeout=None,
+                    max_queue=4096,
+                    close_timeout=5,
+                ) as ws:
                     for chunk in [topics[i:i+10] for i in range(0, len(topics), 10)]:
                         await ws.send(orjson.dumps({"op": "subscribe", "args": chunk}).decode("utf-8"))
                         await asyncio.sleep(0.05)
                     logger.info(f"Подключен к Bybit Spot WS (orderbook.1). Мониторинг {len(self.monitored_pairs)} пар.")
+                    async def ping_spot():
+                        while True:
+                            await asyncio.sleep(20.0)
+                            try:
+                                await ws.send(orjson.dumps({"op": "ping"}).decode("utf-8"))
+                            except Exception:
+                                break
 
-                    async for raw in ws:
-                        msg = orjson.loads(raw)
-                        topic = msg.get("topic", "")
-                        if not topic or not topic.startswith("orderbook.1"):
-                            continue
-                        sym = topic.split(".")[-1]
-                        st = self.spot_states.get(sym)
-                        if not st:
-                            continue
-
-                        data = msg.get("data", {})
-                        b = data.get("b", [])
-                        a = data.get("a", [])
-                        if b and a:
-                            st.best_bid = float(b[0][0])
-                            st.best_ask = float(a[0][0])
-                            st.mid_price = 0.5 * (st.best_bid + st.best_ask)
-                            b_sz = float(b[0][1])
-                            a_sz = float(a[0][1])
-                            st.tfi_3s = (b_sz - a_sz) / (b_sz + a_sz + 1e-9)
+                    ping_task = asyncio.create_task(ping_spot())
+                    try:
+    
+                        async for raw in ws:
+                            msg = orjson.loads(raw)
+                            topic = msg.get("topic", "")
+                            if not topic or not topic.startswith("orderbook.1"):
+                                continue
+                            sym = topic.split(".")[-1]
+                            st = self.spot_states.get(sym)
+                            if not st:
+                                continue
+    
+                            data = msg.get("data", {})
+                            b = data.get("b", [])
+                            a = data.get("a", [])
+                            if b and a:
+                                st.best_bid = float(b[0][0])
+                                st.best_ask = float(a[0][0])
+                                st.mid_price = 0.5 * (st.best_bid + st.best_ask)
+                                b_sz = float(b[0][1])
+                                a_sz = float(a[0][1])
+                                st.tfi_3s = (b_sz - a_sz) / (b_sz + a_sz + 1e-9)
+                    finally:
+                        ping_task.cancel()
             except Exception as e:
                 logger.warning(f"Обрыв Spot WS: {e}. Переподключение через 2 сек...")
                 await asyncio.sleep(2.0)

@@ -27,6 +27,7 @@ from typing import Dict, List, Optional, Tuple
 
 from aiohttp import web
 import numpy as np
+from v3.src.persistence import atomic_json
 
 # Cross-module imports for TCA and Config
 from v3_13_sector_arb.src.config import (
@@ -261,6 +262,22 @@ class SectorArbEngine8080:
         }
         self.active_positions: Dict[str, ActiveSectorPosition] = {}
         self.closed_trades_history: List[dict] = []
+        self.pair_cooldown_until: Dict[str, float] = {}
+
+        # Restore state if present (isolated from test runners)
+        state_file = Path("/opt/bybit-bot/v3_13_sector_arb/BOT_STATE_8080.json") if os.path.exists("/opt/bybit-bot") else Path("v3_13_sector_arb/BOT_STATE_8080.json")
+        if "pytest" not in sys.modules and state_file.exists():
+            try:
+                with open(state_file, "r", encoding="utf-8") as fp:
+                    st_data = json.load(fp)
+                    self.equity_usdt = float(st_data.get("equity_usdt", INITIAL_CAPITAL_USDT))
+                    self.session_start_equity = self.equity_usdt
+                    self.realized_pnl_usdt = float(st_data.get("realized_pnl_usdt", 0.0))
+                    self.pure_alpha_pnl_usdt = float(st_data.get("pure_alpha_pnl_usdt", 0.0))
+                    self.total_fees_usdt = float(st_data.get("total_fees_usdt", 0.0))
+                    self.closed_trades_history = st_data.get("closed_trades", [])
+            except Exception as e:
+                logger.warning(f"Error loading state: {e}")
         
         # SQLite TCA Ledger
         db_path = os.getenv("TCA_DB_PATH", "/opt/bybit-bot/v3_10_sweep/tca_attribution.db")
@@ -271,6 +288,24 @@ class SectorArbEngine8080:
         self.latest_prices: Dict[str, float] = {}
         self.app: Optional[web.Application] = None
         self.start_ts = time.time()
+
+
+    def _save_state(self) -> None:
+        if "pytest" in sys.modules:
+            return
+        try:
+            data = {
+                "equity_usdt": round(self.equity_usdt, 4),
+                "realized_pnl_usdt": round(self.realized_pnl_usdt, 4),
+                "pure_alpha_pnl_usdt": round(self.pure_alpha_pnl_usdt, 4),
+                "total_fees_usdt": round(self.total_fees_usdt, 4),
+                "closed_trades": self.closed_trades_history[-100:],
+                "updated_ts": time.time(),
+            }
+            state_file = Path("/opt/bybit-bot/v3_13_sector_arb/BOT_STATE_8080.json") if os.path.exists("/opt/bybit-bot") else Path("v3_13_sector_arb/BOT_STATE_8080.json")
+            atomic_json(state_file, data)
+        except Exception as e:
+            logger.warning(f"Error saving state: {e}")
 
     async def ingest_public_ws_loop(self) -> None:
         """Connects to Bybit V5 Public Linear WebSocket and updates orderbook mid prices."""
@@ -336,6 +371,9 @@ class SectorArbEngine8080:
             return
 
         now_ts = time.time()
+        if now_ts < self.pair_cooldown_until.get(st.pair_id, 0.0):
+            return
+
         z = st.z_score
         disloc = st.dislocation_pct
         dyn_hurdle = max(MIN_SPIKE_DISLOCATION_PCT, STD_MULTIPLIER_HURDLE * st.spread_std)
@@ -384,7 +422,7 @@ class SectorArbEngine8080:
                     spike.extreme_z = z
                 else:
                     pullback = (spike.extreme_disloc - disloc) / max(spike.extreme_disloc, 1e-9)
-                    if pullback >= PULLBACK_REVERSAL_CONFIRM_PCT and (z <= (spike.extreme_z - 0.25) or spike.extreme_z >= 4.9):
+                    if pullback >= PULLBACK_REVERSAL_CONFIRM_PCT and (z <= (spike.extreme_z - 0.20) or spike.extreme_z >= 4.8):
                         self._execute_spread_entry(st, "SHORT_SPREAD", spike.beta, regime="MEAN_REV")
                         st.pending_spike = None
             else:
@@ -393,7 +431,7 @@ class SectorArbEngine8080:
                     spike.extreme_z = z
                 else:
                     pullback = (disloc - spike.extreme_disloc) / max(abs(spike.extreme_disloc), 1e-9)
-                    if pullback >= PULLBACK_REVERSAL_CONFIRM_PCT and (z >= (spike.extreme_z + 0.25) or spike.extreme_z <= -4.9):
+                    if pullback >= PULLBACK_REVERSAL_CONFIRM_PCT and (z >= (spike.extreme_z + 0.20) or spike.extreme_z <= -4.8):
                         self._execute_spread_entry(st, "LONG_SPREAD", spike.beta, regime="MEAN_REV")
                         st.pending_spike = None
 
@@ -535,6 +573,12 @@ class SectorArbEngine8080:
                             "exit_time": time.strftime("%d.%m %H:%M"),
                         }
                         self.closed_trades_history.append(closed_rec)
+                        
+                        # Apply cooldown: 600s for SL_Z_EXPANSION/SL_MOMENTUM_STOP, 300s for normal exits
+                        cooldown_sec = 600.0 if "SL" in exit_reason else 300.0
+                        self.pair_cooldown_until[pair_id] = now_ts + cooldown_sec
+                        logger.info(f"[COOLDOWN] {pair_id} cooldown activated for {cooldown_sec:.0f}s after {exit_reason}.")
+                        self._save_state()
 
                         # Record in TCA Ledger
                         try:
