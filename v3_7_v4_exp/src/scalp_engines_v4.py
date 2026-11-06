@@ -60,6 +60,82 @@ class ScalpEnginesV4(ThreeEnginesEvaluate):
         # Lead-lag beta catchup
         return super().evaluate_engine3_lead_lag(state, btc_state, now_ms)
 
+    def evaluate_engine1_obi_breakout(
+        self,
+        state: SymbolMicrostructureStateV4,
+        now_ms: int,
+        btc_state: Optional[SymbolMicrostructureStateV4] = None,
+    ) -> Optional[SignalIntent]:
+        """
+        Evaluates Engine 1 Order Flow Imbalance with NewDragon v4 KER Gate & Z_OFI Trigger.
+        """
+        # KER Chop Gate: Do not enter order flow breakout in choppy noise
+        if hasattr(state, "get_ker") and state.get_ker() < getattr(self.cfg, "min_ker_threshold", 0.30):
+            return None
+
+        # Check classic OBI breakout first
+        sig = super().evaluate_engine1_obi_breakout(state, now_ms, btc_state)
+        if sig:
+            return sig
+
+        # Evaluate NewDragon v4 Z_OFI flow trigger
+        z = getattr(state, "get_z_ofi", lambda: 0.0)()
+        threshold = getattr(self.cfg, "z_ofi_entry_threshold", 2.0)
+        if abs(z) < threshold:
+            return None
+
+        if state.mid_price <= 0 or state.spread_ticks > getattr(self.cfg, "e1_max_spread_ticks", 2.5):
+            return None
+
+        # Micro-momentum veto from BTC:
+        # If BTC is actively dumping (-0.04% in 60s), do not long alts
+        # If BTC is actively surging (+0.04% in 60s), do not short alts
+        btc_ret_60s = 0.0
+        if btc_state and hasattr(btc_state, "get_depletion_and_return"):
+            btc_ret_60s, _, _ = btc_state.get_depletion_and_return(now_ms, 60000)
+
+        natr = max(getattr(state.meta, "natr_5m", 0.0035), getattr(self.cfg, "e1_min_natr_5m", 0.0035))
+
+        # 1. LONG on institutional order flow surge (+2.0 sigma)
+        if z >= threshold and btc_ret_60s >= -0.0004:
+            entry = state.best_bid + state.meta.tick_size if state.spread_ticks >= 2.0 else state.best_bid
+            tp1 = entry * (1.0 + max(0.0085, 1.25 * natr))
+            tp2 = entry * (1.0 + max(0.0180, 2.50 * natr))
+            sl = entry * (1.0 - max(0.0050, 0.65 * natr))
+            return SignalIntent(
+                engine_id="E1_ZOFI",
+                priority=3,
+                symbol=state.symbol,
+                side="Buy",
+                entry_price=entry,
+                sl_price=sl,
+                tp1_price=tp1,
+                tp2_price=tp2,
+                max_hold_sec=getattr(self.cfg, "e1_max_hold_sec", 900.0),
+                reason=f"LONG Z_OFI={z:+.2f}σ KER={state.get_ker():.2f}",
+            )
+
+        # 2. SHORT on institutional order flow dump (-2.0 sigma)
+        if z <= -threshold and btc_ret_60s <= 0.0004:
+            entry = state.best_ask - state.meta.tick_size if state.spread_ticks >= 2.0 else state.best_ask
+            tp1 = entry * (1.0 - max(0.0085, 1.25 * natr))
+            tp2 = entry * (1.0 - max(0.0180, 2.50 * natr))
+            sl = entry * (1.0 + max(0.0050, 0.65 * natr))
+            return SignalIntent(
+                engine_id="E1_ZOFI",
+                priority=3,
+                symbol=state.symbol,
+                side="Sell",
+                entry_price=entry,
+                sl_price=sl,
+                tp1_price=tp1,
+                tp2_price=tp2,
+                max_hold_sec=getattr(self.cfg, "e1_max_hold_sec", 900.0),
+                reason=f"SHORT Z_OFI={z:+.2f}σ KER={state.get_ker():.2f}",
+            )
+
+        return None
+
     # Backwards-compatible aliases
     evaluate_engine2_sweeps_reversion = evaluate_engine2_liquidity_sweep
     evaluate_engine3_leadlag_arbitrage = evaluate_engine3_lead_lag
@@ -74,13 +150,21 @@ class ScalpEnginesV4(ThreeEnginesEvaluate):
         if not btc_state:
             return None
 
+        # 1. E2 Liquidity Sweeps
         if getattr(self.cfg, "enable_e2_sweeps", True):
             sig = self.evaluate_engine2_liquidity_sweep(state, btc_state, now_ms)
             if sig:
                 return sig
 
+        # 2. E3 Lead-Lag Arbitrage
         if getattr(self.cfg, "enable_e3_leadlag", True):
             sig = self.evaluate_engine3_lead_lag(state, btc_state, now_ms)
+            if sig:
+                return sig
+
+        # 3. E1 Order Flow Imbalance (Z_OFI & OBI Breakout)
+        if getattr(self.cfg, "enable_e1_obi", True):
+            sig = self.evaluate_engine1_obi_breakout(state, now_ms, btc_state)
             if sig:
                 return sig
 

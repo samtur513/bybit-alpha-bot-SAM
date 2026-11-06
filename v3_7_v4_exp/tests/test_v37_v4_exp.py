@@ -193,3 +193,46 @@ async def test_v37_v4_oms_status_and_limit_fill():
     assert "NEARUSDT" in st["open_positions"]
     assert st["status"] == "RUNNING"
 
+
+def test_v37_v4_z_ofi_entry_trigger():
+    cfg = ScalperConfigV37V4(enable_e1_obi=True, min_ker_threshold=0.30, z_ofi_entry_threshold=2.0)
+    meta = InstrumentMeta(symbol="NEARUSDT", tick_size=0.01, qty_step=0.1, min_qty=0.1, natr_5m=0.005)
+    meta_btc = InstrumentMeta(symbol="BTCUSDT", tick_size=0.1, qty_step=0.001, min_qty=0.001)
+
+    st_alt = SymbolMicrostructureStateV4("NEARUSDT", meta)
+    st_btc = SymbolMicrostructureStateV4("BTCUSDT", meta_btc)
+
+    st_alt.mid_price = 3.75
+    st_alt.best_bid = 3.74
+    st_alt.best_ask = 3.75
+    st_alt.spread_ticks = 1.0
+
+    st_btc.mid_price = 76000.0
+
+    evaluator = ScalpEnginesV4(cfg)
+
+    # 1. Z_OFI = +3.5sigma, KER = 0.50 -> Should fire LONG E1_ZOFI
+    st_alt.get_z_ofi = lambda: 3.5
+    st_alt.get_ker = lambda: 0.50
+
+    sig = evaluator.evaluate_all(st_alt, st_btc, now_ms=1000)
+    assert sig is not None
+    assert sig.engine_id == "E1_ZOFI"
+    assert sig.side == "Buy"
+    assert "Z_OFI=+3.50σ" in sig.reason
+
+    # 2. Z_OFI = +3.5sigma, but KER = 0.15 (chop) -> Should be blocked by KER gate
+    st_alt.get_ker = lambda: 0.15
+    sig_chop = evaluator.evaluate_all(st_alt, st_btc, now_ms=1000)
+    assert sig_chop is None
+
+    # 3. Z_OFI = -2.8sigma, KER = 0.60 -> Should fire SHORT E1_ZOFI
+    st_alt.get_z_ofi = lambda: -2.8
+    st_alt.get_ker = lambda: 0.60
+    sig_short = evaluator.evaluate_all(st_alt, st_btc, now_ms=1000)
+    assert sig_short is not None
+    assert sig_short.engine_id == "E1_ZOFI"
+    assert sig_short.side == "Sell"
+    assert "Z_OFI=-2.80σ" in sig_short.reason
+
+

@@ -69,7 +69,7 @@ class ScalperConfigV37V4:
     max_single_trade_notional: float = 100.0  # Max single trade notional cap ($100)
 
     # 4. Alpha Engines Configuration
-    enable_e1_obi: bool = False
+    enable_e1_obi: bool = True        # Order Flow Imbalance (Z_OFI & OBI Breakout)
     enable_e2_sweeps: bool = True     # Liquidity sweep reclaim
     enable_e3_leadlag: bool = True    # Lead-lag beta-catchup to BTC
 
@@ -82,6 +82,7 @@ class ScalperConfigV37V4:
     z_ofi_critical_threshold: float = 2.5
     z_ofi_window_sec: float = 15.0       # Evaluate during first 15s of trade
     min_ker_threshold: float = 0.30      # KER chop filter
+    z_ofi_entry_threshold: float = 2.0   # Trigger entry on >= +2.0 sigma (Buy) or <= -2.0 sigma (Sell)
 
     # 6. Bybit Endpoints
     ws_public_url: str = "wss://stream.bybit.com/v5/public/linear"
