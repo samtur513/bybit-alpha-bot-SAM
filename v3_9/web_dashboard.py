@@ -380,10 +380,11 @@ HTML_PAGE = """<!DOCTYPE html>
     </div>
 
     <div class="table-panel">
-        <div class="panel-header">Закрытые скальп-сделки</div>
+        <div class="panel-header">Закрытые скальп-сделки (<span id="closedCountHeader">0</span>)</div>
         <table>
             <thead>
                 <tr>
+                    <th>Время (UTC)</th>
                     <th>Тикер</th>
                     <th>Движок</th>
                     <th>Сторона</th>
@@ -395,7 +396,7 @@ HTML_PAGE = """<!DOCTYPE html>
                 </tr>
             </thead>
             <tbody id="tradeTableBody">
-                <tr><td colspan="8" style="text-align:center; color: var(--text-muted);">История сделок пуста</td></tr>
+                <tr><td colspan="9" style="text-align:center; color: var(--text-muted);">История сделок пуста</td></tr>
             </tbody>
         </table>
     </div>
@@ -645,17 +646,21 @@ HTML_PAGE = """<!DOCTYPE html>
                 // Closed trades
                 const tradeBody = document.getElementById('tradeTableBody');
                 const trades = data.closed_trades || [];
+                const closedCountHeader = document.getElementById('closedCountHeader');
+                if (closedCountHeader) closedCountHeader.innerText = trades.length;
                 if (trades.length === 0) {
-                    tradeBody.innerHTML = '<tr><td colspan="8" style="text-align:center; color: var(--text-muted);">История сделок пуста</td></tr>';
+                    tradeBody.innerHTML = '<tr><td colspan="9" style="text-align:center; color: var(--text-muted);">История сделок пуста</td></tr>';
                 } else {
-                    tradeBody.innerHTML = trades.slice(0, 15).reverse().map(t => {
+                    tradeBody.innerHTML = trades.slice(-20).reverse().map(t => {
                         const pnl = Number(t.net_pnl_usdt !== undefined ? t.net_pnl_usdt : (t.net_pnl || 0.0));
                         const isProfit = pnl >= 0;
                         const isLong = t.side === 'Buy' || t.direction === 'LONG';
+                        const dStr = formatChartTs(t.timestamp || t.exit_time || t.closed_at || Date.now());
                         return `<tr>
-                            <td style="font-weight:700;">${t.symbol}</td>
+                            <td>${dStr} UTC</td>
+                            <td style="font-weight:700; color:#38bdf8;">${t.symbol}</td>
                             <td><span style="font-size:11px; color:#cbd5e1;">${t.engine_id || 'OMS'}</span></td>
-                            <td style="color:${isLong ? 'var(--accent-green)' : 'var(--accent-red)'};">${isLong ? 'LONG' : 'SHORT'}</td>
+                            <td style="color:${isLong ? 'var(--accent-green)' : 'var(--accent-red)'}; font-weight:700;">${isLong ? 'LONG' : 'SHORT'}</td>
                             <td>$${Number(t.entry_price || 0).toFixed(4)}</td>
                             <td>$${Number(t.exit_price || 0).toFixed(4)}</td>
                             <td>${Number(t.qty || t.initial_qty || 0).toFixed(2)}</td>

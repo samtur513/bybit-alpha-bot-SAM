@@ -87,21 +87,64 @@ class ScalpEnginesV4(ThreeEnginesEvaluate):
         if state.mid_price <= 0 or state.spread_ticks > getattr(self.cfg, "e1_max_spread_ticks", 2.5):
             return None
 
-        # Micro-momentum veto from BTC:
-        # If BTC is actively dumping (-0.04% in 60s), do not long alts
-        # If BTC is actively surging (+0.04% in 60s), do not short alts
+        # BTC macro-trend confirmation:
         btc_ret_60s = 0.0
         if btc_state and hasattr(btc_state, "get_depletion_and_return"):
             btc_ret_60s, _, _ = btc_state.get_depletion_and_return(now_ms, 60000)
 
+        btc_bear = True
+        btc_bull = True
+        if btc_state and btc_state.mid_price > 0:
+            bm = getattr(btc_state, "meta", None)
+            btc_ema20 = getattr(bm, "ema20_15m", 0.0) or 0.0
+            btc_vwap = getattr(bm, "vwap_session", 0.0) or 0.0
+            if btc_ema20 > 0 and btc_vwap > 0:
+                btc_bull = btc_state.mid_price >= min(btc_ema20, btc_vwap)
+                btc_bear = btc_state.mid_price <= max(btc_ema20, btc_vwap)
+            elif btc_vwap > 0:
+                btc_bull = btc_state.mid_price >= btc_vwap
+                btc_bear = btc_state.mid_price <= btc_vwap
+            elif btc_ema20 > 0:
+                btc_bull = btc_state.mid_price >= btc_ema20
+                btc_bear = btc_state.mid_price <= btc_ema20
+
+        # Altcoin trend confirmation:
+        m = state.meta
+        alt_ema9 = getattr(m, "ema9_5m", 0.0) or 0.0
+        alt_vwap = getattr(m, "vwap_session", 0.0) or 0.0
+        alt_ret_5m, _, _ = state.get_depletion_and_return(now_ms, 300000) if hasattr(state, "get_depletion_and_return") else (0.0, 0.0, 0.0)
+
+        # Alt must be confirmed bearish for shorting:
+        # Veto shorts if alt is trading above VWAP/EMA9 (pumping altcoin protection)
+        alt_bear = True
+        if alt_vwap > 0 and alt_ema9 > 0:
+            alt_bear = (state.mid_price <= alt_vwap or state.mid_price <= alt_ema9) and alt_ret_5m <= 0.0010
+        elif alt_vwap > 0:
+            alt_bear = (state.mid_price <= alt_vwap) and alt_ret_5m <= 0.0010
+        elif alt_ema9 > 0:
+            alt_bear = (state.mid_price <= alt_ema9) and alt_ret_5m <= 0.0010
+
+        # Alt must not be crashing for longs:
+        alt_bull = True
+        if alt_vwap > 0 and alt_ema9 > 0:
+            alt_bull = (state.mid_price >= alt_vwap or state.mid_price >= alt_ema9) or alt_ret_5m >= -0.0010
+        elif alt_vwap > 0:
+            alt_bull = (state.mid_price >= alt_vwap) or alt_ret_5m >= -0.0010
+
         natr = max(getattr(state.meta, "natr_5m", 0.0035), getattr(self.cfg, "e1_min_natr_5m", 0.0035))
+        
+        # Strict Scalper Stop & Take Profit Sizing:
+        # Stop loss capped at 0.65% max (never allow wide stops like 3.6% on high-NATR alts)
+        sl_dist_pct = min(0.0065, max(0.0035, 0.50 * natr))
+        tp1_dist_pct = max(0.0045, 0.80 * natr)
+        tp2_dist_pct = max(0.0100, 1.60 * natr)
 
         # 1. LONG on institutional order flow surge (+2.0 sigma)
-        if z >= threshold and btc_ret_60s >= -0.0004:
+        if z >= threshold and btc_ret_60s >= -0.0004 and alt_bull:
             entry = state.best_bid + state.meta.tick_size if state.spread_ticks >= 2.0 else state.best_bid
-            tp1 = entry * (1.0 + max(0.0085, 1.25 * natr))
-            tp2 = entry * (1.0 + max(0.0180, 2.50 * natr))
-            sl = entry * (1.0 - max(0.0050, 0.65 * natr))
+            tp1 = entry * (1.0 + tp1_dist_pct)
+            tp2 = entry * (1.0 + tp2_dist_pct)
+            sl = entry * (1.0 - sl_dist_pct)
             return SignalIntent(
                 engine_id="E1_ZOFI",
                 priority=3,
@@ -116,11 +159,12 @@ class ScalpEnginesV4(ThreeEnginesEvaluate):
             )
 
         # 2. SHORT on institutional order flow dump (-2.0 sigma)
-        if z <= -threshold and btc_ret_60s <= 0.0004:
+        # Strictly vetoed unless BTC and Altcoin are confirmed bearish
+        if z <= -threshold and btc_ret_60s <= 0.0004 and btc_bear and alt_bear:
             entry = state.best_ask - state.meta.tick_size if state.spread_ticks >= 2.0 else state.best_ask
-            tp1 = entry * (1.0 - max(0.0085, 1.25 * natr))
-            tp2 = entry * (1.0 - max(0.0180, 2.50 * natr))
-            sl = entry * (1.0 + max(0.0050, 0.65 * natr))
+            tp1 = entry * (1.0 - tp1_dist_pct)
+            tp2 = entry * (1.0 - tp2_dist_pct)
+            sl = entry * (1.0 + sl_dist_pct)
             return SignalIntent(
                 engine_id="E1_ZOFI",
                 priority=3,

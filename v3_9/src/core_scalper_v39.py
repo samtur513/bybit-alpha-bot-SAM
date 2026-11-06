@@ -188,7 +188,7 @@ async def periodic_metrics_update_task(screener: UniverseScreener, states: Dict[
 
 
 async def main() -> None:
-    cfg = ScalperConfigV39()
+    cfg = ScalperConfigV39(persist_state=True)
     logger.info(
         f"Запуск ядра BybitScalpCore v3.9 NewDragon Scalp Lab | "
         f"Комиссии: Maker={cfg.fee_maker*100:.4f}%, Taker={cfg.fee_taker*100:.4f}% | "

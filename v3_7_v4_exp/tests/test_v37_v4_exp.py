@@ -235,6 +235,12 @@ def test_v37_v4_z_ofi_entry_trigger():
     assert sig_short.side == "Sell"
     assert "Z_OFI=-2.80σ" in sig_short.reason
 
+    # 4. Z_OFI = -2.8sigma, KER = 0.60, but Alt is pumping above VWAP/EMA9 -> SHORT Vetoed!
+    st_alt.meta.vwap_session = 3.50  # Mid price is 3.75, well above VWAP
+    st_alt.meta.ema9_5m = 3.60       # Mid price is above EMA9
+    sig_veto = evaluator.evaluate_all(st_alt, st_btc, now_ms=1000)
+    assert sig_veto is None  # Trend veto protects against counter-trend alt shorts!
+
 
 
 @pytest.mark.asyncio

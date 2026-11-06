@@ -633,7 +633,7 @@ HTML_PAGE = f"""<!DOCTYPE html>
                                 <td style="color: ${{sideCol}}; font-weight: 700;">${{sideStr}}</td>
                                 <td>${{t.entry_price ? Number(t.entry_price).toFixed(4) : '--'}}</td>
                                 <td>${{t.exit_price ? Number(t.exit_price).toFixed(4) : '--'}}</td>
-                                <td style="color: ${{col}}; font-weight: 700;">${{pnlVal >= 0 ? '+' : ''}}$${{Number(pnlVal).toFixed(2)}}$</td>
+                                <td style="color: ${{col}}; font-weight: 700;">${{pnlVal >= 0 ? '+' : ''}}$${{Number(pnlVal).toFixed(2)}}</td>
                                 <td><span style="font-size: 11px; color: #cbd5e1;">${{t.exit_reason || t.reason || '--'}}</span></td>
                             </tr>`;
                         }}

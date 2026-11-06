@@ -28,7 +28,8 @@ except ImportError:
 
 from v3_7.src.scalp_oms import ScalpOMS, PendingLimitOrder, ActivePosition
 from v3_7.src.scalp_engines import SignalIntent
-from v3_9.src.config import ScalperConfigV39
+from v3_9.src.config import ScalperConfigV39, PERSISTENT_STATE_FILE, LIVE_STATUS_FILE
+from v3.src.persistence import atomic_json
 from v3_9.src.microstructure_v39 import SymbolMicrostructureStateV39
 
 logger = logging.getLogger("ScalpOMSV39")
@@ -46,6 +47,44 @@ class ScalpOMSV39(ScalpOMS):
         self.cfg: ScalperConfigV39 = cfg
         self.states: Dict[str, SymbolMicrostructureStateV39] = states or {}
         self.scratch_count: int = 0
+        self._load_persistent_state()
+
+    def _load_persistent_state(self) -> None:
+        if not getattr(self.cfg, "persist_state", True):
+            return
+        target_file = PERSISTENT_STATE_FILE if PERSISTENT_STATE_FILE.exists() else LIVE_STATUS_FILE
+        if target_file.exists():
+            try:
+                import json
+                with open(target_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if "closed_trades" in data and isinstance(data["closed_trades"], list):
+                    self.closed_trades_history = data["closed_trades"]
+                elif "closed_trades_history" in data and isinstance(data["closed_trades_history"], list):
+                    self.closed_trades_history = data["closed_trades_history"]
+                if "scratch_count" in data:
+                    self.scratch_count = int(data["scratch_count"])
+                if "daily_pnl_usdt" in data:
+                    self.daily_pnl_usdt = float(data["daily_pnl_usdt"])
+                elif "net_pnl" in data:
+                    self.daily_pnl_usdt = float(data["net_pnl"])
+                logger.info(f"Loaded persistent state from {target_file.name}: {len(self.closed_trades_history)} trades, PnL=${self.daily_pnl_usdt:.2f}")
+            except Exception as e:
+                logger.warning(f"Could not load persistent state: {e}")
+
+    def _persist_state(self) -> None:
+        if not getattr(self.cfg, "persist_state", True):
+            return
+        try:
+            st = self.get_status()
+            atomic_json(PERSISTENT_STATE_FILE, st)
+            atomic_json(LIVE_STATUS_FILE, st)
+        except Exception as e:
+            logger.warning(f"Could not persist state: {e}")
+
+    async def _close_position(self, pos: ActivePosition, exit_price: float, is_maker: bool, reason: str) -> None:
+        await super()._close_position(pos, exit_price, is_maker, reason)
+        self._persist_state()
 
     def calculate_safe_qty(self, intent: SignalIntent, state: SymbolMicrostructureStateV39) -> float:
         """
@@ -204,6 +243,7 @@ class ScalpOMSV39(ScalpOMS):
                     pos.qty -= realized_slice
                     pos.tp1_filled = True
                     pos.tp1_realized_pnl_usdt += slice_net_usdt
+                    self._persist_state()
                     self.daily_pnl_usdt += slice_net_usdt
 
                     # Move remaining stop to breakeven (+0.10%)

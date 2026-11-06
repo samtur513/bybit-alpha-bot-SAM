@@ -58,15 +58,16 @@ class ScalperConfigV37V4:
 
     # 3. Capital & Risk Limits
     equity_usdt: float = float(os.getenv("EQUITY_USDT", "300.0"))
-    risk_per_trade_pct: float = float(os.getenv("RISK_PER_TRADE_PCT", "0.0050"))  # 0.50% True 1R ($1.50)
+    risk_per_trade_pct: float = float(os.getenv("RISK_PER_TRADE_PCT", "0.0035"))  # 0.35% True 1R ($1.05)
     max_daily_dd_pct: float = float(os.getenv("MAX_DAILY_DRAWDOWN_PCT", "0.020"))  # 2.0% ($6.00)
     max_leverage_cap: float = 2.0
     max_book_depth_pct: float = 0.20
     max_concurrent_positions: int = 2
     max_positions_per_side: int = 2
-    max_loss_usdt_cap: float = 1.50  # Hard dollar loss limit: max $1.50 per trade
+    max_loss_usdt_cap: float = 0.40  # Hard dollar loss limit: max $0.40 per scalp trade (loss capped)
     dynamic_breakeven_pct: float = 0.0035  # At +0.35% profit, ratchet stop to BE+0.05%
     max_single_trade_notional: float = 100.0  # Max single trade notional cap ($100)
+    persist_state: bool = False  # Disabled by default in unit tests; enabled in daemon main()
 
     # 4. Alpha Engines Configuration
     enable_e1_obi: bool = True        # Order Flow Imbalance (Z_OFI & OBI Breakout)

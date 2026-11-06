@@ -1,0 +1,18 @@
+{
+  "version": "3.9.0",
+  "name": "v3.9 Scalper",
+  "equity": 300.0,
+  "capital": 300.0,
+  "initial_capital": 300.0,
+  "daily_pnl_usdt": 0.0,
+  "realized_pnl": 0.0,
+  "unrealized_pnl": 0.0,
+  "net_pnl": 0.0,
+  "circuit_breaker": false,
+  "circuit_breaker_tripped": false,
+  "open_positions": [],
+  "pending_orders": [],
+  "closed_trades": [],
+  "online": true,
+  "timestamp": 1793958672740
+}

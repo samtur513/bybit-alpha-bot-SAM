@@ -20,7 +20,8 @@ if str(VENDOR_ND4) not in sys.path:
 from adapters.torg_bot_3_bridge import UniversalRiskBridge
 from v3_7.src.scalp_oms import ScalpOMS, PendingLimitOrder, ActivePosition
 from v3_7.src.scalp_engines import SignalIntent
-from v3_7_v4_exp.src.config import ScalperConfigV37V4
+from v3_7_v4_exp.src.config import ScalperConfigV37V4, PERSISTENT_STATE_FILE, LIVE_STATUS_FILE
+from v3.src.persistence import atomic_json
 from v3_7_v4_exp.src.microstructure_v4 import SymbolMicrostructureStateV4
 
 logger = logging.getLogger("ScalpOMSV37V4")
@@ -44,6 +45,40 @@ class ScalpOMSV4(ScalpOMS):
             maker_fee=cfg.fee_maker,
             max_leverage=cfg.max_leverage_cap,
         )
+        self._load_persistent_state()
+
+    def _load_persistent_state(self) -> None:
+        if not getattr(self.cfg, "persist_state", True):
+            return
+        target_file = PERSISTENT_STATE_FILE if PERSISTENT_STATE_FILE.exists() else LIVE_STATUS_FILE
+        if target_file.exists():
+            try:
+                import json
+                with open(target_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if "closed_trades" in data and isinstance(data["closed_trades"], list):
+                    self.closed_trades_history = data["closed_trades"]
+                elif "closed_trades_history" in data and isinstance(data["closed_trades_history"], list):
+                    self.closed_trades_history = data["closed_trades_history"]
+                if "scratch_count" in data:
+                    self.scratch_count = int(data["scratch_count"])
+                if "daily_pnl_usdt" in data:
+                    self.daily_pnl_usdt = float(data["daily_pnl_usdt"])
+                elif "net_pnl" in data:
+                    self.daily_pnl_usdt = float(data["net_pnl"])
+                logger.info(f"Loaded persistent state from {target_file.name}: {len(self.closed_trades_history)} trades, PnL=${self.daily_pnl_usdt:.2f}")
+            except Exception as e:
+                logger.warning(f"Could not load persistent state: {e}")
+
+    def _persist_state(self) -> None:
+        if not getattr(self.cfg, "persist_state", True):
+            return
+        try:
+            st = self.get_status()
+            atomic_json(PERSISTENT_STATE_FILE, st)
+            atomic_json(LIVE_STATUS_FILE, st)
+        except Exception as e:
+            logger.warning(f"Could not persist state: {e}")
 
     def calculate_safe_qty(self, intent: SignalIntent, state: SymbolMicrostructureStateV4) -> float:
         """
@@ -240,6 +275,7 @@ class ScalpOMSV4(ScalpOMS):
                         "closed_at": datetime.now(timezone.utc).isoformat(),
                         "timestamp": now_ms,
                     })
+                    self._persist_state()
                     logger.info(f"[TP1_MAKER_HIT] {sym} {pos.side} 50% зафиксировано. Net PnL: +${slice_net_usdt:.2f}. Остаток переведен в безубыток.")
 
             # F. TP2 / Runner Exit
@@ -298,6 +334,7 @@ class ScalpOMSV4(ScalpOMS):
             "closed_at": datetime.now(timezone.utc).isoformat(),
             "timestamp": int(time.time() * 1000),
         })
+        self._persist_state()
         logger.info(
             f"[POSITION CLOSED] {pos.symbol} {pos.side} via {trade_reason} @ {exit_price:.4f} | "
             f"PnL: {trade_pnl:+.4f} USDT | Total Daily PnL: {self.daily_pnl_usdt:+.4f} USDT"

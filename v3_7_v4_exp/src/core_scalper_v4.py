@@ -202,7 +202,7 @@ async def run_public_stream(
 
 async def main() -> None:
     global GLOBAL_OMS
-    cfg = ScalperConfigV37V4()
+    cfg = ScalperConfigV37V4(persist_state=True)
 
     logger.info(
         f"Starting BybitScalpCore v3.7-v4 | "
