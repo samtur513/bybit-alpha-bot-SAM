@@ -813,6 +813,30 @@ class MetaHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Length", str(len(content)))
             self.end_headers()
             self.wfile.write(content)
+        elif self.path == "/api/system_health":
+            health = {"timestamp": datetime.now(timezone.utc).isoformat()}
+            if hasattr(os, "getloadavg"):
+                health["load_avg"] = list(os.getloadavg())
+            try:
+                with open("/proc/meminfo") as f:
+                    mem = {}
+                    for line in f:
+                        parts = line.split(":")
+                        if len(parts) == 2:
+                            mem[parts[0].strip()] = parts[1].strip()
+                    health["mem_total"] = mem.get("MemTotal")
+                    health["mem_available"] = mem.get("MemAvailable")
+                    health["swap_total"] = mem.get("SwapTotal")
+                    health["swap_free"] = mem.get("SwapFree")
+            except Exception:
+                pass
+            content = json.dumps(health).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
         else:
             self.send_error(404, "Not Found")
 

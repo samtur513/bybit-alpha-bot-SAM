@@ -77,6 +77,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger("Dispersion8094")
 
+LOG_BUFFER = deque(maxlen=300)
+
+class DequeLogHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            LOG_BUFFER.append(msg)
+        except Exception:
+            pass
+
+_h = DequeLogHandler()
+_h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] [DISPERSION_8094] %(message)s"))
+logger.addHandler(_h)
+
 
 @dataclass
 class PendingDispersionSetup:
@@ -1153,9 +1167,13 @@ class DispersionEngine8094:
 """
             return web.Response(text=html, content_type="text/html")
 
+        async def handle_logs(request):
+            return web.json_response(list(LOG_BUFFER))
+
         app.router.add_get("/", handle_index)
         app.router.add_get("/api/status", handle_status)
         app.router.add_get("/status", handle_status)
+        app.router.add_get("/api/logs", handle_logs)
 
         runner = web.AppRunner(app)
         await runner.setup()
