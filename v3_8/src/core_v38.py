@@ -47,6 +47,7 @@ from v3_8.src.config import (
     CHANDELIER_MULT,
     CHANDELIER_COMPRESSED_MULT,
     DONCHIAN_WINDOW,
+    ADX_THRESHOLD,
     BAR_INTERVAL_MS,
 )
 
@@ -113,7 +114,8 @@ class CoreV38Engine:
         # Multi-coin candidate scanner
         self.scanner = MultiCoinScanner(
             max_concurrent_positions=max_concurrent_positions,
-            min_adx=18.0,
+            min_adx=float(ADX_THRESHOLD),
+            min_volume_ratio=1.05,
             enable_btc_delta_filter=True,
         )
 

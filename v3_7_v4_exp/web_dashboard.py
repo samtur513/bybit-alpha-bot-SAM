@@ -298,22 +298,25 @@ HTML_PAGE = f"""<!DOCTYPE html>
         <!-- Microstructure & Z_OFI Radar Table -->
         <div class="table-wrap">
             <div class="table-head">
-                <div class="table-title">⚡ Радар микроструктуры и Z_OFI Order Flow</div>
-                <span id="monitored-count-badge" style="font-family: var(--font-mono); font-size: 11px; color: var(--accent-pink); font-weight: 700;">12 тикеров</span>
+                <div class="table-title">⚡ Радар скальпинга E2 Sweeps & E3 Lead-Lag (L2 Order Flow)</div>
+                <span id="monitored-count-badge" style="font-family: var(--font-mono); font-size: 11px; color: var(--accent-pink); font-weight: 700;">7 тикеров</span>
             </div>
             <table>
                 <thead>
                     <tr>
                         <th>Тикер</th>
                         <th>Mid Price</th>
-                        <th>Спред (Ticks)</th>
-                        <th>KER (Эффективность)</th>
-                        <th>Z_OFI Flow</th>
-                        <th>Статус потока</th>
+                        <th>E2 Поддержка (Low)</th>
+                        <th>До закола Low (%)</th>
+                        <th>E2 Сопротивление (High)</th>
+                        <th>До закола High (%)</th>
+                        <th>Beta (BTC)</th>
+                        <th>Давление стакана (Z_OFI)</th>
+                        <th>Статус готовности сетапа</th>
                     </tr>
                 </thead>
                 <tbody id="micro-radar-body">
-                    <tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 18px;">Подключение к потокам L2 Orderbook...</td></tr>
+                    <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 18px;">Подключение к потокам L2 Orderbook...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -556,19 +559,40 @@ HTML_PAGE = f"""<!DOCTYPE html>
                     for (const s of sKeys) {{
                         const st = states[s];
                         const z = st.z_ofi || 0.0;
-                        const ker = st.ker || 0.50;
-                        let flowDesc = 'Нейтральный';
+                        const swLow = st.swing_low || 0.0;
+                        const dLow = st.dist_low || 0.0;
+                        const swHigh = st.swing_high || 0.0;
+                        const dHigh = st.dist_high || 0.0;
+                        const beta = st.beta || 1.0;
+
+                        let statusDesc = 'Мониторинг свинг-уровней';
+                        let statusCol = '#94a3b8';
+                        if (dLow > 0 && dLow <= 0.25) {{
+                            statusDesc = '🔥 Готов к заколу поддержки (E2 Long)';
+                            statusCol = '#10b981';
+                        }} else if (dHigh > 0 && dHigh <= 0.25) {{
+                            statusDesc = '🔥 Готов к заколу сопротивления (E2 Short)';
+                            statusCol = '#ef4444';
+                        }} else if (beta >= 0.85) {{
+                            statusDesc = '⚡ Готов к импульсу BTC (E3 Lead-Lag)';
+                            statusCol = '#38bdf8';
+                        }}
+
+                        let flowDesc = (z >= 0 ? '+' : '') + z.toFixed(2) + 'σ';
                         let flowCol = '#94a3b8';
-                        if (z >= 1.5) {{ flowDesc = 'Институциональный BUY'; flowCol = '#10b981'; }}
-                        else if (z <= -1.5) {{ flowDesc = 'Институциональный SELL'; flowCol = '#ef4444'; }}
+                        if (z >= 2.0) {{ flowDesc = 'Поток BUY (+' + z.toFixed(1) + 'σ)'; flowCol = '#10b981'; }}
+                        else if (z <= -2.0) {{ flowDesc = 'Поток SELL (' + z.toFixed(1) + 'σ)'; flowCol = '#ef4444'; }}
 
                         rHtml += `<tr>
                             <td style="font-weight:700; color:#38bdf8;">${{s}}</td>
                             <td>$${{st.mid_price.toFixed(4)}}</td>
-                            <td>${{st.spread_ticks.toFixed(1)}}</td>
-                            <td><span style="color:${{ker >= 0.30 ? '#10b981' : '#f59e0b'}};">${{ker.toFixed(2)}}</span></td>
-                            <td style="font-weight:700; color:${{flowCol}};">${{z >= 0 ? '+' : ''}}${{z.toFixed(2)}}σ</td>
-                            <td style="color:${{flowCol}};">${{flowDesc}}</td>
+                            <td>$${{swLow > 0 ? swLow.toFixed(4) : '--'}}</td>
+                            <td style="color:${{dLow <= 0.5 ? '#10b981' : '#94a3b8'}}; font-weight:700;">+${{dLow.toFixed(2)}}%</td>
+                            <td>$${{swHigh > 0 ? swHigh.toFixed(4) : '--'}}</td>
+                            <td style="color:${{dHigh <= 0.5 ? '#ef4444' : '#94a3b8'}}; font-weight:700;">-${{dHigh.toFixed(2)}}%</td>
+                            <td style="font-weight:700; color:#c084fc;">${{beta.toFixed(2)}}</td>
+                            <td style="font-weight:700; color:${{flowCol}};">${{flowDesc}}</td>
+                            <td style="font-weight:700; color:${{statusCol}};">${{statusDesc}}</td>
                         </tr>`;
                     }}
                     radarBody.innerHTML = rHtml;
@@ -676,11 +700,23 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 st = core_scalper_v4.GLOBAL_OMS.get_status()
                 states_summary = {}
                 for sym, s_obj in core_scalper_v4.GLOBAL_OMS.states.items():
+                    m = s_obj.meta
+                    mid = s_obj.mid_price
+                    sw_low = getattr(m, "swing_low_1h", 0.0) or 0.0
+                    sw_high = getattr(m, "swing_high_1h", 0.0) or 0.0
+                    beta = getattr(m, "beta_btc", 1.0) or 1.0
+                    dist_low_pct = (mid - sw_low) / mid * 100.0 if mid > 0 and sw_low > 0 else 0.0
+                    dist_high_pct = (sw_high - mid) / mid * 100.0 if mid > 0 and sw_high > 0 else 0.0
                     states_summary[sym] = {
-                        "mid_price": s_obj.mid_price,
+                        "mid_price": mid,
                         "spread_ticks": s_obj.spread_ticks,
                         "z_ofi": getattr(s_obj, "get_z_ofi", lambda: 0.0)(),
                         "ker": getattr(s_obj, "get_ker", lambda: 0.50)(),
+                        "swing_low": sw_low,
+                        "dist_low": round(dist_low_pct, 2),
+                        "swing_high": sw_high,
+                        "dist_high": round(dist_high_pct, 2),
+                        "beta": round(beta, 2),
                     }
                 st["microstructure_states"] = states_summary
             elif LIVE_STATUS_FILE.exists():
