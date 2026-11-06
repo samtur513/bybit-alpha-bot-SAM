@@ -376,7 +376,10 @@ HTML_PAGE = f"""<!DOCTYPE html>
     </div>
 
     <script>
-        let equityChart = null;
+    var chartInstance = null;
+    var equityChart = null;
+
+        var equityChart = equityChart || null;
 
         
         function formatChartTs(ts) {{
@@ -526,7 +529,7 @@ HTML_PAGE = f"""<!DOCTYPE html>
                 const res = await fetch('/api/status');
                 if (!res.ok) return;
                 const d = await res.json();
-                syncPaperTestStatsAndChart(d);
+                try {{ syncPaperTestStatsAndChart(d); }} catch (e) {{ console.error("syncPaperTestStatsAndChart error:", e); }}
 
                 const eq = d.equity || 300.0;
                 document.getElementById('val-equity').innerText = '$' + eq.toFixed(2);

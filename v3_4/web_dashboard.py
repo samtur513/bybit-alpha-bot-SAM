@@ -571,6 +571,9 @@ HTML_PAGE = """<!DOCTYPE html>
     </div>
 
     <script>
+    var chartInstance = null;
+    var equityChart = null;
+
 
     function formatChartTs(ts) {
         if (!ts) return '';
@@ -637,8 +640,9 @@ HTML_PAGE = """<!DOCTYPE html>
         const chartCurrEq = document.getElementById('chart-curr-equity');
         if (chartCurrEq) chartCurrEq.innerText = '$' + eq.toFixed(2);
 
-        const chartObj = window.equityChartInstance || window.equityChart || window.chartInstance || (typeof chartInstance !== 'undefined' ? chartInstance : null) || (typeof equityChart !== 'undefined' ? equityChart : null);
-        if (chartObj) {
+        try {
+            const chartObj = window.chartInstance || chartInstance || window.equityChart || equityChart;
+            if (chartObj && chartObj.data) {
             let labels = [];
             let points = [];
             if (data.equity_chart_data && data.equity_chart_data.length > 0) {
@@ -666,6 +670,9 @@ HTML_PAGE = """<!DOCTYPE html>
             chartObj.data.datasets[0].pointBackgroundColor = isProfit ? '#00f2fe' : '#ef4444';
             chartObj.data.datasets[0].backgroundColor = isProfit ? 'rgba(0, 242, 254, 0.08)' : 'rgba(239, 68, 68, 0.08)';
             chartObj.update();
+            }
+        } catch (chartErr) {
+            console.warn("Chart sync warning:", chartErr);
         }
     }
 
@@ -698,7 +705,7 @@ HTML_PAGE = """<!DOCTYPE html>
         }
 
         
-        let chartInstance = null;
+        var chartInstance = chartInstance || null;
         function initEquityChart() {
             const canvas = document.getElementById('equityChart');
             if (!canvas || typeof Chart === 'undefined') return;
@@ -862,13 +869,14 @@ HTML_PAGE = """<!DOCTYPE html>
             }
         }
 
+        document.addEventListener('DOMContentLoaded', initEquityChart);
         async function updateDashboard() {
             try {
                 const res = await fetch('/api/status');
                 if (!res.ok) return;
                 const data = await res.json();
                 updateCommonChartAndClosed(data);
-                syncPaperTestStatsAndChart(data);
+                try { syncPaperTestStatsAndChart(data); } catch (e) { console.error("syncPaperTestStatsAndChart error:", e); }
 
                 // Telemetry
                 const equity = data.capital || data.portfolio_equity || 300.0;
