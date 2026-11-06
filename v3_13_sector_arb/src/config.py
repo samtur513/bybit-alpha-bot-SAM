@@ -41,17 +41,20 @@ FEE_MAKER = 0.000324
 FEE_TAKER = 0.000900
 ROUNDTRIP_MAKER_TAKER_FEE = 2.0 * (FEE_MAKER + FEE_TAKER) # 0.002448 = 0.2448%
 
-# Signal & Risk Parameters (Auditor-Hardened)
-MIN_Z_ENTRY = 2.20
-PULLBACK_REVERSAL_CONFIRM_PCT = 0.25 # 25% confirmed retracement from spike extreme
-MIN_SPIKE_DISLOCATION_PCT = 0.0075  # 75 bps absolute minimum (3x fee hurdle)
-ATR_MULTIPLIER_SPIKE = 1.20         # Dynamic hurdle based on 15m ATR
+# Signal & Risk Parameters (Auditor-Hardened Dual-Regime)
+MIN_Z_ENTRY = 1.85                  # 1.85 sigma entry threshold (96.4% confidence)
+PULLBACK_REVERSAL_CONFIRM_PCT = 0.20 # 20% confirmed retracement from spike extreme in Mean-Reversion
+MIN_SPIKE_DISLOCATION_PCT = 0.0035  # 35 bps minimum dislocation (3.5x maker/taker fee hurdle)
+STD_MULTIPLIER_HURDLE = 1.40        # Dynamic hurdle: max(MIN_SPIKE_DISLOCATION_PCT, 1.40 * spread_std)
+KER_TREND_THRESHOLD = 0.35          # Kaufman Efficiency Ratio >= 0.35: Trend/Momentum, < 0.35: Mean-Reversion
 
-# Exit Parameters (2-Stage Smart Exit)
-TP1_Z_THRESHOLD = 0.70              # Stage 1: 50% partial TP
-TP2_Z_RUNNER_THRESHOLD = 0.15       # Stage 2: full convergence
+# Exit Parameters (2-Stage Smart Exit & Guaranteed Profit-Taking)
+TP1_Z_THRESHOLD = 0.70              # Stage 1: 50% partial TP when Z <= 0.70 in Mean-Reversion
+TP1_PROFIT_PCT = 0.0070             # Stage 1: 50% partial TP when Spread Profit >= +0.70% (+70 bps)
+TP2_Z_RUNNER_THRESHOLD = 0.15       # Stage 2: full convergence in Mean-Reversion
+TP2_RUNNER_PROFIT_PCT = 0.0140      # Stage 2: +1.40% profit target for trend runner
 BE_PROFIT_BUFFER_PCT = 0.0005       # +0.05% fee cover when stop moved to Breakeven
 SL_Z_EXPANSION = 3.60               # Hard statistical stop if spread blows out to Z=3.6
-MAX_HOLD_SECONDS = 360.0            # 6 minutes time stop (360 seconds)
+MAX_HOLD_SECONDS = 1200.0           # 20 minutes time stop (1200s instead of 360s)
 MAX_CONCURRENT_SPREADS = 2          # Max 2 active sector pairs
 MAX_DAILY_LOSS_USDT = 6.0           # $6.00 (2.0%) Circuit Breaker

@@ -41,9 +41,12 @@ from v3_13_sector_arb.src.config import (
     MIN_Z_ENTRY,
     PULLBACK_REVERSAL_CONFIRM_PCT,
     MIN_SPIKE_DISLOCATION_PCT,
-    ATR_MULTIPLIER_SPIKE,
+    STD_MULTIPLIER_HURDLE,
+    KER_TREND_THRESHOLD,
     TP1_Z_THRESHOLD,
+    TP1_PROFIT_PCT,
     TP2_Z_RUNNER_THRESHOLD,
+    TP2_RUNNER_PROFIT_PCT,
     BE_PROFIT_BUFFER_PCT,
     SL_Z_EXPANSION,
     MAX_HOLD_SECONDS,
@@ -52,21 +55,16 @@ from v3_13_sector_arb.src.config import (
     SectorPairConfig,
 )
 
-try:
-    from v3_10_sweep.tca_ledger import ShadowTCALedger, TCATradeRecord
-except ImportError:
-    try:
-        from tca_ledger import ShadowTCALedger, TCATradeRecord
-    except ImportError:
-        # Fallback local TCA ledger stub
-        class TCATradeRecord:
-            def __init__(self, **kwargs):
-                self.__dict__.update(kwargs)
-        class ShadowTCALedger:
-            def __init__(self, **kwargs): pass
-            async def init_db(self): pass
-            async def record_closed_trade(self, rec): return {"net_pnl": rec.net_pnl_usdt, "pure_alpha": rec.pure_alpha_usdt, "fees": rec.fee_usdt}
-            async def get_summary_stats(self, mid): return {"total_trades": 0, "win_rate_pct": 0.0, "net_pnl_usdt": 0.0, "pure_alpha_usdt": 0.0, "fees_paid_usdt": 0.0}
+class SectorTCARecord:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+class ShadowTCALedger:
+    def __init__(self, **kwargs):
+        self.db_path = kwargs.get("db_path", "tca_attribution.db")
+    async def init_db(self): pass
+    async def record_closed_trade(self, rec): return {"net_pnl": getattr(rec, "net_pnl_usdt", 0.0)}
+    async def get_summary_stats(self, mid): return {"total_trades": 0, "win_rate_pct": 0.0, "net_pnl_usdt": 0.0}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -98,6 +96,7 @@ class PendingSpikeSetup:
     extreme_disloc: float
     setup_ts: float
     beta: float
+    regime: str = "MEAN_REV"
 
 
 @dataclass
@@ -114,6 +113,7 @@ class ActiveSectorPosition:
     opened_ts: float
     entry_z: float
     beta: float
+    regime: str = "MEAN_REV"  # "MOMENTUM" or "MEAN_REV"
     tp1_filled: bool = False
     tp1_realized_usdt: float = 0.0
     be_stop_active: bool = False
@@ -129,12 +129,15 @@ class SectorPairState:
         
         self.current_mid_a: float = 0.0
         self.current_mid_b: float = 0.0
+        self.last_sample_ts: float = 0.0
         self.rolling_beta: float = 1.0
         self.log_spread: float = 0.0
         self.spread_mean: float = 0.0
         self.spread_std: float = 0.001
         self.z_score: float = 0.0
         self.dislocation_pct: float = 0.0
+        self.ker_30m: float = 0.10
+        self.regime: str = "MEAN_REV"
         self.atr_15m_pct: float = 0.008  # Default ~0.8%
         
         self.pending_spike: Optional[PendingSpikeSetup] = None
@@ -144,37 +147,96 @@ class SectorPairState:
             return
         self.current_mid_a = p_a
         self.current_mid_b = p_b
-        self.price_history_a.append((ts, p_a))
-        self.price_history_b.append((ts, p_b))
 
-        # Calculate Rolling Beta & Zero-Lag Spread if buffer has >= 20 points
-        if len(self.price_history_a) >= 20:
-            p_a_vals = np.array([p for _, p in self.price_history_a])
-            p_b_vals = np.array([p for _, p in self.price_history_b])
-            
-            # Beta calculation if >= 30 points
-            if len(self.price_history_a) >= 30:
-                ret_a = np.diff(np.log(p_a_vals))
-                ret_b = np.diff(np.log(p_b_vals))
-                cov = np.cov(ret_a, ret_b)[0, 1] if len(ret_a) > 2 else 0.0
-                var_b = np.var(ret_b) if len(ret_b) > 2 else 1e-9
-                if var_b > 1e-8:
-                    self.rolling_beta = float(np.clip(cov / var_b, 0.4, 2.8))
+        # Sample at 60s intervals to guarantee 180 points cover true 3 hours
+        if ts - self.last_sample_ts >= 60.0 or len(self.price_history_a) == 0:
+            self.price_history_a.append((ts, p_a))
+            self.price_history_b.append((ts, p_b))
+            self.last_sample_ts = ts
 
-            # Point-in-time spread series using current beta
-            log_a = np.log(p_a_vals)
-            log_b = np.log(p_b_vals)
-            spread_series = log_a - self.rolling_beta * log_b
-            
-            # Historical baseline (excluding current point for clean Z-score)
-            hist = spread_series[:-1] if len(spread_series) > 5 else spread_series
-            self.spread_mean = float(np.mean(hist))
-            self.spread_std = max(float(np.std(hist)), 0.0010)
-            
+        self._recalc_statistics()
+
+    def _recalc_statistics(self) -> None:
+        if len(self.price_history_a) < 5:
+            return
+        
+        p_a_vals = np.array([p for _, p in self.price_history_a])
+        p_b_vals = np.array([p for _, p in self.price_history_b])
+
+        # Beta calculation if >= 20 points
+        if len(p_a_vals) >= 20:
+            ret_a = np.diff(np.log(p_a_vals))
+            ret_b = np.diff(np.log(p_b_vals))
+            cov = np.cov(ret_a, ret_b)[0, 1] if len(ret_a) > 2 else 0.0
+            var_b = np.var(ret_b) if len(ret_b) > 2 else 1e-9
+            if var_b > 1e-8:
+                self.rolling_beta = float(np.clip(cov / var_b, 0.35, 2.8))
+
+        # Spread series using rolling beta
+        log_a = np.log(p_a_vals)
+        log_b = np.log(p_b_vals)
+        spread_series = log_a - self.rolling_beta * log_b
+
+        hist = spread_series[:-1] if len(spread_series) > 5 else spread_series
+        self.spread_mean = float(np.mean(hist))
+        self.spread_std = max(float(np.std(hist)), 0.0010)
+
+        # Real-time current spread dislocation from live prices
+        if self.current_mid_a > 0 and self.current_mid_b > 0:
+            current_spread = float(np.log(self.current_mid_a) - self.rolling_beta * np.log(self.current_mid_b))
+        else:
             current_spread = float(spread_series[-1])
-            self.log_spread = current_spread
-            self.dislocation_pct = current_spread - self.spread_mean
-            self.z_score = float(np.clip(self.dislocation_pct / self.spread_std, -5.0, 5.0))
+
+        self.log_spread = current_spread
+        self.dislocation_pct = current_spread - self.spread_mean
+        self.z_score = float(np.clip(self.dislocation_pct / self.spread_std, -5.0, 5.0))
+
+        # Kaufman Efficiency Ratio (KER) over last 30 minutes
+        n_ker = min(30, len(spread_series))
+        if n_ker >= 5:
+            s30 = spread_series[-n_ker:]
+            net_change = abs(s30[-1] - s30[0])
+            gross_change = np.sum(np.abs(np.diff(s30)))
+            self.ker_30m = float(net_change / max(gross_change, 1e-9))
+        else:
+            self.ker_30m = 0.10
+
+        self.regime = "MOMENTUM" if self.ker_30m >= KER_TREND_THRESHOLD else "MEAN_REV"
+
+    async def warmup_from_bybit(self, session) -> None:
+        """Loads 180 1-minute historical candles from Bybit REST API."""
+        try:
+            url_a = f"https://api.bybit.com/v5/market/kline?category=linear&symbol={self.cfg.symbol_a}&interval=1&limit=180"
+            url_b = f"https://api.bybit.com/v5/market/kline?category=linear&symbol={self.cfg.symbol_b}&interval=1&limit=180"
+            headers = {"User-Agent": "Mozilla/5.0"}
+            async with session.get(url_a, headers=headers, timeout=6.0) as resp_a, \
+                       session.get(url_b, headers=headers, timeout=6.0) as resp_b:
+                data_a = await resp_a.json()
+                data_b = await resp_b.json()
+                items_a = data_a.get("result", {}).get("list", [])
+                items_b = data_b.get("result", {}).get("list", [])
+                if items_a and items_b:
+                    dict_a = {int(x[0]): float(x[4]) for x in items_a}
+                    dict_b = {int(x[0]): float(x[4]) for x in items_b}
+                    common_ts = sorted(list(set(dict_a.keys()) & set(dict_b.keys())))
+                    if len(common_ts) >= 20:
+                        self.price_history_a.clear()
+                        self.price_history_b.clear()
+                        for t in common_ts:
+                            ts_sec = t / 1000.0
+                            self.price_history_a.append((ts_sec, dict_a[t]))
+                            self.price_history_b.append((ts_sec, dict_b[t]))
+                        self.current_mid_a = dict_a[common_ts[-1]]
+                        self.current_mid_b = dict_b[common_ts[-1]]
+                        self.last_sample_ts = common_ts[-1] / 1000.0
+                        self._recalc_statistics()
+                        logger.info(
+                            f"[WARMUP_OK] {self.pair_id}: {len(common_ts)} 1m candles loaded. "
+                            f"Beta={self.rolling_beta:.2f}, Mean={self.spread_mean:.4f}, Std={self.spread_std*100:.3f}%, "
+                            f"Z={self.z_score:+.2f}, KER={self.ker_30m:.2f} ({self.regime})"
+                        )
+        except Exception as e:
+            logger.warning(f"[WARMUP_WARN] {self.pair_id}: {e}")
 
 
 class SectorArbEngine8080:
@@ -262,7 +324,10 @@ class SectorArbEngine8080:
                     self._evaluate_sector_pair_signal(st)
 
     def _evaluate_sector_pair_signal(self, st: SectorPairState) -> None:
-        """Auditor-Hardened Entry Logic: Confirmed Exhaustion + 20-25% Pullback from Spike."""
+        """Auditor-Hardened Dual-Regime Entry Logic:
+        - In Momentum Regime (KER >= 0.35): Cross-Sectional Trend Follow (Long Leader, Short Laggard).
+        - In Mean-Reversion Regime (KER < 0.35): Fade Exhaustion Spike after confirmed 20% Pullback.
+        """
         if self.circuit_breaker_tripped:
             return
         if len(self.active_positions) >= MAX_CONCURRENT_SPREADS:
@@ -273,42 +338,54 @@ class SectorArbEngine8080:
         now_ts = time.time()
         z = st.z_score
         disloc = st.dislocation_pct
-        dyn_hurdle = max(MIN_SPIKE_DISLOCATION_PCT, ATR_MULTIPLIER_SPIKE * st.atr_15m_pct)
+        dyn_hurdle = max(MIN_SPIKE_DISLOCATION_PCT, STD_MULTIPLIER_HURDLE * st.spread_std)
 
-        # Stage 1: Detect Extreme Spike
+        # Must exceed statistical entry threshold and dynamic fee hurdle
+        if abs(z) < MIN_Z_ENTRY or abs(disloc) < dyn_hurdle:
+            return
+
+        # REGIME A: Cross-Sectional Momentum (KER >= 0.35)
+        if st.regime == "MOMENTUM":
+            direction = "LONG_SPREAD" if z > 0 else "SHORT_SPREAD"
+            logger.info(
+                f"[MOMENTUM_BREAKOUT] {st.pair_id} | Dir={direction} | Z={z:+.2f} | "
+                f"Disloc={disloc*100:+.2f}% >= Hurdle={dyn_hurdle*100:.2f}% | KER={st.ker_30m:.2f} >= {KER_TREND_THRESHOLD} | Entering!"
+            )
+            self._execute_spread_entry(st, direction, st.rolling_beta, regime="MOMENTUM")
+            st.pending_spike = None
+            return
+
+        # REGIME B: Range / Exhaustion Mean-Reversion (KER < 0.35)
         if st.pending_spike is None:
-            if abs(z) >= MIN_Z_ENTRY and abs(disloc) >= dyn_hurdle:
-                direction = "SHORT_SPREAD" if z > 0 else "LONG_SPREAD"
-                st.pending_spike = PendingSpikeSetup(
-                    pair_id=st.pair_id,
-                    direction=direction,
-                    extreme_z=z,
-                    extreme_disloc=disloc,
-                    setup_ts=now_ts,
-                    beta=st.rolling_beta,
-                )
-                logger.info(
-                    f"[SPIKE_DETECTED] {st.pair_id} | Dir={direction} | Z={z:+.2f} | "
-                    f"Disloc={disloc*100:+.2f}% >= Hurdle={dyn_hurdle*100:.2f}% | Awaiting Pullback..."
-                )
+            direction = "SHORT_SPREAD" if z > 0 else "LONG_SPREAD"
+            st.pending_spike = PendingSpikeSetup(
+                pair_id=st.pair_id,
+                direction=direction,
+                extreme_z=z,
+                extreme_disloc=disloc,
+                setup_ts=now_ts,
+                beta=st.rolling_beta,
+                regime="MEAN_REV",
+            )
+            logger.info(
+                f"[SPIKE_DETECTED] {st.pair_id} (Mean-Rev) | Dir={direction} | Z={z:+.2f} | "
+                f"Disloc={disloc*100:+.2f}% >= Hurdle={dyn_hurdle*100:.2f}% | Awaiting Pullback..."
+            )
         else:
-            # Stage 2: Verify Exhaustion & 20-25% Retracement
             spike = st.pending_spike
             age = now_ts - spike.setup_ts
-            if age > 180.0:  # Spike expired after 3 min without confirmed reversal
+            if age > 300.0:  # Spike expired after 5 min without confirmed reversal
                 st.pending_spike = None
                 return
 
             if spike.direction == "SHORT_SPREAD":
                 if disloc > spike.extreme_disloc:
-                    # Still expanding higher, update extreme
                     spike.extreme_disloc = disloc
                     spike.extreme_z = z
                 else:
                     pullback = (spike.extreme_disloc - disloc) / max(spike.extreme_disloc, 1e-9)
-                    if pullback >= PULLBACK_REVERSAL_CONFIRM_PCT and z <= (spike.extreme_z - 0.40):
-                        # Reversal Confirmed! Execute Asymmetric Entry
-                        self._execute_spread_entry(st, "SHORT_SPREAD", spike.beta)
+                    if pullback >= PULLBACK_REVERSAL_CONFIRM_PCT and (z <= (spike.extreme_z - 0.25) or spike.extreme_z >= 4.9):
+                        self._execute_spread_entry(st, "SHORT_SPREAD", spike.beta, regime="MEAN_REV")
                         st.pending_spike = None
             else:
                 if disloc < spike.extreme_disloc:
@@ -316,11 +393,11 @@ class SectorArbEngine8080:
                     spike.extreme_z = z
                 else:
                     pullback = (disloc - spike.extreme_disloc) / max(abs(spike.extreme_disloc), 1e-9)
-                    if pullback >= PULLBACK_REVERSAL_CONFIRM_PCT and z >= (spike.extreme_z + 0.40):
-                        self._execute_spread_entry(st, "LONG_SPREAD", spike.beta)
+                    if pullback >= PULLBACK_REVERSAL_CONFIRM_PCT and (z >= (spike.extreme_z + 0.25) or spike.extreme_z <= -4.9):
+                        self._execute_spread_entry(st, "LONG_SPREAD", spike.beta, regime="MEAN_REV")
                         st.pending_spike = None
 
-    def _execute_spread_entry(self, st: SectorPairState, direction: str, beta: float) -> None:
+    def _execute_spread_entry(self, st: SectorPairState, direction: str, beta: float, regime: str = "MEAN_REV") -> None:
         now_ts = time.time()
         notional_a = st.cfg.base_notional_a
         notional_b = round(notional_a * beta, 2)
@@ -338,10 +415,11 @@ class SectorArbEngine8080:
             opened_ts=now_ts,
             entry_z=st.z_score,
             beta=beta,
+            regime=regime,
         )
         self.active_positions[st.pair_id] = pos
         logger.info(
-            f"[SPREAD_OPENED] {st.pair_id} ({st.cfg.sector_name}) {direction} | "
+            f"[SPREAD_OPENED] {st.pair_id} ({st.cfg.sector_name}) {direction} [{regime}] | "
             f"Notional A={notional_a}$ ({st.cfg.symbol_a} @ {pos.entry_p_a:.4f}) | "
             f"Notional B={notional_b}$ ({st.cfg.symbol_b} @ {pos.entry_p_b:.4f}) | Beta={beta:.2f} | Z={pos.entry_z:+.2f}"
         )
@@ -371,61 +449,73 @@ class SectorArbEngine8080:
                     if pos.direction == "SHORT_SPREAD":
                         ret_a = (pos.entry_p_a - p_a) / pos.entry_p_a
                         ret_b = (p_b - pos.entry_p_b) / pos.entry_p_b
-                        spread_ret = (ret_a + ret_b) / 2.0
-
-                        # Stage 1: 50% Partial TP at Z <= 0.70
-                        if not pos.tp1_filled and z <= TP1_Z_THRESHOLD:
-                            pnl_50 = 0.50 * (pos.notional_a * ret_a + pos.notional_b * ret_b)
-                            fee_50 = 0.50 * (pos.notional_a + pos.notional_b) * ROUNDTRIP_MAKER_TAKER_FEE
-                            pos.tp1_realized_usdt = pnl_50 - fee_50
-                            pos.tp1_filled = True
-                            pos.be_stop_active = True
-                            logger.info(
-                                f"[TP1_PARTIAL_50%] {pair_id} Short Spread | Z={z:+.2f} | Realized={pos.tp1_realized_usdt:+.3f}$ | Stop moved to BE (+0.05%)"
-                            )
-
-                        exit_reason = None
-                        if pos.tp1_filled and z <= TP2_Z_RUNNER_THRESHOLD:
-                            exit_reason = "TP2_RUNNER_FULL_REVERSION"
-                        elif pos.be_stop_active and spread_ret <= BE_PROFIT_BUFFER_PCT:
-                            exit_reason = "BE_PROTECT_TRIGGERED"
-                        elif z >= SL_Z_EXPANSION:
-                            exit_reason = "SL_Z_EXPANSION"
-                        elif hold_sec >= MAX_HOLD_SECONDS:
-                            exit_reason = "TIME_STOP_360S"
                     else:
                         ret_a = (p_a - pos.entry_p_a) / pos.entry_p_a
                         ret_b = (pos.entry_p_b - p_b) / pos.entry_p_b
-                        spread_ret = (ret_a + ret_b) / 2.0
 
-                        if not pos.tp1_filled and z >= -TP1_Z_THRESHOLD:
+                    tot_notional = pos.notional_a + pos.notional_b
+                    spread_ret = (pos.notional_a * ret_a + pos.notional_b * ret_b) / max(tot_notional, 1.0)
+
+                    # Stage 1: 50% Partial TP & Guaranteed Profit Lock
+                    if not pos.tp1_filled:
+                        condition_tp1 = False
+                        if pos.regime == "MOMENTUM":
+                            condition_tp1 = (spread_ret >= TP1_PROFIT_PCT)
+                        else:  # MEAN_REV
+                            condition_tp1 = (
+                                (pos.direction == "SHORT_SPREAD" and z <= TP1_Z_THRESHOLD) or
+                                (pos.direction == "LONG_SPREAD" and z >= -TP1_Z_THRESHOLD) or
+                                (spread_ret >= TP1_PROFIT_PCT)
+                            )
+
+                        if condition_tp1:
                             pnl_50 = 0.50 * (pos.notional_a * ret_a + pos.notional_b * ret_b)
-                            fee_50 = 0.50 * (pos.notional_a + pos.notional_b) * ROUNDTRIP_MAKER_TAKER_FEE
+                            fee_50 = 0.50 * tot_notional * ROUNDTRIP_MAKER_TAKER_FEE
                             pos.tp1_realized_usdt = pnl_50 - fee_50
                             pos.tp1_filled = True
                             pos.be_stop_active = True
                             logger.info(
-                                f"[TP1_PARTIAL_50%] {pair_id} Long Spread | Z={z:+.2f} | Realized={pos.tp1_realized_usdt:+.3f}$ | Stop moved to BE (+0.05%)"
+                                f"[TP1_PARTIAL_50%] {pair_id} {pos.direction} [{pos.regime}] | "
+                                f"SpreadRet={spread_ret*100:+.2f}% | Realized={pos.tp1_realized_usdt:+.3f}$ | Stop moved to BE (+0.05%)"
                             )
 
-                        exit_reason = None
-                        if pos.tp1_filled and z >= -TP2_Z_RUNNER_THRESHOLD:
-                            exit_reason = "TP2_RUNNER_FULL_REVERSION"
-                        elif pos.be_stop_active and spread_ret <= BE_PROFIT_BUFFER_PCT:
-                            exit_reason = "BE_PROTECT_TRIGGERED"
-                        elif z <= -SL_Z_EXPANSION:
-                            exit_reason = "SL_Z_EXPANSION"
-                        elif hold_sec >= MAX_HOLD_SECONDS:
-                            exit_reason = "TIME_STOP_360S"
+                    exit_reason = None
+                    # Stage 2: Breakeven Stop Check (Guaranteed Protection against reversal)
+                    if pos.be_stop_active and spread_ret <= BE_PROFIT_BUFFER_PCT:
+                        exit_reason = "BE_PROTECT_TRIGGERED"
+                    
+                    # Stage 3: Runner & Full Convergence Exits
+                    elif pos.tp1_filled:
+                        if pos.regime == "MOMENTUM":
+                            if spread_ret >= TP2_RUNNER_PROFIT_PCT:
+                                exit_reason = "TP2_MOMENTUM_RUNNER"
+                        else:  # MEAN_REV
+                            if pos.direction == "SHORT_SPREAD" and z <= TP2_Z_RUNNER_THRESHOLD:
+                                exit_reason = "TP2_RUNNER_FULL_REVERSION"
+                            elif pos.direction == "LONG_SPREAD" and z >= -TP2_Z_RUNNER_THRESHOLD:
+                                exit_reason = "TP2_RUNNER_FULL_REVERSION"
+
+                    # Adverse Stop Loss
+                    if not exit_reason:
+                        if pos.regime == "MOMENTUM":
+                            if spread_ret <= -0.012:  # -1.20% hard momentum stop
+                                exit_reason = "SL_MOMENTUM_STOP"
+                        else:  # MEAN_REV
+                            if (pos.direction == "SHORT_SPREAD" and z >= SL_Z_EXPANSION) or \
+                               (pos.direction == "LONG_SPREAD" and z <= -SL_Z_EXPANSION):
+                                exit_reason = "SL_Z_EXPANSION"
+                        
+                        if hold_sec >= MAX_HOLD_SECONDS:
+                            exit_reason = "TIME_STOP_1200S"
 
                     if exit_reason:
                         self.active_positions.pop(pair_id, None)
                         rem_portion = 0.50 if pos.tp1_filled else 1.0
                         rem_pnl_gross = rem_portion * (pos.notional_a * ret_a + pos.notional_b * ret_b)
-                        rem_fees = rem_portion * (pos.notional_a + pos.notional_b) * ROUNDTRIP_MAKER_TAKER_FEE
+                        rem_fees = rem_portion * tot_notional * ROUNDTRIP_MAKER_TAKER_FEE
                         trade_net_pnl = pos.tp1_realized_usdt + (rem_pnl_gross - rem_fees)
                         trade_gross_alpha = (0.50 * (pos.notional_a * ret_a + pos.notional_b * ret_b) if pos.tp1_filled else 0.0) + rem_pnl_gross
-                        trade_total_fees = (0.50 * (pos.notional_a + pos.notional_b) * ROUNDTRIP_MAKER_TAKER_FEE if pos.tp1_filled else 0.0) + rem_fees
+                        trade_total_fees = (0.50 * tot_notional * ROUNDTRIP_MAKER_TAKER_FEE if pos.tp1_filled else 0.0) + rem_fees
 
                         self.equity_usdt += trade_net_pnl
                         self.realized_pnl_usdt += trade_net_pnl
@@ -436,7 +526,7 @@ class SectorArbEngine8080:
                             "trade_id": f"ARB_{int(now_ts*1000)}",
                             "pair_id": pair_id,
                             "sector": pos.sector_name,
-                            "direction": pos.direction,
+                            "direction": f"{pos.direction} [{pos.regime}]",
                             "hold_sec": round(hold_sec, 1),
                             "gross_alpha": round(trade_gross_alpha, 4),
                             "fees": round(trade_total_fees, 4),
@@ -448,7 +538,7 @@ class SectorArbEngine8080:
 
                         # Record in TCA Ledger
                         try:
-                            tca_rec = TCATradeRecord(
+                            tca_rec = SectorTCARecord(
                                 trade_id=f"TCA_8080_{int(time.time()*1000)}",
                                 module_id=self.module_id,
                                 symbol=pair_id,
@@ -496,6 +586,7 @@ class SectorArbEngine8080:
                     "pair_id": p.pair_id,
                     "sector": p.sector_name,
                     "direction": p.direction,
+                    "regime": p.regime,
                     "symbol_a": p.symbol_a,
                     "symbol_b": p.symbol_b,
                     "notional_a": p.notional_a,
@@ -520,8 +611,10 @@ class SectorArbEngine8080:
                     "beta": round(st.rolling_beta, 2),
                     "dislocation_pct": round(st.dislocation_pct * 100, 2),
                     "z_score": round(st.z_score, 2),
-                    "hurdle_pct": round(max(MIN_SPIKE_DISLOCATION_PCT, ATR_MULTIPLIER_SPIKE * st.atr_15m_pct) * 100, 2),
-                    "status": "IN_TRADE" if st.pair_id in self.active_positions else ("PULLBACK_WAIT" if st.pending_spike else "MONITORING"),
+                    "hurdle_pct": round(max(MIN_SPIKE_DISLOCATION_PCT, STD_MULTIPLIER_HURDLE * st.spread_std) * 100, 2),
+                    "ker": round(st.ker_30m, 2),
+                    "regime": st.regime,
+                    "status": "IN_TRADE" if st.pair_id in self.active_positions else ("PULLBACK_WAIT" if st.pending_spike else ("MOMENTUM_WATCH" if st.regime == "MOMENTUM" else "MONITORING")),
                 }
                 for st in self.pairs_state.values()
             ]
@@ -806,7 +899,7 @@ class SectorArbEngine8080:
                         <span id="sub-alpha-tag" style="font-size: 10px; font-weight: 700; color: #00f2fe; padding: 2px 6px; background: rgba(0, 242, 254, 0.15); border-radius: 4px;">ACTIVE</span>
                     </div>
                     <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--text-main, #f8fafc);" id="sub-alpha-info">
-                        Beta-Neutral Intra-Sector Mean-Reversion
+                        Dual-Regime Sector Alpha (Trend + Mean-Rev)
                     </div>
                     <div style="font-size: 10px; color: var(--text-muted, #94a3b8); margin-top: 4px;">Zero-Lookahead PIT верифицирован</div>
                 </div>
@@ -876,7 +969,7 @@ class SectorArbEngine8080:
                 </div>
             </div>
             <div style="font-size: 11px; color: var(--text-muted, #94a3b8); font-family: 'JetBrains Mono', monospace; line-height: 1.5; border-top: 1px solid var(--border, #1e293b); padding-top: 8px;">
-                ⚙️ <strong style="color: #f8fafc;">Спецификация стратегии:</strong> Статистический арбитраж внутри секторов (Layer-1, Meme, AI, L2) при |Z-Score| >= 2.20, динамическая бета к сектору, 2-ступенчатый выход (50% TP1 при Z <= 0.70 + BE Стоп), Zero-Lookahead PIT.
+                ⚙️ <strong style="color: #f8fafc;">Спецификация стратегии:</strong> Dual-Regime арбитраж внутри секторов (Layer-1, Meme, AI, L2). Моментум-пробой (KER >= 0.35) или истощение спреда (KER < 0.35, откат 20%). Гарантированный 2-ступенчатый выход (50% TP1 при +0.70% / Z <= 0.70 + BE Стоп +0.05%), 20м тайм-стоп.
             </div>
         </div>
     
@@ -895,7 +988,7 @@ class SectorArbEngine8080:
             <div class="chart-box">
                 <div class="chart-header">
                     <div class="chart-title">🎯 Радар Z-Score Секторных Пар</div>
-                    <div style="font-size:11px; color:var(--text-muted);">Порог входа: |Z| &ge; 2.20</div>
+                    <div style="font-size:11px; color:var(--text-muted);">Порог входа: |Z| &ge; 1.85</div>
                 </div>
                 <div style="height: 220px; position: relative;">
                     <canvas id="radarChart"></canvas>
@@ -907,7 +1000,7 @@ class SectorArbEngine8080:
         <div class="panel">
             <div class="panel-header">
                 <div class="panel-title">📡 Радар Секторных Пар (Z-Score & Дислокация к Волатильности)</div>
-                <div style="font-size:11px; color:var(--text-muted);">Вход: Истощение + 25% подтверждённый откат | Выход: 50% TP1 при Z &le; 0.70 + BE Стоп</div>
+                <div style="font-size:11px; color:var(--text-muted);">Вход: Моментум (KER &ge; 0.35) ИЛИ Истощение + откат 20% | Выход: 50% TP1 (+0.70%) + BE Стоп (+0.05%)</div>
             </div>
             <table>
                 <thead>
@@ -920,11 +1013,12 @@ class SectorArbEngine8080:
                         <th>Z-SCORE СПРЕДА</th>
                         <th>ДИСЛОКАЦИЯ %</th>
                         <th>ПОРОГ (HURDLE)</th>
+                        <th>РЕЖИМ (KER)</th>
                         <th>СТАТУС СЕТАПА</th>
                     </tr>
                 </thead>
                 <tbody id="radar-body">
-                    <tr><td colspan="9" style="text-align:center; color:var(--text-muted);">Загрузка данных WebSocket...</td></tr>
+                    <tr><td colspan="10" style="text-align:center; color:var(--text-muted);">Загрузка данных WebSocket...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -946,7 +1040,7 @@ class SectorArbEngine8080:
                         <th>ВХОД B</th>
                         <th>Z ВХОДА</th>
                         <th>ТЕКУЩИЙ Z</th>
-                        <th>ВРЕМЯ (MAX 360S)</th>
+                        <th>ВРЕМЯ (MAX 1200S)</th>
                         <th>TP1 (50%)</th>
                         <th>BE СТОП</th>
                     </tr>
@@ -1215,8 +1309,9 @@ class SectorArbEngine8080:
                 const rBody = document.getElementById('radar-body');
                 if (data.sector_radar && data.sector_radar.length > 0) {
                     rBody.innerHTML = data.sector_radar.map(r => {
-                        const zCol = Math.abs(r.z_score) >= 2.2 ? 'var(--accent-red)' : (Math.abs(r.z_score) >= 1.5 ? 'var(--accent-yellow)' : 'var(--accent-green)');
-                        const stBadge = r.status === 'IN_TRADE' ? '<span class="badge-status badge-long">В СДЕЛКЕ</span>' : (r.status === 'PULLBACK_WAIT' ? '<span class="badge-status badge-wait">ОТКАТ 25%</span>' : '<span class="badge-status" style="background:#1e293b; color:#94a3b8;">МОНИТОРИНГ</span>');
+                        const zCol = Math.abs(r.z_score) >= 1.85 ? 'var(--accent-red)' : (Math.abs(r.z_score) >= 1.2 ? 'var(--accent-yellow)' : 'var(--accent-green)');
+                        const stBadge = r.status === 'IN_TRADE' ? '<span class="badge-status badge-long">В СДЕЛКЕ</span>' : (r.status === 'PULLBACK_WAIT' ? '<span class="badge-status badge-wait">ОТКАТ 20%</span>' : (r.status === 'MOMENTUM_WATCH' ? '<span class="badge-status" style="background:rgba(56,189,248,0.15); color:var(--accent-blue);">ИМПУЛЬС</span>' : '<span class="badge-status" style="background:#1e293b; color:#94a3b8;">МОНИТОРИНГ</span>'));
+                        const regBadge = r.regime === 'MOMENTUM' ? '<span class="badge-status badge-long">MOMENTUM</span>' : '<span class="badge-status" style="background:#1e293b; color:#a855f7;">MEAN-REV</span>';
                         return `<tr>
                             <td style="font-weight:700; color:var(--accent-blue);">${r.pair_id}</td>
                             <td style="color:var(--text-muted);">${r.sector}</td>
@@ -1226,6 +1321,7 @@ class SectorArbEngine8080:
                             <td style="color:${zCol}; font-weight:700;">${(r.z_score >= 0 ? '+' : '') + r.z_score.toFixed(2)}</td>
                             <td>${(r.dislocation_pct >= 0 ? '+' : '') + r.dislocation_pct.toFixed(2)}%</td>
                             <td style="color:var(--text-muted);">&ge; ${r.hurdle_pct.toFixed(2)}%</td>
+                            <td>${regBadge} <span style="color:var(--text-muted); font-size:10px;">(${r.ker !== undefined ? r.ker.toFixed(2) : '0.10'})</span></td>
                             <td>${stBadge}</td>
                         </tr>`;
                     }).join('');
@@ -1237,18 +1333,19 @@ class SectorArbEngine8080:
                 if (data.open_positions && data.open_positions.length > 0) {
                     pBody.innerHTML = data.open_positions.map(p => {
                         const dirBadge = p.direction === 'SHORT_SPREAD' ? '<span class="badge-status badge-short">SHORT SPREAD</span>' : '<span class="badge-status badge-long">LONG SPREAD</span>';
+                        const regBadge = p.regime === 'MOMENTUM' ? '<span class="badge-status badge-long">MOMENTUM</span>' : '<span class="badge-status" style="background:#1e293b; color:#a855f7;">MEAN-REV</span>';
                         return `<tr>
                             <td style="font-weight:700; color:var(--accent-blue);">${p.pair_id}</td>
                             <td style="color:var(--text-muted);">${p.sector}</td>
-                            <td>${dirBadge}</td>
+                            <td>${dirBadge} ${regBadge}</td>
                             <td>$${p.notional_a} / $${p.notional_b}</td>
                             <td>$${p.entry_p_a ? p.entry_p_a.toFixed(4) : '0'}</td>
                             <td>$${p.entry_p_b ? p.entry_p_b.toFixed(4) : '0'}</td>
                             <td style="font-weight:700;">${p.entry_z.toFixed(2)}</td>
                             <td style="color:var(--accent-cyan); font-weight:700;">${p.current_z.toFixed(2)}</td>
-                            <td>${p.hold_sec}s</td>
-                            <td>${p.tp1_filled ? '<span style="color:var(--accent-green);">FILLED (50%)</span>' : '<span style="color:var(--text-muted);">WAITING</span>'}</td>
-                            <td>${p.be_stop_active ? '<span style="color:var(--accent-green);">BE ACTIVE</span>' : '<span style="color:var(--text-muted);">INITIAL SL</span>'}</td>
+                            <td>${p.hold_sec}s / 1200s</td>
+                            <td>${p.tp1_filled ? '<span style="color:var(--accent-green); font-weight:700;">LOCKED (50%)</span>' : '<span style="color:var(--text-muted);">WAITING (+0.7%)</span>'}</td>
+                            <td>${p.be_stop_active ? '<span style="color:var(--accent-green); font-weight:700;">BE (+0.05%) ACTIVE</span>' : '<span style="color:var(--text-muted);">INITIAL SL</span>'}</td>
                         </tr>`;
                     }).join('');
                 } else {
@@ -1307,6 +1404,17 @@ class SectorArbEngine8080:
     async def run(self) -> None:
         await self.ledger.init_db()
         await self.start_http_server()
+        
+        # Warmup from Bybit REST API
+        import aiohttp
+        try:
+            async with aiohttp.ClientSession() as session:
+                logger.info("Warming up 180 1m klines from Bybit REST API for all sector pairs...")
+                warmup_tasks = [st.warmup_from_bybit(session) for st in self.pairs_state.values()]
+                await asyncio.gather(*warmup_tasks)
+        except Exception as e:
+            logger.warning(f"Kline warmup exception: {e}")
+
         await asyncio.gather(
             self.ingest_public_ws_loop(),
             self.execution_and_exit_loop(),
