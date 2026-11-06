@@ -574,27 +574,39 @@ HTML_PAGE = f"""<!DOCTYPE html>
                     radarBody.innerHTML = rHtml;
                 }}
 
-                const openPos = d.active_positions || {{}};
-                const posKeys = Object.keys(openPos);
+                const openPos = d.active_positions || d.open_positions || {{}};
+                const isPosArr = Array.isArray(openPos);
+                const posKeys = isPosArr ? openPos.map((_, i) => i) : Object.keys(openPos);
                 const openBody = document.getElementById('open-positions-body');
                 if (posKeys.length === 0) {{
                     openBody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 20px;">Нет открытых позиций скальпинга.</td></tr>';
                 }} else {{
                     let pRows = '';
-                    for (const s of posKeys) {{
-                        const p = openPos[s];
-                        const sideCol = p.side === 'Buy' ? '#10b981' : '#ef4444';
+                    for (const k of posKeys) {{
+                        const p = openPos[k];
+                        if (!p) continue;
+                        const sym = p.symbol || k;
+                        const sideStr = (p.side || p.direction || 'LONG').toUpperCase();
+                        const isLong = sideStr === 'LONG' || sideStr === 'BUY';
+                        const sideCol = isLong ? '#10b981' : '#ef4444';
+                        const sl = p.stop_loss !== undefined ? p.stop_loss : (p.sl_price !== undefined ? p.sl_price : 0.0);
+                        const tp1 = p.take_profit_1 !== undefined ? p.take_profit_1 : (p.tp1_price !== undefined ? p.tp1_price : 0.0);
+                        const tp2 = p.take_profit_2 !== undefined ? p.take_profit_2 : (p.tp2_price !== undefined ? p.tp2_price : 0.0);
+                        const holdSec = p.hold_sec !== undefined ? p.hold_sec : (p.opened_ms ? Math.max(0, (Date.now() - p.opened_ms) / 1000) : 0.0);
+                        const uPnl = Number(p.unrealized_pnl || 0.0);
+                        const pnlCol = uPnl >= 0 ? '#10b981' : '#ef4444';
+
                         pRows += `<tr>
-                            <td style="font-weight:700; color:#38bdf8;">${{s}}</td>
+                            <td style="font-weight:700; color:#38bdf8;">${{sym}}</td>
                             <td><span style="font-size:11px; color:#cbd5e1;">${{p.engine_id || 'OMS'}}</span></td>
-                            <td style="font-weight:700; color:${{sideCol}};">${{p.side}}</td>
+                            <td style="font-weight:700; color:${{sideCol}};">${{sideStr}}</td>
                             <td>${{p.qty}}</td>
-                            <td>$${{p.entry_price.toFixed(4)}}</td>
-                            <td style="color:#f59e0b;">$${{p.sl_price.toFixed(4)}}</td>
-                            <td style="color:#00f2fe;">$${{p.tp1_price.toFixed(4)}}</td>
-                            <td style="color:#ec4899;">$${{p.tp2_price.toFixed(4)}}</td>
-                            <td>${{(p.hold_sec || 0).toFixed(1)}}s</td>
-                            <td style="font-weight:700; color:${{p.unrealized_pnl >= 0 ? '#10b981' : '#ef4444'}};">${{p.unrealized_pnl >= 0 ? '+' : ''}}${{p.unrealized_pnl.toFixed(2)}}</td>
+                            <td>$${{Number(p.entry_price || 0.0).toFixed(4)}}</td>
+                            <td style="color:#f59e0b;">$${{Number(sl).toFixed(4)}}</td>
+                            <td style="color:#00f2fe;">$${{Number(tp1).toFixed(4)}}</td>
+                            <td style="color:#ec4899;">$${{Number(tp2).toFixed(4)}}</td>
+                            <td>${{Number(holdSec).toFixed(1)}}s</td>
+                            <td style="font-weight:700; color:${{pnlCol}};">${{uPnl >= 0 ? '+' : ''}}$${{uPnl.toFixed(2)}}</td>
                         </tr>`;
                     }}
                     openBody.innerHTML = pRows;
@@ -610,25 +622,24 @@ HTML_PAGE = f"""<!DOCTYPE html>
                     }} else {{
                         let cHtml = '';
                         for (const t of closed.slice(-15).reverse()) {{
-                            const col = (t.net_pnl || t.pnl_usdt) >= 0 ? '#10b981' : '#ef4444';
-                            const sideCol = (t.side === 'LONG' || t.side === 'Buy') ? '#10b981' : '#ef4444';
-                            const dStr = t.closed_at ? new Date(t.closed_at).toLocaleTimeString() : '--:--:--';
-                            const pnlVal = t.net_pnl !== undefined ? t.net_pnl : (t.pnl_usdt || 0.0);
+                            const pnlVal = t.net_pnl !== undefined ? t.net_pnl : (t.pnl_usdt !== undefined ? t.pnl_usdt : (t.net_pnl_usdt || 0.0));
+                            const col = pnlVal >= 0 ? '#10b981' : '#ef4444';
+                            const sideStr = (t.side || 'LONG').toUpperCase();
+                            const sideCol = (sideStr === 'LONG' || sideStr === 'BUY') ? '#10b981' : '#ef4444';
+                            const dStr = formatChartTs(t.closed_at || t.timestamp || t.exit_time || Date.now());
                             cHtml += `<tr>
                                 <td>${{dStr}} UTC</td>
                                 <td style="font-weight: 700; color: #38bdf8;">${{t.symbol}}</td>
-                                <td style="color: ${{sideCol}}; font-weight: 700;">${{t.side}}</td>
-                                <td>${{t.entry_price ? t.entry_price.toFixed(4) : '--'}}</td>
-                                <td>${{t.exit_price ? t.exit_price.toFixed(4) : '--'}}</td>
-                                <td style="color: ${{col}}; font-weight: 700;">${{pnlVal >= 0 ? '+' : ''}}${{pnlVal.toFixed(2)}}$</td>
+                                <td style="color: ${{sideCol}}; font-weight: 700;">${{sideStr}}</td>
+                                <td>${{t.entry_price ? Number(t.entry_price).toFixed(4) : '--'}}</td>
+                                <td>${{t.exit_price ? Number(t.exit_price).toFixed(4) : '--'}}</td>
+                                <td style="color: ${{col}}; font-weight: 700;">${{pnlVal >= 0 ? '+' : ''}}$${{Number(pnlVal).toFixed(2)}}$</td>
                                 <td><span style="font-size: 11px; color: #cbd5e1;">${{t.exit_reason || t.reason || '--'}}</span></td>
                             </tr>`;
                         }}
                         closedBody.innerHTML = cHtml;
                     }}
                 }}
-
-                updateChart(eq, closed);
             }} catch (err) {{
                 console.error('Error polling status:', err);
             }}

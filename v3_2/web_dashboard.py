@@ -714,23 +714,31 @@ HTML_PAGE = """<!DOCTYPE html>
                 try { syncPaperTestStatsAndChart(data); } catch (e) { console.error("syncPaperTestStatsAndChart error:", e); }
 
                 // Metrics
-                const equity = data.portfolio_equity || data.capital || 300.0;
-                const capital = data.capital || 300.0;
+                const equity = Number(data.portfolio_equity || data.capital || data.equity || 300.0);
+                const capital = Number(data.capital || data.portfolio_equity || 300.0);
                 const pnl = equity - 300.0;
                 const pnlPct = (pnl / 300.0) * 100.0;
 
-                document.getElementById('metric-equity').innerText = `$${equity.toFixed(2)}`;
-                document.getElementById('metric-capital-sub').innerText = `Капитал: $${capital.toFixed(2)}`;
+                const eqEl = document.getElementById('metric-equity');
+                if (eqEl) eqEl.innerText = `$${equity.toFixed(2)}`;
+                const capEl = document.getElementById('metric-capital-sub');
+                if (capEl) capEl.innerText = `Капитал: $${capital.toFixed(2)}`;
 
                 const pnlEl = document.getElementById('metric-pnl');
-                pnlEl.innerText = `${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} (${pnlPct.toFixed(2)}%)`;
-                pnlEl.className = `metric-val ${pnl >= 0 ? 'positive' : 'negative'}`;
+                if (pnlEl) {
+                    pnlEl.innerText = `${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} (${pnlPct.toFixed(2)}%)`;
+                    pnlEl.className = `metric-val ${pnl >= 0 ? 'positive' : 'negative'}`;
+                }
 
-                document.getElementById('metric-wr').innerText = `${(data.win_rate_pct || 0).toFixed(1)}%`;
-                document.getElementById('metric-trades-sub').innerText = `Всего закрыто: ${data.total_trades || 0} сделок`;
+                const wrEl = document.getElementById('metric-wr');
+                if (wrEl) wrEl.innerText = `${(data.win_rate_pct || 0).toFixed(1)}%`;
+                const trSubEl = document.getElementById('metric-trades-sub');
+                if (trSubEl) trSubEl.innerText = `Всего закрыто: ${data.total_trades || 0} сделок`;
 
-                document.getElementById('metric-dd').innerText = `${(data.drawdown_pct || 0).toFixed(2)}%`;
-                document.getElementById('metric-peak-sub').innerText = `Пик: $${(data.peak_equity || 300.0).toFixed(2)}`;
+                const ddEl = document.getElementById('metric-dd');
+                if (ddEl) ddEl.innerText = `${(data.drawdown_pct || 0).toFixed(2)}%`;
+                const pkEl = document.getElementById('metric-peak-sub');
+                if (pkEl) pkEl.innerText = `Пик: $${(data.peak_equity || 300.0).toFixed(2)}`;
 
                 // News Shield Badge
                 const newsBadge = document.getElementById('badge-news');
@@ -748,25 +756,43 @@ HTML_PAGE = """<!DOCTYPE html>
                 // Positions
                 const tPos = data.trend_open_positions || [];
                 const rPos = data.range_open_positions || [];
-                const allPos = [...tPos, ...rPos];
-                document.getElementById('pos-counter').innerText = `Позиций: ${allPos.length}`;
+                const rawPos = (data.open_positions && Array.isArray(data.open_positions) && data.open_positions.length > 0)
+                    ? data.open_positions
+                    : (data.open_positions && typeof data.open_positions === 'object' && Object.keys(data.open_positions).length > 0)
+                        ? Object.values(data.open_positions)
+                        : [...tPos, ...rPos];
+                const allPos = Array.isArray(rawPos) ? rawPos : Object.values(rawPos || {});
+                const posCounter = document.getElementById('pos-counter');
+                if (posCounter) posCounter.innerText = `Позиций: ${allPos.length}`;
 
                 const posBody = document.getElementById('positions-table-body');
-                if (allPos.length === 0) {
-                    posBody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted);">Нет открытых позиций. Сканирование рынка...</td></tr>';
-                } else {
-                    posBody.innerHTML = allPos.map(p => `
-                        <tr>
-                            <td><span class="tag" style="background:${p.module==='TREND'?'rgba(56,189,248,0.15)':'rgba(168,85,247,0.15)'};color:${p.module==='TREND'?'var(--accent)':'var(--purple)'};">${p.module}</span></td>
-                            <td><strong>${p.symbol}</strong></td>
-                            <td class="${p.direction==='LONG'||p.direction==='BUY'?'positive':'negative'}">${p.direction}</td>
-                            <td>${p.qty}</td>
-                            <td>$${p.entry_price.toFixed(4)}</td>
-                            <td>$${p.current_price.toFixed(4)}</td>
-                            <td class="${p.unrealized_pnl>=0?'positive':'negative'}">${p.unrealized_pnl>=0?'+':''}$${p.unrealized_pnl.toFixed(2)}</td>
-                            <td>SL: $${(p.stop_loss||0).toFixed(4)} ${p.take_profit ? '| TP: $'+p.take_profit.toFixed(4) : ''}</td>
-                        </tr>
-                    `).join('');
+                if (posBody) {
+                    if (allPos.length === 0) {
+                        posBody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted);">Нет открытых позиций. Сканирование рынка...</td></tr>';
+                    } else {
+                        posBody.innerHTML = allPos.map(p => {
+                            const mod = p.module || 'TREND';
+                            const dirStr = (p.direction === 1 || p.direction === 'LONG' || p.direction === 'BUY') ? 'LONG' : 'SHORT';
+                            const isLong = dirStr === 'LONG';
+                            const ep = Number(p.entry_price || 0.0);
+                            const cp = Number(p.current_price || ep);
+                            const uPnl = Number(p.unrealized_pnl || 0.0);
+                            const sl = Number(p.stop_loss || p.sl_price || 0.0);
+                            const tp = Number(p.take_profit || p.tp1_price || 0.0);
+                            return `
+                                <tr>
+                                    <td><span class="tag" style="background:${mod==='TREND'?'rgba(56,189,248,0.15)':'rgba(168,85,247,0.15)'};color:${mod==='TREND'?'var(--accent)':'var(--purple)'};">${mod}</span></td>
+                                    <td><strong>${p.symbol}</strong></td>
+                                    <td class="${isLong?'positive':'negative'}">${dirStr}</td>
+                                    <td>${p.qty}</td>
+                                    <td>$${ep.toFixed(4)}</td>
+                                    <td>$${cp.toFixed(4)}</td>
+                                    <td class="${uPnl>=0?'positive':'negative'}">${uPnl>=0?'+':''}$${uPnl.toFixed(2)}</td>
+                                    <td>SL: $${sl.toFixed(4)} ${tp > 0 ? '| TP: $'+tp.toFixed(4) : ''}</td>
+                                </tr>
+                            `;
+                        }).join('');
+                    }
                 }
 
                 // Range Orders

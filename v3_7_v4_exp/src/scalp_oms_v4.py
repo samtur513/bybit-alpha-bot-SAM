@@ -9,6 +9,7 @@ import math
 from pathlib import Path
 import sys
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -220,6 +221,25 @@ class ScalpOMSV4(ScalpOMS):
                     pos.qty -= realized_slice
                     pos.tp1_filled = True
                     pos.sl_price = pos.entry_price  # Move SL to breakeven for remaining runner
+                    self.closed_trades_history.append({
+                        "symbol": sym,
+                        "engine_id": pos.engine_id,
+                        "side": pos.side,
+                        "entry_price": pos.entry_price,
+                        "exit_price": pos.tp1_price,
+                        "initial_qty": pos.initial_qty,
+                        "qty": realized_slice,
+                        "remaining_qty": pos.qty,
+                        "net_pnl_usdt": round(slice_net_usdt, 4),
+                        "net_pnl": round(slice_net_usdt, 4),
+                        "pnl_usdt": round(slice_net_usdt, 4),
+                        "exit_reason": "TP1_50PCT_MAKER",
+                        "reason": "TP1_50PCT_MAKER",
+                        "is_maker": True,
+                        "tp1_filled": True,
+                        "closed_at": datetime.now(timezone.utc).isoformat(),
+                        "timestamp": now_ms,
+                    })
                     logger.info(f"[TP1_MAKER_HIT] {sym} {pos.side} 50% зафиксировано. Net PnL: +${slice_net_usdt:.2f}. Остаток переведен в безубыток.")
 
             # F. TP2 / Runner Exit
@@ -232,6 +252,56 @@ class ScalpOMSV4(ScalpOMS):
             if hold_sec >= pos.max_hold_sec:
                 await self._close_position(pos, curr_p, is_maker=False, reason="MAX_HOLD_TIMEOUT")
                 continue
+
+    async def _close_position(
+        self, pos: ActivePosition, exit_price: float, is_maker: bool, reason: str
+    ) -> None:
+        self.active_positions.pop(pos.symbol, None)
+        exit_fee = self.cfg.fee_maker if is_maker else self.cfg.fee_taker
+        total_fee_pct = self.cfg.fee_maker + exit_fee
+
+        is_long = pos.side == "Buy"
+        gross_pct = (exit_price - pos.entry_price) / pos.entry_price if is_long else (pos.entry_price - exit_price) / pos.entry_price
+        net_pct = gross_pct - total_fee_pct
+        net_usdt = pos.qty * pos.entry_price * net_pct
+
+        self.daily_pnl_usdt += net_usdt
+        total_trade_net_usdt = pos.tp1_realized_pnl_usdt + net_usdt
+
+        if total_trade_net_usdt < 0:
+            self.consecutive_losses[pos.symbol] = self.consecutive_losses.get(pos.symbol, 0) + 1
+            if self.consecutive_losses[pos.symbol] >= 3:
+                self.cooldown_until[pos.symbol] = time.time() + 3600.0
+                logger.warning(f"[COOLDOWN] {pos.symbol} locked for 60 min ({self.consecutive_losses[pos.symbol]} consecutive losses).")
+        else:
+            self.consecutive_losses[pos.symbol] = 0
+
+        trade_reason = f"{reason}_RUNNER" if pos.tp1_filled else reason
+        trade_pnl = net_usdt if pos.tp1_filled else total_trade_net_usdt
+
+        self.closed_trades_history.append({
+            "symbol": pos.symbol,
+            "engine_id": pos.engine_id,
+            "side": pos.side,
+            "entry_price": pos.entry_price,
+            "exit_price": exit_price,
+            "initial_qty": pos.initial_qty,
+            "remaining_qty": 0.0,
+            "qty": pos.qty,
+            "net_pnl_usdt": round(trade_pnl, 4),
+            "net_pnl": round(trade_pnl, 4),
+            "pnl_usdt": round(trade_pnl, 4),
+            "exit_reason": trade_reason,
+            "reason": trade_reason,
+            "is_maker": is_maker,
+            "tp1_filled": pos.tp1_filled,
+            "closed_at": datetime.now(timezone.utc).isoformat(),
+            "timestamp": int(time.time() * 1000),
+        })
+        logger.info(
+            f"[POSITION CLOSED] {pos.symbol} {pos.side} via {trade_reason} @ {exit_price:.4f} | "
+            f"PnL: {trade_pnl:+.4f} USDT | Total Daily PnL: {self.daily_pnl_usdt:+.4f} USDT"
+        )
 
     def get_status(self) -> Dict[str, Any]:
         """Provides status dict for Web Dashboard and Meta-Dashboard."""
@@ -251,11 +321,15 @@ class ScalpOMSV4(ScalpOMS):
                 "entry_price": p.entry_price,
                 "current_price": curr_p,
                 "stop_loss": p.sl_price,
+                "sl_price": p.sl_price,
                 "take_profit_1": p.tp1_price,
+                "tp1_price": p.tp1_price,
                 "take_profit_2": p.tp2_price,
+                "tp2_price": p.tp2_price,
                 "engine_id": p.engine_id,
                 "unrealized_pnl": round(gross_pnl, 4),
                 "opened_ms": p.opened_ms,
+                "hold_sec": round((time.time() * 1000 - p.opened_ms) / 1000, 1) if p.opened_ms else 0.0,
             }
 
         orders_list = []

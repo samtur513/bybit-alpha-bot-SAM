@@ -236,3 +236,67 @@ def test_v37_v4_z_ofi_entry_trigger():
     assert "Z_OFI=-2.80σ" in sig_short.reason
 
 
+
+@pytest.mark.asyncio
+async def test_v37_v4_tp1_partial_accounting():
+    cfg = ScalperConfigV37V4(equity_usdt=300.0)
+    meta = InstrumentMeta(symbol="UAIUSDT", tick_size=0.0001, qty_step=1.0, min_qty=1.0)
+    state = SymbolMicrostructureStateV4("UAIUSDT", meta)
+    state.mid_price = 0.2085  # Above TP1 (0.2079)
+    state.best_bid = 0.2084
+    state.best_ask = 0.2086
+
+    oms = ScalpOMSV4(cfg, {"UAIUSDT": state})
+
+    pos = ActivePosition(
+        symbol="UAIUSDT",
+        engine_id="E1_ZOFI",
+        side="Buy",
+        qty=100.0,
+        initial_qty=100.0,
+        entry_price=0.2000,
+        sl_price=0.1980,
+        tp1_price=0.2079,
+        tp2_price=0.2175,
+        opened_ms=1000,
+        max_hold_sec=300.0,
+    )
+    oms.active_positions["UAIUSDT"] = pos
+
+    # 1. Step to trigger TP1
+    await oms.monitor_step(now_ms=2000)
+
+    assert pos.tp1_filled is True
+    assert pos.qty == 50.0  # 50% left as runner
+    assert pos.sl_price == pos.entry_price  # SL moved to breakeven
+    assert len(oms.closed_trades_history) == 1
+    tp1_record = oms.closed_trades_history[0]
+    assert tp1_record["exit_reason"] == "TP1_50PCT_MAKER"
+    assert tp1_record["net_pnl_usdt"] > 0
+    assert oms.daily_pnl_usdt == pytest.approx(tp1_record["net_pnl_usdt"], abs=1e-4)
+
+    # Status check
+    st = oms.get_status()
+    assert "UAIUSDT" in st["active_positions"]
+    pos_stat = st["active_positions"]["UAIUSDT"]
+    assert pos_stat["stop_loss"] == 0.2000
+    assert pos_stat["sl_price"] == 0.2000
+    assert pos_stat["take_profit_1"] == 0.2079
+    assert pos_stat["tp1_price"] == 0.2079
+    assert pos_stat["take_profit_2"] == 0.2175
+    assert pos_stat["tp2_price"] == 0.2175
+    assert "hold_sec" in pos_stat
+
+    # 2. Price reaches TP2 -> Runner exit
+    state.mid_price = 0.2180
+    await oms.monitor_step(now_ms=5000)
+
+    assert "UAIUSDT" not in oms.active_positions
+    assert len(oms.closed_trades_history) == 2
+    runner_record = oms.closed_trades_history[1]
+    assert runner_record["exit_reason"] == "TP2_RUNNER_RUNNER"
+    assert runner_record["net_pnl_usdt"] > 0
+
+    # Trade Accounting Integrity: sum of trade records equals daily PnL
+    total_trades_pnl = sum(t["net_pnl_usdt"] for t in oms.closed_trades_history)
+    assert total_trades_pnl == pytest.approx(oms.daily_pnl_usdt, abs=1e-4)

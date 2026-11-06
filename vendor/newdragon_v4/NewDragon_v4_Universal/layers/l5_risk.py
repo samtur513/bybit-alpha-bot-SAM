@@ -221,3 +221,32 @@ class UniversalPositionSizer:
                 return 0.0
 
         return q_final
+
+
+class PortfolioHeatGuard:
+    """
+    Dedicated Portfolio Heat and Correlation Cluster Guardian.
+    Limits aggregate portfolio risk <= max_heat (default 4.5% equity).
+    """
+
+    def __init__(
+        self,
+        max_heat: float = 0.045,
+        max_correlated_positions: int = 2,
+    ) -> None:
+        self.max_heat = max_heat
+        self.max_correlated_positions = max_correlated_positions
+        self.current_heat = 0.0
+        self.active_correlated_count = 0
+
+    def can_allocate(self, risk_usd: float, capital: float = 1000.0) -> bool:
+        """Checks if incremental risk fits within portfolio heat budget."""
+        inc_heat = risk_usd / max(capital, 1.0)
+        return (self.current_heat + inc_heat) <= self.max_heat
+
+    def record_allocation(self, risk_usd: float, capital: float = 1000.0) -> None:
+        self.current_heat += risk_usd / max(capital, 1.0)
+
+    def release_allocation(self, risk_usd: float, capital: float = 1000.0) -> None:
+        self.current_heat = max(0.0, self.current_heat - (risk_usd / max(capital, 1.0)))
+

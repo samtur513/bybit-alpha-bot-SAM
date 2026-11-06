@@ -8,7 +8,7 @@ Implements:
 - Stage 2: Partial Scale-Out at +1.40R (Close 60% via Maker limit + Move stop to +0.35R profit lock)
 - Stage 3: Adaptive Chandelier Trail at +2.00R (Dynamic compression 2.5x -> 1.2x on shock or adverse order flow)
 """
-from typing import Optional
+from typing import Optional, Dict, Any
 from core.models import PositionTracker, ExitAction
 
 
@@ -53,10 +53,12 @@ class AdaptiveExitFSM:
         trend_score: float = 0.0,
         is_strong_trend: bool = False,
         scratch_z_ofi_threshold: float = -1.5,
+        ker: float = 0.0,
     ) -> ExitAction:
         """
         Evaluates incoming bar against open position and returns ExitAction.
-        Features Dynamic Stage 2 Sizing, MFE Pullback Breakeven, and Adaptive Chandelier.
+        Features Dual-Profile (Impulse Pyramid at KER >= 0.40 vs Mean-Reversion),
+        Dynamic Stage 2 Sizing, MFE Pullback Breakeven, and Adaptive Chandelier.
         """
         direction = 1.0 if pos.side.upper() == "LONG" else -1.0
         initial_risk = max(pos.initial_1r_dist, 1e-9)
@@ -125,16 +127,31 @@ class AdaptiveExitFSM:
                     )
             return ExitAction(action_type="HOLD")
 
-        # Stage 2: Dynamic Partial Scale-Out (Maker fee) + Profit-Lock (+0.35R)
+        # Stage 2: Dual-Profile Logic at +1.40R
+        # Profile A (IMPULSE_PYRAMID at KER >= 0.40):
+        # In powerful trend, do NOT close partial! Keep 100% volume for pyramiding,
+        # lock stop at +0.50R profit lock.
+        # Profile B (MEAN_REVERSION at KER < 0.40):
+        # Dynamic partial scale-out (40-70% Maker fee) + Profit-Lock (+0.35R).
         if unrealized_r >= self.s2_r and pos.stage < 2:
             pos.stage = 2
+
+            if ker >= 0.40:
+                # IMPULSE_PYRAMID Profile:
+                new_stop = pos.entry_price + direction * (0.50 * initial_risk)
+                pos.current_stop = new_stop
+                return ExitAction(
+                    action_type="UPDATE_STOP",
+                    new_stop=new_stop,
+                    close_qty_ratio=0.0,
+                    reason="stage2_impulse_pyramid_lock",
+                )
+
+            # MEAN_REVERSION Profile:
             new_stop = pos.entry_price + direction * (self.s2_lock * initial_risk)
             pos.current_stop = new_stop
 
             # Dynamic Stage 2 Sizing:
-            # In strong trend (ADX/KER > 0.25), close only 40% (keeping 60% runner)!
-            # In weak/chop, close 70%.
-            # Baseline default: 60% (self.s2_pct).
             if is_strong_trend or trend_score >= 0.25:
                 close_pct = 0.40
             elif trend_score > 0.0 and trend_score < 0.10:
@@ -176,3 +193,37 @@ class AdaptiveExitFSM:
                     )
 
         return ExitAction(action_type="HOLD")
+
+    def update(self, pos: PositionTracker, market: Dict[str, Any]) -> ExitAction:
+        """Dictionary-driven wrapper around evaluate_bar for compatibility."""
+        px = market.get("price", pos.entry_price)
+        high = market.get("high", px)
+        low = market.get("low", px)
+        prev_h = market.get("prev_high", high)
+        prev_l = market.get("prev_low", low)
+        high_20 = market.get("high_20", high)
+        low_20 = market.get("low_20", low)
+        atr = market.get("atr", pos.initial_1r_dist)
+        z_ofi = market.get("z_ofi", 0.0)
+        ker = market.get("ker", 0.0)
+        shock = market.get("shock_prob", 0.0)
+        trend_score = market.get("trend_score", 0.0)
+        is_strong = market.get("is_strong_trend", ker >= 0.35)
+
+        return self.evaluate_bar(
+            pos=pos,
+            high=high,
+            low=low,
+            close=px,
+            prev_high=prev_h,
+            prev_low=prev_l,
+            highest_20=high_20,
+            lowest_20=low_20,
+            atr_1h=atr,
+            z_ofi=z_ofi,
+            shock_prob=shock,
+            trend_score=trend_score,
+            is_strong_trend=is_strong,
+            ker=ker,
+        )
+
