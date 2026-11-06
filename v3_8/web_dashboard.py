@@ -126,6 +126,7 @@ HTML_PAGE = """<!DOCTYPE html>
         .badge-indigo { background: rgba(99,102,241,0.15); border-color: rgba(99,102,241,0.4); color: #a5b4fc; }
         .badge-cyan { background: rgba(0,242,254,0.15); border-color: rgba(0,242,254,0.4); color: var(--accent-cyan); }
         .badge-green { background: rgba(16,185,129,0.15); border-color: rgba(16,185,129,0.4); color: var(--accent-green); }
+        .badge-gold { background: rgba(234,179,8,0.15); border-color: rgba(234,179,8,0.4); color: #facc15; }
 
         .grid-stats {
             display: grid;
@@ -205,6 +206,7 @@ HTML_PAGE = """<!DOCTYPE html>
         </div>
         <div class="badges">
             <div class="badge badge-indigo">⚡ Port :8091</div>
+            <div class="badge badge-gold">⏱ До 1h бара: <span id="barCountdown" style="font-weight: 700; color: #fef08a;">--:--</span></div>
             <div class="badge badge-cyan">🐉 NewDragon v4 Phase 1</div>
             <div class="badge badge-green">🛡️ News Core v1.2</div>
             <div class="badge badge-indigo" id="btcStatus">BTC: NEUTRAL</div>
