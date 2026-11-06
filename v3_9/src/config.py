@@ -63,10 +63,11 @@ class ScalperConfigV39:
     max_concurrent_positions: int = 2  # Жесткий лимит: не более 2 позиций одновременно (защита от кластерного риска)
     max_positions_per_side: int = 2   # Не более 2 позиций в одну сторону
     max_loss_usdt_cap: float = 1.50  # Жесткий долларовый потолок убытка: не более $1.50 на сделку
-    dynamic_breakeven_pct: float = 0.0035  # При +0.35% профита стоп подтягивается в безубыток (+0.05%)
+    dynamic_breakeven_pct: float = 0.0040  # При +0.40% профита стоп подтягивается в безубыток (+0.05%)
+    max_single_trade_notional: float = 100.0  # Жесткий потолок нотионала на 1 сделку ($100), защита от проскальзывания при гэпе
     enable_e3_leadlag: bool = True   # Специализация v3.9: Флагманский Lead-Lag Beta-Catchup
     enable_e2_sweeps: bool = False  # Отключен: Sweeps полностью отданы v3.7, исключая конфликт
-    enable_e1_obi: bool = True     # Отключен: OBI стакана полностью отдан v3.7, исключая конфликт
+    enable_e1_obi: bool = False     # Строго отключен: OBI стакана полностью отдан v3.7, исключая конфликт
 
     # 4. NewDragon v4 Micro-Router & OFI Scratch
     enforce_min_notional: bool = True
@@ -103,12 +104,12 @@ class ScalperConfigV39:
     e2_min_risk_pct: float = 0.0008
     e2_max_hold_sec: float = 900.0
 
-    e3_btc_impulse_ret: float = 0.0018
+    e3_btc_impulse_ret: float = 0.0015
     e3_btc_tfi_threshold: float = 0.50
     e3_alt_reaction_cap: float = 0.40
-    e3_min_lag_spread: float = 0.0028
-    e3_min_beta: float = 1.15
-    e3_min_corr: float = 0.55
-    e3_max_spread_ticks: float = 3.0
-    e3_max_hold_sec: float = 1200.0
+    e3_min_lag_spread: float = 0.0035
+    e3_min_beta: float = 1.20
+    e3_min_corr: float = 0.60
+    e3_max_spread_ticks: float = 2.5
+    e3_max_hold_sec: float = 600.0
     e3_leader_reversal_threshold: float = 0.85

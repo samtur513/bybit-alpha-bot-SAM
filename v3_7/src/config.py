@@ -54,14 +54,15 @@ class ScalperConfig:
     risk_per_trade_pct: float = float(os.getenv("RISK_PER_TRADE_PCT", "0.0050"))  # 0.50% на сделку ($1.50 от $300)
     max_daily_dd_pct: float = float(os.getenv("MAX_DAILY_DRAWDOWN_PCT", "0.020"))  # 2.0% дневной лимит ($6.00 от $300)
     max_leverage_cap: float = 2.0
+    max_single_trade_notional: float = 100.0  # Жесткий потолок нотионала на 1 сделку ($100), защита от проскальзывания при гэпе
     max_book_depth_pct: float = 0.20  # Не более 20% от топ-3 уровней стакана
     max_concurrent_positions: int = 2  # Жесткий лимит: не более 2 позиций одновременно (защита от кластерного риска)
     max_positions_per_side: int = 2   # Не более 2 позиций в одну сторону
     max_loss_usdt_cap: float = 1.50  # Жесткий долларовый потолок убытка: не более $1.50 на сделку
-    dynamic_breakeven_pct: float = 0.0035  # При +0.35% профита стоп подтягивается в безубыток (+0.05%)
+    dynamic_breakeven_pct: float = 0.0045  # При +0.45% профита стоп подтягивается в безубыток (+0.05%)
     enable_e3_leadlag: bool = False  # Отключен: Lead-Lag полностью отдан v3.9, исключая дублирование
     enable_e2_sweeps: bool = True   # Специализация v3.7: Снятие ликвидности и абсорбция
-    enable_e1_obi: bool = True      # Специализация v3.7: Дисбаланс L2 стакана
+    enable_e1_obi: bool = True      # Специализация v3.7: Дисбаланс L2 стакана (строго при KER >= 0.30)
 
     # 4. Bybit V5 Endpoints
     ws_public_url: str = "wss://stream.bybit.com/v5/public/linear"
@@ -73,14 +74,15 @@ class ScalperConfig:
     leader_symbol: str = "BTCUSDT"
     max_active_symbols: int = 10
 
-    # 6. Пороги Движка 1 (OBI + Flow Toxicity Breakout)
-    e1_obi_threshold: float = 0.45
-    e1_tfi_threshold: float = 0.45
+    # 6. Пороги Движка 1 (OBI + Flow Toxicity Breakout - Институциональный фильтр)
+    e1_obi_threshold: float = 0.60          # Повышен с 0.45: глубокий дисбаланс стакана L2
+    e1_tfi_threshold: float = 0.55          # Повышен с 0.45: направленный поток агрессивных покупок/продаж
     e1_volume_surge_mult: float = 2.0
-    e1_depletion_threshold: float = 0.25
-    e1_min_natr_5m: float = 0.0020
-    e1_max_spread_ticks: float = 3.0
-    e1_max_hold_sec: float = 900.0  # 15 минут вместо 40 секунд
+    e1_depletion_threshold: float = 0.35    # Повышен с 0.25: реальное разъедание лимитных плотностей >= 35%
+    e1_min_natr_5m: float = 0.0035         # Повышен с 0.0020: отсечение низковолатильного мертвого флэта
+    e1_min_er_15m: float = 0.30            # Коэффициент Кауфмана >= 0.30: 100% блокировка входов в боковом пиле
+    e1_max_spread_ticks: float = 2.5
+    e1_max_hold_sec: float = 900.0  # 15 минут
 
     # 7. Пороги Движка 2 (Liquidity Sweep & Absorption Reversion)
     e2_min_depth_pct: float = 0.0012

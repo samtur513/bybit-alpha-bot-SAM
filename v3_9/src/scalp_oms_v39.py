@@ -60,7 +60,8 @@ class ScalpOMSV39(ScalpOMS):
         max_book_notional = self.cfg.max_book_depth_pct * state.top3_book_notional_usdt(intent.side)
         dollar_cap = getattr(self.cfg, 'max_loss_usdt_cap', 1.50)
         max_by_dollar_cap = dollar_cap / max(total_risk_pct, 0.0015)
-        target_notional = min(notional_by_risk, max_by_dollar_cap, max_book_notional, self.cfg.equity_usdt * self.cfg.max_leverage_cap)
+        max_single_notional = getattr(self.cfg, 'max_single_trade_notional', 100.0)
+        target_notional = min(notional_by_risk, max_by_dollar_cap, max_book_notional, max_single_notional, self.cfg.equity_usdt * self.cfg.max_leverage_cap)
 
         raw_qty = target_notional / max(intent.entry_price, 1e-9)
         step = state.meta.qty_step

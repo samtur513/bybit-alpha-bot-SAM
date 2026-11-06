@@ -73,7 +73,17 @@ class ThreeEnginesEvaluate:
             elif btc_ret_60s < -0.0004:
                 btc_bull = False
 
-        natr = max(m.natr_5m, self.cfg.e1_min_natr_5m)
+        # Фильтр эффективности Кауфмана: полная блокировка микро-стакана в боковом распиле (KER < 0.30)
+        min_er = getattr(self.cfg, "e1_min_er_15m", 0.30)
+        if getattr(m, "er_15m", 0.0) < min_er:
+            return None
+
+        # Фильтр минимальной волатильности (отсечение мертвых инструментов)
+        min_natr = getattr(self.cfg, "e1_min_natr_5m", 0.0035)
+        if getattr(m, "natr_5m", 0.0) < min_natr:
+            return None
+
+        natr = max(m.natr_5m, min_natr)
         tfi_2s, buy_2s, sell_2s, avg_buy_2s, avg_sell_2s = state.get_trade_flow_metrics(now_ms, 2000)
         _, dr_ask_400ms, dr_bid_400ms, delta_ask_vol, delta_bid_vol = state.get_depletion_with_volumes(now_ms, 400)
         _, buy_400ms, sell_400ms, _, _ = state.get_trade_flow_metrics(now_ms, 400)
@@ -96,9 +106,9 @@ class ThreeEnginesEvaluate:
             and (state.micro_price - state.mid_price >= 0.10 * m.tick_size)
         ):
             entry = state.best_bid + state.meta.tick_size if state.spread_ticks >= 2.0 else state.best_bid
-            tp1 = entry * (1.0 + max(0.0085, 1.10 * natr))
-            tp2 = entry * (1.0 + max(0.0180, 2.20 * natr))
-            sl = entry * (1.0 - max(0.0035, 0.45 * natr))
+            tp1 = entry * (1.0 + max(0.0085, 1.25 * natr))
+            tp2 = entry * (1.0 + max(0.0180, 2.50 * natr))
+            sl = entry * (1.0 - max(0.0050, 0.65 * natr))
 
             return SignalIntent(
                 engine_id="E1_OBI",
@@ -129,9 +139,9 @@ class ThreeEnginesEvaluate:
             and (state.mid_price - state.micro_price >= 0.10 * m.tick_size)
         ):
             entry = state.best_ask - state.meta.tick_size if state.spread_ticks >= 2.0 else state.best_ask
-            tp1 = entry * (1.0 - max(0.0085, 1.10 * natr))
-            tp2 = entry * (1.0 - max(0.0180, 2.20 * natr))
-            sl = entry * (1.0 + max(0.0035, 0.45 * natr))
+            tp1 = entry * (1.0 - max(0.0085, 1.25 * natr))
+            tp2 = entry * (1.0 - max(0.0180, 2.50 * natr))
+            sl = entry * (1.0 + max(0.0050, 0.65 * natr))
 
             return SignalIntent(
                 engine_id="E1_OBI",
@@ -313,7 +323,7 @@ class ThreeEnginesEvaluate:
                 entry = state.best_bid + state.meta.tick_size if state.spread_ticks >= 2.0 else state.best_bid
                 tp1 = entry * (1.0 + max(0.0085, 1.10 * lag_spread))
                 tp2 = entry * (1.0 + max(0.0180, 2.20 * lag_spread))
-                sl = entry * (1.0 - max(0.0035, 0.45 * lag_spread))
+                sl = entry * (1.0 - max(0.0045, 0.60 * lag_spread))
 
                 return SignalIntent(
                     engine_id="E3_LEADLAG",
@@ -349,7 +359,7 @@ class ThreeEnginesEvaluate:
                 entry = state.best_ask - state.meta.tick_size if state.spread_ticks >= 2.0 else state.best_ask
                 tp1 = entry * (1.0 - max(0.0085, 1.10 * lag_spread))
                 tp2 = entry * (1.0 - max(0.0180, 2.20 * lag_spread))
-                sl = entry * (1.0 + max(0.0035, 0.45 * lag_spread))
+                sl = entry * (1.0 + max(0.0045, 0.60 * lag_spread))
 
                 return SignalIntent(
                     engine_id="E3_LEADLAG",
