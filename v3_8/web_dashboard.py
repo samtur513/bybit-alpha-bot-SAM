@@ -433,11 +433,75 @@ HTML_PAGE = """<!DOCTYPE html>
     </div>
 
     <script>
+        let chartInstance = null;
+        function initEquityChart() {
+            const canvas = document.getElementById('equityChart');
+            if (!canvas || typeof Chart === 'undefined') return;
+            const ctx = canvas.getContext('2d');
+            chartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: ['Старт', 'Текущее'],
+                    datasets: [{
+                        label: 'Эквити ($)',
+                        data: [300.0, 300.0],
+                        borderColor: '#00f2fe',
+                        backgroundColor: 'rgba(0, 242, 254, 0.08)',
+                        fill: true,
+                        tension: 0.25,
+                        borderWidth: 2,
+                        pointRadius: 4,
+                        pointHoverRadius: 6,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { grid: { color: 'rgba(255, 255, 255, 0.04)' }, ticks: { color: '#64748b', font: { family: "'JetBrains Mono', monospace", size: 10 } } },
+                        y: { grid: { color: 'rgba(255, 255, 255, 0.04)' }, ticks: { color: '#94a3b8', font: { family: "'JetBrains Mono', monospace", size: 11 }, callback: (v) => '$' + Number(v).toFixed(2) } }
+                    }
+                }
+            });
+        }
+
+        function updateEquityChart(data) {
+            const eq = Number(data.capital || data.equity || 300.0);
+            const lbl = document.getElementById('chart-curr-equity');
+            if (lbl) lbl.innerText = '$' + eq.toFixed(2);
+            if (chartInstance) {
+                const trades = data.closed_trades || [];
+                const labels = ['Старт'];
+                const points = [300.0];
+                let runEq = 300.0;
+                trades.forEach((t, i) => {
+                    runEq += Number(t.net_pnl || t.net_pnl_usdt || 0.0);
+                    labels.push(`#${i+1} ${t.symbol}`);
+                    points.push(Number(runEq.toFixed(2)));
+                });
+                if (points.length === 1 || Math.abs(points[points.length - 1] - eq) > 0.001) {
+                    labels.push('Текущее');
+                    points.push(Number(eq.toFixed(2)));
+                }
+                chartInstance.data.labels = labels;
+                chartInstance.data.datasets[0].data = points;
+                const isProfit = eq >= 300.0;
+                chartInstance.data.datasets[0].borderColor = isProfit ? '#00f2fe' : '#f43f5e';
+                chartInstance.data.datasets[0].pointBackgroundColor = isProfit ? '#00f2fe' : '#f43f5e';
+                chartInstance.data.datasets[0].backgroundColor = isProfit ? 'rgba(0, 242, 254, 0.08)' : 'rgba(244, 63, 94, 0.08)';
+                chartInstance.update();
+            } else if (typeof Chart !== 'undefined') {
+                initEquityChart();
+            }
+        }
+
         async function updateDashboard() {
             try {
                 const res = await fetch('/api/status');
                 if (!res.ok) return;
                 const data = await res.json();
+                updateEquityChart(data);
 
                 document.getElementById('equityVal').textContent = '$' + (data.capital || 300).toFixed(2);
                 const pnl = data.total_net_pnl || 0;

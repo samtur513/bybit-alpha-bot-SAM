@@ -507,6 +507,52 @@ class CrossBasisEngine8096:
 
         async def handle_index(request):
             stats = await self.ledger.get_summary_stats(MODULE_ID)
+
+            # Query recent closed trades for table & chart
+            import aiosqlite
+            closed_trades_rows = []
+            chart_labels = ["Старт"]
+            chart_points = [300.0]
+            run_eq = 300.0
+            try:
+                async with aiosqlite.connect(self.ledger.db_path) as db:
+                    db.row_factory = aiosqlite.Row
+                    async with db.execute(
+                        "SELECT symbol, side, entry_fill_price, exit_fill_price, pnl_pure_alpha_usdt, pnl_fees_paid_usdt, pnl_net_total_usdt, exit_reason, closed_at_ms "
+                        "FROM alpha_attribution_ledger WHERE module_id = ? ORDER BY closed_at_ms ASC",
+                        (MODULE_ID,)
+                    ) as cur:
+                        all_trades = await cur.fetchall()
+                        for i, t in enumerate(all_trades):
+                            net = float(t["pnl_net_total_usdt"] or 0.0)
+                            run_eq += net
+                            chart_labels.append(f"#{i+1} {t['symbol']}")
+                            chart_points.append(round(run_eq, 2))
+
+                        recent = list(reversed(all_trades))[:15]
+                        for t in recent:
+                            net = float(t["pnl_net_total_usdt"] or 0.0)
+                            col = "#22c55e" if net >= 0 else "#ef4444"
+                            ts_str = datetime.fromtimestamp(t["closed_at_ms"]/1000, tz=timezone.utc).strftime("%H:%M:%S") if t["closed_at_ms"] else "--:--:--"
+                            closed_trades_rows.append(f"""
+                            <tr>
+                                <td>{ts_str} UTC</td>
+                                <td style="font-weight:700; color:#38bdf8;">{t['symbol']}</td>
+                                <td style="color:{'#22c55e' if t['side']=='Buy' or t['side']=='LONG' else '#ef4444'}; font-weight:700;">{t['side']}</td>
+                                <td>{t['entry_fill_price']:.4f}</td>
+                                <td>{t['exit_fill_price']:.4f}</td>
+                                <td style="color:{col}; font-weight:700;">{net:+.2f}$</td>
+                                <td><span style="font-size:11px; color:#cbd5e1;">{t['exit_reason']}</span></td>
+                            </tr>
+                            """)
+            except Exception as e:
+                logger.error(f"Error reading closed trades for UI: {e}")
+
+            if not chart_labels or abs(chart_points[-1] - self.equity_usdt) > 0.001:
+                chart_labels.append("Текущее")
+                chart_points.append(round(self.equity_usdt, 2))
+
+            closed_tbody = "".join(closed_trades_rows) if closed_trades_rows else "<tr><td colspan='7' style='text-align:center; color:#64748b; padding:16px;'>No closed trades recorded yet.</td></tr>"
             radar_rows = ""
             for s in self.monitored_pairs:
                 spot_st = self.spot_states.get(s)
@@ -580,6 +626,26 @@ class CrossBasisEngine8096:
                 <div class="grid">
                     <div class="stat-box">
                         <div class="stat-val">{self.equity_usdt:.2f}$</div>
+                        <div class="stat-lbl">Equity</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-val" style="color:{'#22c55e' if stats['net_pnl_usdt'] >= 0 else '#ef4444'};">{stats['net_pnl_usdt']:+.2f}$</div>
+                        <div class="stat-lbl">Realized Net PnL</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-val">{len(self.monitored_pairs)}</div>
+                        <div class="stat-lbl">Monitored Pairs</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-val" style="color:#06b6d4;">{stats['pure_alpha_usdt']:+.2f}$</div>
+                        <div class="stat-lbl">Pure Alpha PnL</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-val">{stats['total_trades']} (WR {stats['win_rate_pct']:.0f}%)</div>
+                        <div class="stat-lbl">Closed Scalps</div>
+                    </div>
+                </div>
+
 
         <!-- 🩺 Мониторинг подсистем и телеметрия ядра -->
         <div style="background: var(--bg-card, #0f172a); border: 1px solid var(--border, #1e293b); border-radius: 12px; padding: 18px; margin-bottom: 24px;">
@@ -687,41 +753,17 @@ class CrossBasisEngine8096:
         </div>
     
 
-        <!-- 📈 Динамика депозита и результатов сделок (Live PnL Curve) -->
-        <div style="background: var(--bg-card, #0f172a); border: 1px solid var(--border, #1e293b); border-radius: 12px; padding: 18px; margin-bottom: 24px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 8px;">
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    <h3 style="margin: 0; font-size: 13px; font-weight: 700; text-transform: uppercase; color: var(--text-muted, #94a3b8); letter-spacing: 0.5px;">📈 Динамика депозита и результатов сделок (Live PnL Curve)</h3>
-                    <span style="font-size: 10px; font-weight: 700; background: rgba(0, 242, 254, 0.15); color: #00f2fe; border: 1px solid rgba(0, 242, 254, 0.3); padding: 2px 8px; border-radius: 4px;">LIVE REAL-TIME</span>
-                </div>
-                <div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-muted, #94a3b8);">
-                    Депозит старт: <strong style="color: var(--text-main, #f8fafc);">$300.00</strong> | Текущее эквити: <strong id="chart-curr-equity" style="color: #00f2fe;">$300.00</strong>
-                </div>
-            </div>
-            <div style="height: 180px; position: relative;">
-                <canvas id="equityChart"></canvas>
-            </div>
-        </div>
-    
-                        <div class="stat-lbl">Equity</div>
+                <!-- 📈 Live Equity & PnL Curve -->
+                <div class="card" style="margin-bottom: 20px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 12px;">
+                        <h3 style="margin:0; font-size:13px; font-weight:700; text-transform:uppercase; color:#94a3b8; letter-spacing:0.5px;">📈 Динамика депозита и результатов сделок (Live PnL Curve)</h3>
+                        <span style="font-size:12px; font-family:'JetBrains Mono',monospace; color:#00f2fe;">Депозит старт: <strong>$300.00</strong> | Текущее: <strong>{self.equity_usdt:.2f}$</strong></span>
                     </div>
-                    <div class="stat-box">
-                        <div class="stat-val" style="color:{'#22c55e' if stats['net_pnl_usdt'] >= 0 else '#ef4444'};">{stats['net_pnl_usdt']:+.2f}$</div>
-                        <div class="stat-lbl">Realized Net PnL</div>
-                    </div>
-                    <div class="stat-box">
-                        <div class="stat-val">{len(self.monitored_pairs)}</div>
-                        <div class="stat-lbl">Monitored Pairs</div>
-                    </div>
-                    <div class="stat-box">
-                        <div class="stat-val" style="color:#06b6d4;">{stats['pure_alpha_usdt']:+.2f}$</div>
-                        <div class="stat-lbl">Pure Alpha PnL</div>
-                    </div>
-                    <div class="stat-box">
-                        <div class="stat-val">{stats['total_trades']} (WR {stats['win_rate_pct']:.0f}%)</div>
-                        <div class="stat-lbl">Closed Scalps</div>
+                    <div style="height: 180px; position: relative;">
+                        <canvas id="equityChart"></canvas>
                     </div>
                 </div>
+
 
                 <div class="card">
                     <h3 style="margin-top:0; font-size:15px; color:#a855f7;">Open Cross-Basis Scalps ({len(self.open_positions)})</h3>
@@ -758,71 +800,59 @@ class CrossBasisEngine8096:
                     </table>
                 </div>
             
-        <!-- 📜 История закрытых сделок -->
-        <div style="background: var(--bg-card, #0f172a); border: 1px solid var(--border, #1e293b); border-radius: 12px; padding: 18px; margin-bottom: 24px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    <h3 style="margin: 0; font-size: 13px; font-weight: 700; text-transform: uppercase; color: var(--text-muted, #94a3b8); letter-spacing: 0.5px;">📜 История закрытых сделок (PnL & Результаты исполнения)</h3>
+                <div class="card">
+                    <h3 style="margin-top:0; font-size:15px; color:#10b981;">📜 Closed Trades History (TCA Attribution)</h3>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>Symbol</th>
+                                <th>Side</th>
+                                <th>Entry Fill</th>
+                                <th>Exit Fill</th>
+                                <th>Net PnL</th>
+                                <th>Exit Reason</th>
+                            </tr>
+                        </thead>
+                        <tbody>{closed_tbody}</tbody>
+                    </table>
                 </div>
-                <span id="closed-trades-count" style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #00f2fe; font-weight: 700;">0 сделок</span>
-            </div>
-            <div style="overflow-x: auto;">
-                <table style="width: 100%; border-collapse: collapse; font-family: 'JetBrains Mono', monospace; font-size: 12px;">
-                    <thead>
-                        <tr style="border-bottom: 1px solid var(--border, #1e293b); color: var(--text-muted, #94a3b8); font-size: 11px; text-transform: uppercase;">
-                            <th style="padding: 10px 8px; text-align: left;">Время (UTC)</th>
-                            <th style="padding: 10px 8px; text-align: left;">Символ</th>
-                            <th style="padding: 10px 8px; text-align: left;">Сторона</th>
-                            <th style="padding: 10px 8px; text-align: left;">Вход</th>
-                            <th style="padding: 10px 8px; text-align: left;">Выход</th>
-                            <th style="padding: 10px 8px; text-align: left;">Чистый PnL ($)</th>
-                            <th style="padding: 10px 8px; text-align: left;">Причина выхода</th>
-                        </tr>
-                    </thead>
-                    <tbody id="closed-table-body">
-                        <tr><td colspan="7" style="text-align: center; color: var(--text-muted, #94a3b8); padding: 20px;">Нет закрытых сделок. Накопление торговой истории...</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    
 
-        <script>
-            let chartInstance = null;
-            function initEquityChart() {{
-                const canvas = document.getElementById('equityChart');
-                if (!canvas || typeof Chart === 'undefined') return;
-                const ctx = canvas.getContext('2d');
-                chartInstance = new Chart(ctx, {{
-                    type: 'line',
-                    data: {{
-                        labels: ['Старт', 'Текущее'],
-                        datasets: [{{
-                            label: 'Эквити ($)',
-                            data: [300.0, 300.0],
-                            borderColor: '#00f2fe',
-                            backgroundColor: 'rgba(0, 242, 254, 0.08)',
-                            fill: true,
-                            tension: 0.25,
-                            borderWidth: 2,
-                            pointRadius: 4
-                        }}]
-                    }},
-                    options: {{
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: {{ legend: {{ display: false }} }},
-                        scales: {{
-                            x: {{ grid: {{ color: 'rgba(255, 255, 255, 0.04)' }}, ticks: {{ color: '#64748b' }} }},
-                            y: {{ grid: {{ color: 'rgba(255, 255, 255, 0.04)' }}, ticks: {{ color: '#94a3b8' }} }}
-                        }}
-                    }}
-                }});
-            }}
-            window.addEventListener('DOMContentLoaded', initEquityChart);
-        </script>
-        
-</body>
+
+                <script>
+                    document.addEventListener("DOMContentLoaded", function() {{
+                        const canvas = document.getElementById("equityChart");
+                        if (!canvas || typeof Chart === "undefined") return;
+                        const ctx = canvas.getContext("2d");
+                        new Chart(ctx, {{
+                            type: "line",
+                            data: {{
+                                labels: {chart_labels},
+                                datasets: [{{
+                                    label: "Equity ($)",
+                                    data: {chart_points},
+                                    borderColor: "{'#00f2fe' if self.equity_usdt >= 300.0 else '#ef4444'}",
+                                    backgroundColor: "{'rgba(0, 242, 254, 0.08)' if self.equity_usdt >= 300.0 else 'rgba(239, 68, 68, 0.08)'}",
+                                    fill: true,
+                                    tension: 0.25,
+                                    borderWidth: 2,
+                                    pointRadius: 4
+                                }}]
+                            }},
+                            options: {{
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                plugins: {{ legend: {{ display: false }} }},
+                                scales: {{
+                                    x: {{ grid: {{ color: "rgba(255, 255, 255, 0.04)" }}, ticks: {{ color: "#64748b" }} }},
+                                    y: {{ grid: {{ color: "rgba(255, 255, 255, 0.04)" }}, ticks: {{ color: "#94a3b8", callback: (v) => "$" + Number(v).toFixed(2) }} }}
+                                }}
+                            }}
+                        }});
+                    }});
+                </script>
+
+            </body>
             </html>
             """
             return web.Response(text=html, content_type="text/html")
