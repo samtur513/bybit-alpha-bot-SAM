@@ -601,8 +601,8 @@ class FundingSqueezeEngine8097:
                                 <td>{ts_str} UTC</td>
                                 <td style="font-weight:700; color:#38bdf8;">{t['symbol']}</td>
                                 <td style="color:{'#22c55e' if t['side']=='Buy' or t['side']=='LONG' else '#ef4444'}; font-weight:700;">{t['side']}</td>
-                                <td>{t['entry_fill_price']:.4f}</td>
-                                <td>{t['exit_fill_price']:.4f}</td>
+                                <td>{float(t['entry_fill_price'] or 0.0):.4f}</td>
+                                <td>{float(t['exit_fill_price'] or 0.0):.4f}</td>
                                 <td style="color:{col}; font-weight:700;">{net:+.2f}$</td>
                                 <td><span style="font-size:11px; color:#cbd5e1;">{t['exit_reason']}</span></td>
                             </tr>
@@ -627,10 +627,10 @@ class FundingSqueezeEngine8097:
                 cand_rows += f"""
                 <tr>
                     <td style="font-weight:700; color:#38bdf8;">{c.symbol}</td>
-                    <td style="color:{color}; font-weight:700;">{c.funding_rate*100:+.4f}%</td>
+                    <td style="color:{color}; font-weight:700;">{float(c.funding_rate or 0.0)*100:+.4f}%</td>
                     <td style="color:#f59e0b; font-weight:700;">{c.action}</td>
-                    <td>{c.time_to_settle_sec/60.0:.1f} min</td>
-                    <td>{c.open_interest:,.0f}</td>
+                    <td>{float(c.time_to_settle_sec or 0.0)/60.0:.1f} min</td>
+                    <td>{float(c.open_interest or 0.0):,.0f}</td>
                 </tr>
                 """
             if not cand_rows:
@@ -919,9 +919,14 @@ class FundingSqueezeEngine8097:
             """
             return web.Response(text=html, content_type="text/html")
 
+        async def handle_logs(request):
+            return web.json_response(list(LOG_BUFFER))
+
         app.router.add_get("/", handle_index)
         app.router.add_get("/status", handle_status)
         app.router.add_get("/api/status", handle_status)
+        app.router.add_get("/logs", handle_logs)
+        app.router.add_get("/api/logs", handle_logs)
 
         runner = web.AppRunner(app)
         await runner.setup()

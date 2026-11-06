@@ -39,6 +39,20 @@ except ImportError:
 logging.basicConfig(level=logging.INFO, format="%(asctime)s.%(msecs)03d | CROSSBASIS_8096 | %(message)s", datefmt="%H:%M:%S")
 logger = logging.getLogger("CrossBasis8096")
 
+LOG_BUFFER = collections.deque(maxlen=300)
+
+class BufferHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            LOG_BUFFER.append(msg)
+        except Exception:
+            pass
+
+buf_handler = BufferHandler()
+buf_handler.setFormatter(logging.Formatter("%(asctime)s.%(msecs)03d | CROSSBASIS_8096 | %(levelname)s | %(message)s", datefmt="%H:%M:%S"))
+logging.getLogger().addHandler(buf_handler)
+
 MODULE_ID = os.getenv("CROSSBASIS_MODULE_ID", "M1_CROSSBASIS_8096_V2")
 HTTP_PORT = int(os.getenv("CROSSBASIS_HTTP_PORT", "8096"))
 ZMQ_SUB_ADDR = os.getenv("ZMQ_SUB_ADDR", "tcp://127.0.0.1:5555")
@@ -588,8 +602,8 @@ class CrossBasisEngine8096:
                                 <td>{ts_str} UTC</td>
                                 <td style="font-weight:700; color:#38bdf8;">{t['symbol']}</td>
                                 <td style="color:{'#22c55e' if t['side']=='Buy' or t['side']=='LONG' else '#ef4444'}; font-weight:700;">{t['side']}</td>
-                                <td>{t['entry_fill_price']:.4f}</td>
-                                <td>{t['exit_fill_price']:.4f}</td>
+                                <td>{float(t['entry_fill_price'] or 0.0):.4f}</td>
+                                <td>{float(t['exit_fill_price'] or 0.0):.4f}</td>
                                 <td style="color:{col}; font-weight:700;">{net:+.2f}$</td>
                                 <td><span style="font-size:11px; color:#cbd5e1;">{t['exit_reason']}</span></td>
                             </tr>
@@ -911,9 +925,14 @@ class CrossBasisEngine8096:
             """
             return web.Response(text=html, content_type="text/html")
 
+        async def handle_logs(request):
+            return web.json_response(list(LOG_BUFFER))
+
         app.router.add_get("/", handle_index)
         app.router.add_get("/status", handle_status)
         app.router.add_get("/api/status", handle_status)
+        app.router.add_get("/logs", handle_logs)
+        app.router.add_get("/api/logs", handle_logs)
 
         runner = web.AppRunner(app)
         await runner.setup()

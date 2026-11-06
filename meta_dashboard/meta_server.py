@@ -498,7 +498,7 @@ HTML_PAGE = """<!DOCTYPE html>
     </div>
 
     <script>
-        let chartInstance = null;
+        var chartInstance = null;
 
         function initChart() {
             const ctx = document.getElementById('equityChart').getContext('2d');
