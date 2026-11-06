@@ -125,8 +125,8 @@ async def run_public_stream(
             logger.info(f"Connecting to Bybit Public WebSocket: {cfg.ws_public_url}")
             async with websockets.connect(
                 cfg.ws_public_url,
-                ping_interval=20,
-                ping_timeout=10,
+                ping_interval=None,
+                ping_timeout=None,
                 close_timeout=5,
                 max_size=10 * 1024 * 1024,
             ) as ws:

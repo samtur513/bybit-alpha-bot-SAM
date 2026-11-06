@@ -275,7 +275,7 @@ HTML_PAGE = f"""<!DOCTYPE html>
                 </div>
             </div>
             <div style="font-size: 11px; color: var(--text-muted, #94a3b8); font-family: 'JetBrains Mono', monospace; line-height: 1.5; border-top: 1px solid var(--border, #1e293b); padding-top: 8px;">
-                ⚙️ <strong style="color: #f8fafc;">Спецификация стратегии:</strong> M1/15m Scalper OMS + NewDragon UniversalRisk minNotional Guard ($5 alts / $100 BTC) + 2-Stage Z_OFI Fast Scratch (15s Window, Z_OFI <= -1.5) + Dynamic Breakeven Ratchet.
+                ⚙️ <strong style="color: #f8fafc;">Спецификация стратегии:</strong> Скальпер E2 (Liquidity Sweeps 1h) + E3 (BTC Lead-Lag Beta Arbitrage) + NewDragon UniversalRisk ($5 minNotional) + Maker TP1 (+0.85%).
             </div>
         </div>
 
@@ -299,7 +299,7 @@ HTML_PAGE = f"""<!DOCTYPE html>
         <div class="table-wrap">
             <div class="table-head">
                 <div class="table-title">⚡ Радар скальпинга E2 Sweeps & E3 Lead-Lag (L2 Order Flow)</div>
-                <span id="monitored-count-badge" style="font-family: var(--font-mono); font-size: 11px; color: var(--accent-pink); font-weight: 700;">7 тикеров</span>
+                <span id="monitored-count-badge" style="font-family: var(--font-mono); font-size: 11px; color: var(--accent-pink); font-weight: 700;">10 тикеров</span>
             </div>
             <table>
                 <thead>
@@ -565,16 +565,22 @@ HTML_PAGE = f"""<!DOCTYPE html>
                         const dHigh = st.dist_high || 0.0;
                         const beta = st.beta || 1.0;
 
-                        let statusDesc = 'Мониторинг свинг-уровней';
+                        let statusDesc = 'Внутри диапазона (Флэт)';
                         let statusCol = '#94a3b8';
-                        if (dLow > 0 && dLow <= 0.25) {{
-                            statusDesc = '🔥 Готов к заколу поддержки (E2 Long)';
+                        if (dLow <= 0) {{
+                            statusDesc = '🔥 Закол Low! Ожидание возврата (E2)';
                             statusCol = '#10b981';
-                        }} else if (dHigh > 0 && dHigh <= 0.25) {{
-                            statusDesc = '🔥 Готов к заколу сопротивления (E2 Short)';
+                        }} else if (dHigh <= 0) {{
+                            statusDesc = '🔥 Закол High! Ожидание возврата (E2)';
                             statusCol = '#ef4444';
-                        }} else if (beta >= 0.85) {{
-                            statusDesc = '⚡ Готов к импульсу BTC (E3 Lead-Lag)';
+                        }} else if (dLow <= 0.15) {{
+                            statusDesc = '⚠️ Вблизи поддержки (+' + dLow.toFixed(2) + '%)';
+                            statusCol = '#34d399';
+                        }} else if (dHigh <= 0.15) {{
+                            statusDesc = '⚠️ Вблизи сопротивления (-' + dHigh.toFixed(2) + '%)';
+                            statusCol = '#f87171';
+                        }} else if (beta >= 0.75) {{
+                            statusDesc = '⏳ Мониторинг импульса BTC (E3)';
                             statusCol = '#38bdf8';
                         }}
 
