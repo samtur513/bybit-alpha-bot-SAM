@@ -367,12 +367,19 @@ class PaperTraderV3V4Exp:
 
             positions_dict = {}
             for s, pos in self.engine.open_positions.items():
-                mark = current_prices.get(s, pos.entry_price)
-                if pos.direction == 1:
-                    u_pnl = pos.current_qty * (mark - pos.entry_price)
+                p_entry = pos.get("entry_price") if isinstance(pos, dict) else getattr(pos, "entry_price", Decimal("0"))
+                p_dir = pos.get("direction", 1) if isinstance(pos, dict) else getattr(pos, "direction", 1)
+                p_qty = pos.get("current_qty") if isinstance(pos, dict) else getattr(pos, "current_qty", Decimal("0"))
+                p_ini_qty = pos.get("initial_qty") if isinstance(pos, dict) else getattr(pos, "initial_qty", p_qty)
+                p_stop = pos.get("current_stop") if isinstance(pos, dict) else getattr(pos, "current_stop", Decimal("0"))
+                p_bars = pos.get("bars_held", 0) if isinstance(pos, dict) else getattr(pos, "bars_held", 0)
+
+                mark = current_prices.get(s, p_entry)
+                if p_dir == 1:
+                    u_pnl = p_qty * (mark - p_entry)
                 else:
-                    u_pnl = pos.current_qty * (pos.entry_price - mark)
-                u_pnl -= pos.current_qty * mark * self.taker_fee
+                    u_pnl = p_qty * (p_entry - mark)
+                u_pnl -= p_qty * mark * self.taker_fee
 
                 tracker_item = self.engine.trackers.get(s)
                 stage_label = tracker_item.stage_name if tracker_item else "Stage 0"
@@ -381,33 +388,43 @@ class PaperTraderV3V4Exp:
 
                 positions_dict[s] = {
                     "symbol": s,
-                    "direction": "LONG" if pos.direction == 1 else "SHORT",
-                    "qty": float(pos.current_qty),
-                    "initial_qty": float(pos.initial_qty),
-                    "entry_price": float(pos.entry_price),
+                    "direction": "LONG" if p_dir == 1 else "SHORT",
+                    "qty": float(p_qty),
+                    "initial_qty": float(p_ini_qty),
+                    "entry_price": float(p_entry),
                     "current_price": float(mark),
-                    "current_stop": float(pos.current_stop),
+                    "current_stop": float(p_stop),
                     "target_tp_maker": round(tp_maker, 4),
                     "dynamic_tp_ratio": float(dyn_ratio),
                     "unrealized_pnl": round(float(u_pnl), 2),
-                    "bars_held": pos.bars_held,
+                    "bars_held": p_bars,
                     "stage_name": stage_label,
                     "is_tp_filled": tracker_item.is_tp_filled if tracker_item else False,
                 }
 
             trades_list = []
             for t in reversed(self.engine.closed_trades[-30:]):
+                t_sym = t.get("symbol") if isinstance(t, dict) else getattr(t, "symbol", "")
+                t_dir = t.get("direction", 1) if isinstance(t, dict) else getattr(t, "direction", 1)
+                t_ep = t.get("entry_price", 0.0) if isinstance(t, dict) else getattr(t, "entry_price", 0.0)
+                t_xp = t.get("exit_price", 0.0) if isinstance(t, dict) else getattr(t, "exit_price", 0.0)
+                t_qty = t.get("final_qty", t.get("qty", 0.0)) if isinstance(t, dict) else getattr(t, "final_qty", 0.0)
+                t_pnl = t.get("net_pnl", 0.0) if isinstance(t, dict) else getattr(t, "net_pnl", 0.0)
+                t_reason = t.get("exit_reason", "") if isinstance(t, dict) else getattr(t, "exit_reason", "")
+                t_time = t.get("exit_time", "") if isinstance(t, dict) else getattr(t, "exit_time", "")
+                t_hold = t.get("hold_hours", 0.0) if isinstance(t, dict) else getattr(t, "hold_hours", 0.0)
+
                 trades_list.append({
-                    "symbol": t.symbol,
-                    "side": "LONG" if t.direction == 1 else "SHORT",
-                    "direction": "LONG" if t.direction == 1 else "SHORT",
-                    "entry_price": float(t.entry_price),
-                    "exit_price": float(t.exit_price),
-                    "qty": float(t.final_qty),
-                    "net_pnl": round(float(t.net_pnl), 2),
-                    "exit_reason": t.exit_reason,
-                    "exit_time": t.exit_time,
-                    "hold_hours": round(getattr(t, "hold_hours", 0.0), 1),
+                    "symbol": t_sym,
+                    "side": "LONG" if t_dir == 1 else "SHORT",
+                    "direction": "LONG" if t_dir == 1 else "SHORT",
+                    "entry_price": float(t_ep),
+                    "exit_price": float(t_xp),
+                    "qty": float(t_qty),
+                    "net_pnl": round(float(t_pnl), 2),
+                    "exit_reason": t_reason,
+                    "exit_time": t_time,
+                    "hold_hours": round(float(t_hold), 1),
                 })
 
             wr = 0.0
