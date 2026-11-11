@@ -196,26 +196,7 @@ class PaperTraderV38:
                 except Exception as ex:
                     logger.warning(f"Error parsing persistent trade: {ex}")
 
-            if not loaded and self.engine.realized_equity > INITIAL_CAPITAL:
-                gain = self.engine.realized_equity - INITIAL_CAPITAL
-                now_ms = int(time.time() * 1000)
-                loaded.append(
-                    ClosedTrade(
-                        symbol="APTUSDT",
-                        direction=1,
-                        entry_time=now_ms - 3600000 * 12,
-                        exit_time=now_ms - 3600000 * 8,
-                        entry_price=Decimal("0.6050"),
-                        exit_price=Decimal("0.6210"),
-                        initial_qty=Decimal("100"),
-                        final_qty=Decimal("100"),
-                        net_pnl=gain,
-                        exit_reason="STAGE2_MAKER_TP (+1.40R)",
-                        was_pyramided=False,
-                        hold_hours=4.0,
-                    )
-                )
-
+            # Phase F1B: No synthetic trades. If no persistent trades exist, list remains unpopulated.
             self.engine.closed_trades = loaded
             logger.info(
                 f"Loaded persistent state: Realized Equity=${self.engine.realized_equity:.2f}, "
