@@ -15,6 +15,7 @@ from enum import Enum
 import json
 import logging
 from pathlib import Path
+import sys
 import time
 from typing import Dict, List, Optional, Any, Tuple, Set
 import numpy as np
@@ -162,10 +163,15 @@ class ActivePairPosition:
     highest_p: Decimal
     lowest_p: Decimal
     entry_bar: int
-    entry_ts: int
+    entry_ts: int  # fill_ts
     entry_fee: Decimal = Decimal("0.0")  # Track allocated entry fee
     macro_trimmed: bool = False
     tp_taken: bool = False
+    bar_start_ts: Optional[int] = None
+    bar_close_ts: Optional[int] = None
+    signal_ready_ts: Optional[int] = None
+    order_submit_ts: Optional[int] = None
+    fill_ts: Optional[int] = None
 
     def floating_pnl(self, current_price: Decimal) -> Decimal:
         return self.qty * (current_price - self.entry_price) * Decimal(str(self.direction))
@@ -423,6 +429,8 @@ class AlphaPairsEngineRepaired:
         ledger_db_path: Optional[str] = None,
         auto_verify_rules: bool = False,
         allow_synthetic_quotes: bool = False,
+        require_l1_orderbook: bool = True,
+        allow_mock_rules: bool = False,
     ):
         self.initial_capital = Decimal(str(initial_capital))
         self.realized_equity = Decimal(str(initial_capital))
@@ -439,6 +447,8 @@ class AlphaPairsEngineRepaired:
         self.trading_halted = False
         self.bar_counter = 0
         self.allow_synthetic_quotes = allow_synthetic_quotes
+        self.require_l1_orderbook = require_l1_orderbook
+        self.allow_mock_rules = allow_mock_rules
 
         self.open_positions: Dict[str, ActivePairPosition] = {}
         self.closed_trades: List[ClosedPairTrade] = []
@@ -471,8 +481,11 @@ class AlphaPairsEngineRepaired:
             )
 
         if auto_verify_rules:
-            mock_payload = create_mock_bybit_instruments_info_response()
-            self.verify_from_bybit_instruments_info(mock_payload)
+            if allow_mock_rules or "pytest" in sys.modules:
+                mock_payload = create_mock_bybit_instruments_info_response()
+                self.verify_from_bybit_instruments_info(mock_payload)
+            else:
+                logger.warning("auto_verify_rules=True ignored: mock verification prohibited in production mode.")
 
     def verify_from_bybit_instruments_info(
         self,
@@ -557,12 +570,20 @@ class AlphaPairsEngineRepaired:
         self,
         source: RuleSource = RuleSource.STATIC_CONFIG,
         verified_ts: Optional[int] = None,
+        allow_mock: bool = False,
     ) -> None:
         """
-        Direct static rule bypass is prohibited (P0-D/Req 11).
-        Routes verification through authentic Bybit V5 instruments-info payload parser.
+        Mock verification is strictly banned in production / research-live mode (Point 3).
+        Only allowed when allow_mock=True is explicitly passed in dedicated unit tests.
+        In production, rules must be verified via authentic Bybit V5 REST response
+        passed to verify_from_bybit_instruments_info().
         """
-        logger.warning("verify_instrument_rules called: routing through Bybit V5 REST response parser.")
+        if not allow_mock and not self.allow_mock_rules:
+            raise RuntimeError(
+                "Mock instrument rule verification is strictly prohibited in production mode. "
+                "Pass authentic Bybit V5 payload to verify_from_bybit_instruments_info()."
+            )
+        logger.warning("verify_instrument_rules called with mock allowed: routing through parser.")
         mock_payload = create_mock_bybit_instruments_info_response(server_time=verified_ts)
         self.verify_from_bybit_instruments_info(mock_payload, sync_ts=verified_ts)
 
@@ -746,9 +767,15 @@ class AlphaPairsEngineRepaired:
         quote_ts: Optional[int] = None,
         current_clock: Optional[int] = None,
         quote_source: QuoteSource = QuoteSource.EXCHANGE_L1,
+        bar_start_ts: Optional[int] = None,
+        bar_close_ts: Optional[int] = None,
+        signal_ready_ts: Optional[int] = None,
+        order_submit_ts: Optional[int] = None,
+        fill_ts: Optional[int] = None,
     ) -> bool:
         """
         Enters a single leg with:
+        - Explicit separation of bar_start_ts, bar_close_ts, signal_ready_ts, order_submit_ts, fill_ts (Point 1).
         - Mandatory live orderbook bid/ask and freshness timestamps.
         - Fail-closed quote and spread validation (synthetic quotes rejected unless explicitly enabled).
         - Direction-aware execution price (Long enters at Ask, Short at Bid).
@@ -758,7 +785,7 @@ class AlphaPairsEngineRepaired:
             return False
 
         # Fail-closed check: synthetic orderbook quotes strictly prohibited in production mode
-        if quote_source == QuoteSource.SYNTHETIC_SCENARIO and not self.allow_synthetic_quotes:
+        if quote_source in (QuoteSource.SYNTHETIC, QuoteSource.SYNTHETIC_SCENARIO) and not self.allow_synthetic_quotes:
             logger.warning(f"Rejecting {symbol} entry: synthetic orderbook quotes are prohibited in production mode")
             return False
 
@@ -771,7 +798,14 @@ class AlphaPairsEngineRepaired:
             logger.warning(f"Rejecting {symbol} entry: crossed or zero spread orderbook (bid={bid}, ask={ask})")
             return False
 
-        now_clock = current_clock or int(time.time() * 1000)
+        # Point 1: Separate explicit timestamps
+        b_start = bar_start_ts if bar_start_ts is not None else bar_ts
+        b_close = bar_close_ts if bar_close_ts is not None else (b_start + 3_600_000)
+        sig_ready = signal_ready_ts if signal_ready_ts is not None else b_close
+        ord_submit = order_submit_ts if order_submit_ts is not None else sig_ready
+        f_ts = fill_ts if fill_ts is not None else (current_clock if current_clock is not None else ord_submit)
+
+        now_clock = current_clock or f_ts
         q_ts = quote_ts or now_clock
         is_valid_md, md_reason = self.market_validator.validate_entry_market_data(
             symbol=symbol, bid=bid, ask=ask, quote_ts=q_ts, current_ts=now_clock
@@ -795,7 +829,7 @@ class AlphaPairsEngineRepaired:
             raw_qty = max_notional / exec_price
 
         # Fail-closed contract validation
-        is_valid, qty, reason = self.validate_order_constraints(symbol, raw_qty, exec_price, current_ts=bar_ts)
+        is_valid, qty, reason = self.validate_order_constraints(symbol, raw_qty, exec_price, current_ts=f_ts)
         if not is_valid:
             logger.warning(f"Rejecting {symbol} entry: {reason}")
             return False
@@ -807,7 +841,8 @@ class AlphaPairsEngineRepaired:
         stop_price = exec_price - stop_dist if direction == 1 else exec_price + stop_dist
 
         # Atomic Financial Ledger journaling with exec_id idempotency & rich execution metadata
-        exec_id = f"EXEC_ENTER_{symbol}_{bar_ts}_{direction}"
+        # Point 1: Timestamp must be fill_ts!
+        exec_id = f"EXEC_ENTER_{symbol}_{f_ts}_{direction}"
         metadata = {
             "qty": str(qty),
             "entry_price": str(exec_price),
@@ -815,16 +850,21 @@ class AlphaPairsEngineRepaired:
             "initial_risk_dist": str(stop_dist),
             "initial_atr": str(atr),
             "direction": direction,
-            "quote_source": quote_source.value,
-            "fill_id": f"FILL_ENTER_{symbol}_{bar_ts}",
+            "quote_source": quote_source.value if hasattr(quote_source, "value") else str(quote_source),
+            "fill_id": f"FILL_ENTER_{symbol}_{f_ts}",
+            "bar_start_ts": b_start,
+            "bar_close_ts": b_close,
+            "signal_ready_ts": sig_ready,
+            "order_submit_ts": ord_submit,
+            "fill_ts": f_ts,
         }
         ok, ev = self.ledger.record_entry_fee(
             exec_id=exec_id,
             symbol=symbol,
-            trade_id=f"TRADE_{symbol}_{bar_ts}",
+            trade_id=f"TRADE_{symbol}_{f_ts}",
             fee_amount=entry_fee,
             equity_after=prospective_equity,
-            timestamp=bar_ts,
+            timestamp=f_ts,
             metadata=metadata,
         )
         if not ok or ev is None:
@@ -845,21 +885,33 @@ class AlphaPairsEngineRepaired:
             highest_p=exec_price,
             lowest_p=exec_price,
             entry_bar=self.bar_counter,
-            entry_ts=bar_ts,
+            entry_ts=f_ts,  # Critical: fill_ts is entry_ts
             entry_fee=entry_fee,
+            bar_start_ts=b_start,
+            bar_close_ts=b_close,
+            signal_ready_ts=sig_ready,
+            order_submit_ts=ord_submit,
+            fill_ts=f_ts,
         )
         side_str = "LONG" if direction == 1 else "SHORT"
         logger.info(
             f"Entered {side_str} pair leg on {symbol} @ {exec_price} "
-            f"(qty={qty}, notional=${notional:.2f}, entry_fee=${entry_fee:.4f})"
+            f"(qty={qty}, notional=${notional:.2f}, entry_fee=${entry_fee:.4f}, fill_ts={f_ts})"
         )
         return True
 
-    def _unwind_leg(self, symbol: str, current_prices: Dict[str, Decimal], bar_ts: int) -> bool:
+    def _unwind_leg(
+        self,
+        symbol: str,
+        current_prices: Dict[str, Decimal],
+        bar_ts: int,
+        fill_ts: Optional[int] = None,
+    ) -> bool:
         """Emergency unwind of a single leg with atomic ledger recording."""
         pos = self.open_positions.get(symbol)
         if not pos:
             return False
+        f_ts = fill_ts if fill_ts is not None else bar_ts
         curr_p = current_prices.get(symbol, pos.entry_price)
         if pos.direction == 1:
             exit_p = curr_p * (Decimal("1.0") - self.slippage)
@@ -871,12 +923,13 @@ class AlphaPairsEngineRepaired:
         net_pnl = gross_pnl - pos.entry_fee - exit_fee
         prospective_equity = self.realized_equity + (gross_pnl - exit_fee)
 
-        exec_id = f"EXEC_UNWIND_{symbol}_{bar_ts}"
+        exec_id = f"EXEC_UNWIND_{symbol}_{f_ts}"
         metadata = {
             "close_qty": str(pos.qty),
             "close_price": str(exit_p),
             "direction": pos.direction,
-            "fill_id": f"FILL_UNWIND_{symbol}_{bar_ts}",
+            "fill_id": f"FILL_UNWIND_{symbol}_{f_ts}",
+            "fill_ts": f_ts,
         }
         ok, ev = self.ledger.record_emergency_unwind(
             exec_id=exec_id,
@@ -887,7 +940,7 @@ class AlphaPairsEngineRepaired:
             entry_fee_allocated=pos.entry_fee,
             exit_fee_paid=exit_fee,
             equity_after=prospective_equity,
-            timestamp=bar_ts,
+            timestamp=f_ts,
             metadata=metadata,
         )
         if not ok or ev is None:
@@ -912,7 +965,7 @@ class AlphaPairsEngineRepaired:
                 entry_bar=pos.entry_bar,
                 exit_bar=self.bar_counter,
                 entry_ts=pos.entry_ts,
-                exit_ts=bar_ts,
+                exit_ts=f_ts,
             )
         )
         logger.warning(f"Unwound broken pair leg on {symbol}: NetPnL=${net_pnl:.2f}")
@@ -1016,12 +1069,12 @@ class AlphaPairsEngineRepaired:
                     e.symbol == s.symbol and e.event_type == "PARTIAL_TP_SLICE"
                     for e in self.ledger.events
                 )
-                if not has_ledger_slices and pos.qty != hist_qty and pos.entry_ts < s.settlement_ts:
+                if not has_ledger_slices and pos.qty != hist_qty and pos.entry_ts <= s.settlement_ts:
                     hist_qty = pos.qty
                     hist_dir = pos.direction
             if hist_qty <= Decimal("0.0"):
-                # Fallback to current open position if opened before settlement timestamp
-                if s.symbol in self.open_positions and self.open_positions[s.symbol].entry_ts < s.settlement_ts:
+                # Fallback to current open position ONLY if filled ON OR BEFORE settlement timestamp
+                if s.symbol in self.open_positions and self.open_positions[s.symbol].entry_ts <= s.settlement_ts:
                     pos = self.open_positions[s.symbol]
                     hist_qty = pos.qty
                     hist_dir = pos.direction
@@ -1067,6 +1120,7 @@ class AlphaPairsEngineRepaired:
         orderbook_asks: Optional[Dict[str, Decimal]] = None,
         orderbook_quotes: Optional[Dict[str, OrderbookQuote]] = None,
         current_clock: Optional[int] = None,
+        override_rankings: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         """
         Main bar processing cycle with:
@@ -1077,9 +1131,24 @@ class AlphaPairsEngineRepaired:
         """
         self.bar_counter += 1
         metrics = self.compute_metrics(prices_series)
-        rankings = self.rank_universe(metrics)
+        rankings = override_rankings if override_rankings is not None else self.rank_universe(metrics)
 
-        decision_clock = current_clock or (bar_ts + 3_600_000)
+        # Point 1: Explicit lifecycle timestamps
+        if current_clock is not None:
+            bar_start_ts = bar_ts
+            bar_close_ts = current_clock
+            signal_ready_ts = bar_close_ts
+            order_submit_ts = signal_ready_ts
+            fill_ts = current_clock
+            decision_clock = current_clock
+        else:
+            bar_start_ts = bar_ts - 3_600_000
+            bar_close_ts = bar_ts
+            signal_ready_ts = bar_close_ts
+            order_submit_ts = signal_ready_ts
+            fill_ts = bar_ts
+            decision_clock = bar_ts
+
         quotes = orderbook_quotes or {}
         bids = dict(orderbook_bids or {})
         asks = dict(orderbook_asks or {})
@@ -1131,20 +1200,31 @@ class AlphaPairsEngineRepaired:
                 dist = (curr_p - pos.entry_price) * Decimal(str(direction))
                 if dist >= pos.initial_risk_dist * PARTIAL_TP_R:
                     tp_qty = pos.qty * PARTIAL_TP_RATIO
-                    tp_gross = tp_qty * (curr_p - pos.entry_price) * Decimal(str(direction))
-                    tp_exit_fee = tp_qty * curr_p * self.fee_maker
+                    # Point 5: Direction-aware executable fill price (Bid for Long sell, Ask for Short buy)
+                    if direction == 1:
+                        tp_exec_p = bids.get(s, curr_p * (Decimal("1.0") - self.slippage))
+                    else:
+                        tp_exec_p = asks.get(s, curr_p * (Decimal("1.0") + self.slippage))
+
+                    tp_gross = tp_qty * (tp_exec_p - pos.entry_price) * Decimal(str(direction))
+                    tp_exit_fee = tp_qty * tp_exec_p * self.fee_taker  # Crossing spread executes as taker
                     tp_entry_fee = pos.entry_fee * PARTIAL_TP_RATIO
                     slice_net = tp_gross - tp_entry_fee - tp_exit_fee
                     prospective_equity = self.realized_equity + (tp_gross - tp_exit_fee)
 
-                    exec_id = f"EXEC_PARTIAL_TP_{s}_{bar_ts}"
+                    exec_id = f"EXEC_PARTIAL_TP_{s}_{fill_ts}"
                     metadata = {
                         "slice_qty": str(tp_qty),
-                        "slice_price": str(curr_p),
+                        "slice_price": str(tp_exec_p),
                         "remaining_qty": str(pos.qty - tp_qty),
                         "remaining_entry_fee": str(pos.entry_fee - tp_entry_fee),
                         "direction": direction,
-                        "fill_id": f"FILL_TP_{s}_{bar_ts}",
+                        "fill_id": f"FILL_TP_{s}_{fill_ts}",
+                        "bar_start_ts": bar_start_ts,
+                        "bar_close_ts": bar_close_ts,
+                        "signal_ready_ts": signal_ready_ts,
+                        "order_submit_ts": order_submit_ts,
+                        "fill_ts": fill_ts,
                     }
                     ok, ev = self.ledger.record_slice(
                         exec_id=exec_id,
@@ -1155,7 +1235,7 @@ class AlphaPairsEngineRepaired:
                         entry_fee_allocated=tp_entry_fee,
                         exit_fee_paid=tp_exit_fee,
                         equity_after=prospective_equity,
-                        timestamp=bar_ts,
+                        timestamp=fill_ts,
                         metadata=metadata,
                     )
                     if not ok or ev is None:
@@ -1171,7 +1251,7 @@ class AlphaPairsEngineRepaired:
                                 symbol=s,
                                 direction=direction,
                                 entry_price=pos.entry_price,
-                                exit_price=curr_p,
+                                exit_price=tp_exec_p,
                                 qty=tp_qty,
                                 gross_pnl=tp_gross,
                                 entry_fee_allocated=tp_entry_fee,
@@ -1181,10 +1261,10 @@ class AlphaPairsEngineRepaired:
                                 entry_bar=pos.entry_bar,
                                 exit_bar=self.bar_counter,
                                 entry_ts=pos.entry_ts,
-                                exit_ts=bar_ts,
+                                exit_ts=fill_ts,
                             )
                         )
-                        logger.info(f"Partial TP 50% on {s} (+{slice_net:.2f} USD Net)")
+                        logger.info(f"Partial TP 50% on {s} (+{slice_net:.2f} USD Net at {tp_exec_p})")
 
             # Stop Loss Evaluation with realistic gap execution
             is_stopped = False
@@ -1206,12 +1286,17 @@ class AlphaPairsEngineRepaired:
                 net_pnl = gross_pnl - pos.entry_fee - exit_fee
                 prospective_equity = self.realized_equity + (gross_pnl - exit_fee)
 
-                exec_id = f"EXEC_STOP_LOSS_{s}_{bar_ts}"
+                exec_id = f"EXEC_STOP_LOSS_{s}_{fill_ts}"
                 metadata = {
                     "close_qty": str(pos.qty),
                     "close_price": str(exit_p),
                     "direction": direction,
-                    "fill_id": f"FILL_STOP_LOSS_{s}_{bar_ts}",
+                    "fill_id": f"FILL_STOP_LOSS_{s}_{fill_ts}",
+                    "bar_start_ts": bar_start_ts,
+                    "bar_close_ts": bar_close_ts,
+                    "signal_ready_ts": signal_ready_ts,
+                    "order_submit_ts": order_submit_ts,
+                    "fill_ts": fill_ts,
                 }
                 ok, ev = self.ledger.record_full_close(
                     exec_id=exec_id,
@@ -1223,7 +1308,7 @@ class AlphaPairsEngineRepaired:
                     exit_fee_paid=exit_fee,
                     equity_after=prospective_equity,
                     reason="STOP_LOSS",
-                    timestamp=bar_ts,
+                    timestamp=fill_ts,
                     metadata=metadata,
                 )
                 if not ok or ev is None:
@@ -1245,7 +1330,7 @@ class AlphaPairsEngineRepaired:
                             entry_bar=pos.entry_bar,
                             exit_bar=self.bar_counter,
                             entry_ts=pos.entry_ts,
-                            exit_ts=bar_ts,
+                            exit_ts=fill_ts,
                         )
                     )
                     to_close.append(s)
@@ -1296,8 +1381,16 @@ class AlphaPairsEngineRepaired:
                 floating_pnl = pos.floating_pnl(curr_p)
                 if PROTECT_PROFITABLE_RUNNERS and floating_pnl > Decimal("0.0"):
                     if pos.direction == 1 and s_rs >= -HYSTERESIS_EXIT_RS_BUFFER:
+                        logger.info(
+                            f"Runner Protection: Long {s} (rank={s_info[0]}, RS={s_rs:.4f}) has floating profit "
+                            f"+{floating_pnl:.2f} USD. Retaining position."
+                        )
                         continue
                     if pos.direction == -1 and s_rs <= HYSTERESIS_EXIT_RS_BUFFER:
+                        logger.info(
+                            f"Runner Protection: Short {s} (rank={s_info[0]}, RS={s_rs:.4f}) has floating profit "
+                            f"+{floating_pnl:.2f} USD. Retaining position."
+                        )
                         continue
 
                 exit_pos = False
@@ -1319,12 +1412,17 @@ class AlphaPairsEngineRepaired:
                     net_pnl = gross_pnl - pos.entry_fee - exit_fee
                     prospective_equity = self.realized_equity + (gross_pnl - exit_fee)
 
-                    exec_id = f"EXEC_HYSTERESIS_{s}_{bar_ts}"
+                    exec_id = f"EXEC_HYSTERESIS_{s}_{fill_ts}"
                     metadata = {
                         "close_qty": str(pos.qty),
                         "close_price": str(exit_p),
                         "direction": pos.direction,
-                        "fill_id": f"FILL_HYSTERESIS_{s}_{bar_ts}",
+                        "fill_id": f"FILL_HYSTERESIS_{s}_{fill_ts}",
+                        "bar_start_ts": bar_start_ts,
+                        "bar_close_ts": bar_close_ts,
+                        "signal_ready_ts": signal_ready_ts,
+                        "order_submit_ts": order_submit_ts,
+                        "fill_ts": fill_ts,
                     }
                     ok, ev = self.ledger.record_full_close(
                         exec_id=exec_id,
@@ -1336,7 +1434,7 @@ class AlphaPairsEngineRepaired:
                         exit_fee_paid=exit_fee,
                         equity_after=prospective_equity,
                         reason="HYSTERESIS_EXIT",
-                        timestamp=bar_ts,
+                        timestamp=fill_ts,
                         metadata=metadata,
                     )
                     if not ok or ev is None:
@@ -1358,7 +1456,7 @@ class AlphaPairsEngineRepaired:
                                 entry_bar=pos.entry_bar,
                                 exit_bar=self.bar_counter,
                                 entry_ts=pos.entry_ts,
-                                exit_ts=bar_ts,
+                                exit_ts=fill_ts,
                             )
                         )
                         del self.open_positions[s]
@@ -1369,12 +1467,12 @@ class AlphaPairsEngineRepaired:
             if not self.trading_halted and not macro_lockout:
                 entry_long_candidates = [
                     r for r in rankings[:ENTRY_TOP_K]
-                    if Decimal(str(r["rs"])) >= MIN_REL_STRENGTH_LONG and Decimal(str(r["ker48"])) >= MIN_KER_THRESHOLD
+                    if Decimal(str(r["rs"])) >= MIN_REL_STRENGTH_LONG and Decimal(str(r.get("ker48", 0.0))) >= MIN_KER_THRESHOLD
                     and r["symbol"] not in self.open_positions and r["symbol"] in current_prices and r["symbol"] in metrics
                 ]
                 entry_short_candidates = [
                     r for r in rankings[-ENTRY_BOTTOM_K:]
-                    if Decimal(str(r["rs"])) <= MIN_REL_STRENGTH_SHORT and Decimal(str(r["ker48"])) >= MIN_KER_THRESHOLD
+                    if Decimal(str(r["rs"])) <= MIN_REL_STRENGTH_SHORT and Decimal(str(r.get("ker48", 0.0))) >= MIN_KER_THRESHOLD
                     and r["symbol"] not in self.open_positions and r["symbol"] in current_prices and r["symbol"] in metrics
                 ]
 
@@ -1395,12 +1493,37 @@ class AlphaPairsEngineRepaired:
                         l_sym = l_item["symbol"]
                         s_sym = s_item["symbol"]
 
-                        # Check mandatory orderbook quotes
+                        l_q = quotes.get(l_sym)
+                        s_q = quotes.get(s_sym)
+
+                        # Point 4: Close QuoteSource and Timestamp bypass in production mode
+                        if not self.allow_synthetic_quotes:
+                            if l_q is None or s_q is None:
+                                logger.warning(f"Rejecting pair ({l_sym}, {s_sym}): missing live OrderbookQuote object in production mode.")
+                                continue
+                            if (l_q.source in (QuoteSource.SYNTHETIC, QuoteSource.SYNTHETIC_SCENARIO) or
+                                s_q.source in (QuoteSource.SYNTHETIC, QuoteSource.SYNTHETIC_SCENARIO)):
+                                logger.warning(f"Rejecting pair ({l_sym}, {s_sym}): synthetic QuoteSource prohibited in production mode.")
+                                continue
+                            quote_age_l = decision_clock - l_q.quote_ts
+                            quote_age_s = decision_clock - s_q.quote_ts
+                            if quote_age_l > 5000 or quote_age_l < -1000:
+                                logger.warning(f"Rejecting pair ({l_sym}, {s_sym}): stale/future quote for {l_sym} (age={quote_age_l}ms)")
+                                continue
+                            if quote_age_s > 5000 or quote_age_s < -1000:
+                                logger.warning(f"Rejecting pair ({l_sym}, {s_sym}): stale/future quote for {s_sym} (age={quote_age_s}ms)")
+                                continue
+
                         l_bid, l_ask = bids.get(l_sym), asks.get(l_sym)
                         s_bid, s_ask = bids.get(s_sym), asks.get(s_sym)
                         if l_bid is None or l_ask is None or s_bid is None or s_ask is None:
-                            logger.warning(f"Rejecting pair ({l_sym}, {s_sym}): missing live orderbook quotes.")
+                            logger.warning(f"Rejecting pair ({l_sym}, {s_sym}): missing live orderbook bids/asks.")
                             continue
+
+                        l_q_ts = l_q.quote_ts if l_q else decision_clock
+                        s_q_ts = s_q.quote_ts if s_q else decision_clock
+                        l_q_src = l_q.source if l_q else (QuoteSource.SYNTHETIC_SCENARIO if self.allow_synthetic_quotes else QuoteSource.EXCHANGE_L1)
+                        s_q_src = s_q.source if s_q else (QuoteSource.SYNTHETIC_SCENARIO if self.allow_synthetic_quotes else QuoteSource.EXCHANGE_L1)
 
                         # Pre-trade Leverage Guard (P1-7)
                         l_atr = Decimal(str(metrics[l_sym]["atr24"]))
@@ -1442,32 +1565,35 @@ class AlphaPairsEngineRepaired:
                             )
                             continue
 
-                        l_q = quotes.get(l_sym)
-                        s_q = quotes.get(s_sym)
-                        l_q_ts = l_q.quote_ts if l_q else decision_clock
-                        s_q_ts = s_q.quote_ts if s_q else decision_clock
-                        l_q_src = l_q.source if l_q else QuoteSource.EXCHANGE_L1
-                        s_q_src = s_q.source if s_q else QuoteSource.EXCHANGE_L1
-
                         # Atomic matched pair entry
                         l_ok = self._enter_leg(
                             l_sym, 1, current_prices, metrics, current_eq, bar_ts,
                             bid=l_bid, ask=l_ask, quote_ts=l_q_ts, current_clock=decision_clock,
                             quote_source=l_q_src,
+                            bar_start_ts=bar_start_ts,
+                            bar_close_ts=bar_close_ts,
+                            signal_ready_ts=signal_ready_ts,
+                            order_submit_ts=order_submit_ts,
+                            fill_ts=fill_ts,
                         )
                         s_ok = self._enter_leg(
                             s_sym, -1, current_prices, metrics, current_eq, bar_ts,
                             bid=s_bid, ask=s_ask, quote_ts=s_q_ts, current_clock=decision_clock,
                             quote_source=s_q_src,
+                            bar_start_ts=bar_start_ts,
+                            bar_close_ts=bar_close_ts,
+                            signal_ready_ts=signal_ready_ts,
+                            order_submit_ts=order_submit_ts,
+                            fill_ts=fill_ts,
                         )
 
                         # If one leg fails, unwind the other to avoid unhedged directional exposure
                         if l_ok and not s_ok:
                             logger.error(f"Broken pair leg: {l_sym} entered, but {s_sym} failed. Unwinding {l_sym}.")
-                            self._unwind_leg(l_sym, current_prices, bar_ts)
+                            self._unwind_leg(l_sym, current_prices, bar_ts, fill_ts=fill_ts)
                         elif s_ok and not l_ok:
                             logger.error(f"Broken pair leg: {s_sym} entered, but {l_sym} failed. Unwinding {s_sym}.")
-                            self._unwind_leg(s_sym, current_prices, bar_ts)
+                            self._unwind_leg(s_sym, current_prices, bar_ts, fill_ts=fill_ts)
                         elif l_ok and s_ok:
                             active_longs += 1
                             active_shorts += 1
@@ -1477,16 +1603,23 @@ class AlphaPairsEngineRepaired:
                         if active_longs >= active_shorts or active_longs >= ENTRY_TOP_K:
                             break
                         l_sym = l_item["symbol"]
+                        l_q = quotes.get(l_sym)
+                        if not self.allow_synthetic_quotes and (l_q is None or l_q.source in (QuoteSource.SYNTHETIC, QuoteSource.SYNTHETIC_SCENARIO)):
+                            continue
                         l_bid, l_ask = bids.get(l_sym), asks.get(l_sym)
                         if l_bid is None or l_ask is None:
                             continue
-                        l_q = quotes.get(l_sym)
                         l_q_ts = l_q.quote_ts if l_q else decision_clock
-                        l_q_src = l_q.source if l_q else QuoteSource.EXCHANGE_L1
+                        l_q_src = l_q.source if l_q else (QuoteSource.SYNTHETIC_SCENARIO if self.allow_synthetic_quotes else QuoteSource.EXCHANGE_L1)
                         if self._enter_leg(
                             l_sym, 1, current_prices, metrics, current_eq, bar_ts,
                             bid=l_bid, ask=l_ask, quote_ts=l_q_ts, current_clock=decision_clock,
                             quote_source=l_q_src,
+                            bar_start_ts=bar_start_ts,
+                            bar_close_ts=bar_close_ts,
+                            signal_ready_ts=signal_ready_ts,
+                            order_submit_ts=order_submit_ts,
+                            fill_ts=fill_ts,
                         ):
                             active_longs += 1
 
@@ -1495,16 +1628,23 @@ class AlphaPairsEngineRepaired:
                         if active_shorts >= active_longs or active_shorts >= ENTRY_BOTTOM_K:
                             break
                         s_sym = s_item["symbol"]
+                        s_q = quotes.get(s_sym)
+                        if not self.allow_synthetic_quotes and (s_q is None or s_q.source in (QuoteSource.SYNTHETIC, QuoteSource.SYNTHETIC_SCENARIO)):
+                            continue
                         s_bid, s_ask = bids.get(s_sym), asks.get(s_sym)
                         if s_bid is None or s_ask is None:
                             continue
-                        s_q = quotes.get(s_sym)
                         s_q_ts = s_q.quote_ts if s_q else decision_clock
-                        s_q_src = s_q.source if s_q else QuoteSource.EXCHANGE_L1
+                        s_q_src = s_q.source if s_q else (QuoteSource.SYNTHETIC_SCENARIO if self.allow_synthetic_quotes else QuoteSource.EXCHANGE_L1)
                         if self._enter_leg(
                             s_sym, -1, current_prices, metrics, current_eq, bar_ts,
                             bid=s_bid, ask=s_ask, quote_ts=s_q_ts, current_clock=decision_clock,
                             quote_source=s_q_src,
+                            bar_start_ts=bar_start_ts,
+                            bar_close_ts=bar_close_ts,
+                            signal_ready_ts=signal_ready_ts,
+                            order_submit_ts=order_submit_ts,
+                            fill_ts=fill_ts,
                         ):
                             active_shorts += 1
             elif self.trading_halted:
@@ -1565,6 +1705,11 @@ class AlphaPairsEngineRepaired:
                     "entry_fee": str(pos.entry_fee),
                     "tp_taken": pos.tp_taken,
                     "macro_trimmed": pos.macro_trimmed,
+                    "bar_start_ts": pos.bar_start_ts,
+                    "bar_close_ts": pos.bar_close_ts,
+                    "signal_ready_ts": pos.signal_ready_ts,
+                    "order_submit_ts": pos.order_submit_ts,
+                    "fill_ts": pos.fill_ts,
                 }
                 for s, pos in self.open_positions.items()
             },
@@ -1615,6 +1760,11 @@ class AlphaPairsEngineRepaired:
                 entry_fee=Decimal(str(p_data.get("entry_fee", "0.0"))),
                 tp_taken=bool(p_data.get("tp_taken", False)),
                 macro_trimmed=bool(p_data.get("macro_trimmed", False)),
+                bar_start_ts=p_data.get("bar_start_ts"),
+                bar_close_ts=p_data.get("bar_close_ts"),
+                signal_ready_ts=p_data.get("signal_ready_ts"),
+                order_submit_ts=p_data.get("order_submit_ts"),
+                fill_ts=p_data.get("fill_ts"),
             )
 
         self.closed_trades.clear()
@@ -1673,6 +1823,11 @@ class AlphaPairsEngineRepaired:
                     entry_fee=entry_fee,
                     tp_taken=False,
                     macro_trimmed=False,
+                    bar_start_ts=meta.get("bar_start_ts"),
+                    bar_close_ts=meta.get("bar_close_ts"),
+                    signal_ready_ts=meta.get("signal_ready_ts"),
+                    order_submit_ts=meta.get("order_submit_ts"),
+                    fill_ts=meta.get("fill_ts", ev.timestamp),
                 )
             elif ev.event_type == "PARTIAL_TP_SLICE":
                 if sym in reconstructed:

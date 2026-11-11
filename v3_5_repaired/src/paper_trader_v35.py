@@ -314,7 +314,7 @@ class PaperTraderV35Repaired:
             self.latest_prices[symbol] = Decimal(str(bar["close"]))
 
             # 4b. Kline Continuity Verification in Active Event Loop
-            is_cont = self.verify_kline_continuity(symbol)
+            is_cont = self.verify_kline_continuity(symbol, incoming_start_ts=start_ts)
             if not is_cont:
                 logger.warning(f"Kline continuity gap on {symbol}")
 
@@ -375,9 +375,20 @@ class PaperTraderV35Repaired:
                 else:
                     rows = []
 
+                bar_duration_ms = int(CANDLE_INTERVAL) * 60 * 1000
+                now_ms = int(time.time() * 1000)
+
                 for r in rows:
                     r_start = int(r[0])
                     if r_start == target_ts:
+                        r_close = r_start + bar_duration_ms
+                        if now_ms < r_close:
+                            logger.warning(
+                                f"Rejecting unclosed REST bar for {sym} at {r_start}: "
+                                f"bar close {r_close} > now {now_ms} (Point 5)"
+                            )
+                            continue
+
                         self.pending_bars_by_ts[target_ts][sym] = {
                             "start": r_start,
                             "open": float(r[1]),
@@ -387,7 +398,7 @@ class PaperTraderV35Repaired:
                             "volume": float(r[5]),
                         }
                         self.latest_prices[sym] = Decimal(str(r[4]))
-                        logger.info(f"REST backfilled missing candle for {sym} at {target_ts}")
+                        logger.info(f"REST backfilled verified closed candle for {sym} at {target_ts}")
                         break
             except Exception as e:
                 logger.warning(f"Failed REST backfill for {sym}: {e}")
@@ -450,12 +461,22 @@ class PaperTraderV35Repaired:
 
         return dropped_bars
 
-    def verify_kline_continuity(self, symbol: str) -> bool:
+    def verify_kline_continuity(self, symbol: str, incoming_start_ts: Optional[int] = None) -> bool:
         """
-        Verifies hourly continuity of historical candles for a symbol.
+        Verifies hourly continuity of historical candles for a symbol, including
+        any newly incoming candle relative to the latest committed history.
         Returns True if all consecutive candles differ by exactly BAR_INTERVAL_MS (3600000ms).
         """
         history = self.kline_history.get(symbol, [])
+        if incoming_start_ts is not None and history:
+            prev_ts = int(history[-1]["start"])
+            if incoming_start_ts - prev_ts != BAR_INTERVAL_MS:
+                logger.error(
+                    f"Kline continuity breach for incoming bar {symbol}: gap between {prev_ts} and {incoming_start_ts} "
+                    f"(expected delta {BAR_INTERVAL_MS}ms, got {incoming_start_ts - prev_ts}ms)"
+                )
+                return False
+
         if len(history) < 2:
             return True
 
@@ -469,6 +490,13 @@ class PaperTraderV35Repaired:
                 )
                 return False
         return True
+
+    def sweep_sync_timeouts(self, now_sec: Optional[float] = None) -> List[int]:
+        """
+        Autonomous periodic timeout sweeper.
+        Callable from timer loop without waiting for new market events (Point 5).
+        """
+        return self.check_sync_timeouts(now_sec=now_sec)
 
     def is_macro_blackout(self) -> bool:
         return time.time() < self.macro_blackout_until
