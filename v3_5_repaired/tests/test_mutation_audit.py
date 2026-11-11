@@ -35,7 +35,10 @@ class TestMutationAudit:
         start_equity = engine.realized_equity
 
         # Normal entry
-        engine._enter_leg("BTCUSDT", 1, {"BTCUSDT": Decimal("100.0")}, {"BTCUSDT": {"atr24": 2.0}}, start_equity, 1000)
+        engine._enter_leg(
+            "BTCUSDT", 1, {"BTCUSDT": Decimal("100.0")}, {"BTCUSDT": {"atr24": 2.0}}, start_equity, 1000,
+            bid=Decimal("99.98"), ask=Decimal("100.00"), quote_ts=1000, current_clock=1000,
+        )
         pos = engine.open_positions["BTCUSDT"]
 
         # MUTATION INJECTED: Net PnL adds fee instead of subtracting!
@@ -79,7 +82,10 @@ class TestMutationAudit:
         engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"))
         start_equity = engine.realized_equity
 
-        engine._enter_leg("BTCUSDT", 1, {"BTCUSDT": Decimal("100.0")}, {"BTCUSDT": {"atr24": 2.0}}, start_equity, 1000)
+        engine._enter_leg(
+            "BTCUSDT", 1, {"BTCUSDT": Decimal("100.0")}, {"BTCUSDT": {"atr24": 2.0}}, start_equity, 1000,
+            bid=Decimal("99.98"), ask=Decimal("100.00"), quote_ts=1000, current_clock=1000,
+        )
         pos = engine.open_positions["BTCUSDT"]
 
         gross_pnl = Decimal("5.0")

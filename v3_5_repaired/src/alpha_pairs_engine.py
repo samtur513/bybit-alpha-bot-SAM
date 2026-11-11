@@ -51,6 +51,12 @@ from v3_5_repaired.src.config import (
     HYSTERESIS_EXIT_RS_BUFFER,
     MIN_HOLD_BARS_REBALANCE,
     DRAWDOWN_LIMIT_PCT,
+    MAX_PORTFOLIO_BETA,
+    MAX_PORTFOLIO_LEVERAGE,
+    MAX_QUOTE_AGE_MS,
+    RuleSource,
+    RULE_SPEC_VERSION,
+    RULE_STATIC_TIMESTAMP,
     BENCHMARK_SYMBOL,
     LEDGER_DB_FILE,
 )
@@ -132,7 +138,12 @@ class BybitInstrumentRule:
     max_order_qty: Decimal = Decimal("100000.0")
     min_notional_value: Decimal = Decimal("5.00")
     status: str = "Trading"
-    updated_at_ms: int = 0
+    source: RuleSource = RuleSource.STATIC_CONFIG
+    version: str = RULE_SPEC_VERSION
+    updated_at_ms: int = RULE_STATIC_TIMESTAMP
+    last_exchange_sync_ts: Optional[int] = None
+    is_verified: bool = False
+    verified_at_ms: Optional[int] = None
     max_rule_age_ms: int = 86400 * 1000  # 24 hours
 
     def round_qty(self, raw_qty: Decimal) -> Decimal:
@@ -159,10 +170,10 @@ class BybitInstrumentRule:
         if self.status != "Trading":
             return False, Decimal("0.0"), f"FAIL_CLOSED: Instrument status '{self.status}' != 'Trading'"
 
-        # Fail-closed check: rule staleness
-        if current_ts is not None and self.updated_at_ms > 0:
-            if current_ts - self.updated_at_ms > self.max_rule_age_ms:
-                return False, Decimal("0.0"), f"FAIL_CLOSED: Instrument rule for '{self.symbol}' is expired (>24h)"
+        # Fail-closed check: live exchange rule staleness
+        if current_ts is not None and self.last_exchange_sync_ts is not None:
+            if current_ts - self.last_exchange_sync_ts > self.max_rule_age_ms:
+                return False, Decimal("0.0"), f"FAIL_CLOSED: Live instrument rule for '{self.symbol}' is expired (>24h)"
 
         qty = self.round_qty(raw_qty)
         if qty < self.min_order_qty:
@@ -185,11 +196,13 @@ class MarketDataValidator:
 
     def __init__(
         self,
-        max_staleness_sec: int = MAX_QUOTE_STALENESS_SEC,
+        max_staleness_sec: int = 5,
         max_spread_pct: Decimal = MAX_BID_ASK_SPREAD_PCT,
         max_volatility_jump_mult: Decimal = MAX_VOLATILITY_JUMP_ATR_MULT,
         confirm_ticks_threshold: int = CONFIRMED_SPIKE_TICKS,
+        max_quote_age_ms: int = MAX_QUOTE_AGE_MS,
     ):
+        self.max_quote_age_ms = max_quote_age_ms
         self.max_staleness_sec = max_staleness_sec
         self.max_spread_pct = max_spread_pct
         self.max_volatility_jump_mult = max_volatility_jump_mult
@@ -217,8 +230,8 @@ class MarketDataValidator:
             return False, f"FAIL_CLOSED: Inverted or non-positive book for {symbol}: Bid={bid}, Ask={ask}"
 
         age_ms = abs(current_ts - quote_ts)
-        if age_ms > self.max_staleness_sec * 1000:
-            return False, f"FAIL_CLOSED: Stale quote for {symbol} (age={age_ms}ms > {self.max_staleness_sec * 1000}ms)"
+        if age_ms > self.max_quote_age_ms:
+            return False, f"FAIL_CLOSED: Stale quote for {symbol} (age={age_ms}ms > {self.max_quote_age_ms}ms)"
 
         mid = (bid + ask) / Decimal("2.0")
         spread_pct = (ask - bid) / mid
@@ -358,7 +371,6 @@ class AlphaPairsEngineRepaired:
 
         # Bybit instrument rules (Fail-Closed: strictly configured)
         self.instrument_rules: Dict[str, BybitInstrumentRule] = {}
-        now_ms = int(time.time() * 1000)
         for sym, cfg in BYBIT_INSTRUMENT_RULES.items():
             self.instrument_rules[sym] = BybitInstrumentRule(
                 symbol=sym,
@@ -368,8 +380,27 @@ class AlphaPairsEngineRepaired:
                 max_order_qty=cfg["max_order_qty"],
                 min_notional_value=cfg["min_notional_value"],
                 status=cfg.get("status", "Trading"),
-                updated_at_ms=now_ms,
+                source=RuleSource.STATIC_CONFIG,
+                version=RULE_SPEC_VERSION,
+                updated_at_ms=RULE_STATIC_TIMESTAMP,
+                last_exchange_sync_ts=None,
+                is_verified=False,
             )
+
+    def verify_instrument_rules(
+        self,
+        source: RuleSource = RuleSource.STATIC_CONFIG,
+        verified_ts: Optional[int] = None,
+    ) -> None:
+        """Explicitly records verification of instrument specifications."""
+        ts = verified_ts or int(time.time() * 1000)
+        for rule in self.instrument_rules.values():
+            rule.source = source
+            rule.is_verified = True
+            rule.verified_at_ms = ts
+            if source == RuleSource.EXCHANGE_REST:
+                rule.last_exchange_sync_ts = ts
+                rule.updated_at_ms = ts
 
     def validate_order_constraints(
         self,
@@ -436,14 +467,22 @@ class AlphaPairsEngineRepaired:
         self,
         prices_series: Dict[str, List[Dict[str, float]]],
         current_prices: Optional[Dict[str, Decimal]] = None,
+        candidate_legs: Optional[List[Tuple[str, int, Decimal]]] = None,
     ) -> BetaResult:
         """
         Calculates time-synchronized portfolio beta normalized by current equity:
         w_i = (direction_i * notional_i) / Total Equity
         Beta_port = Sum(w_i * Beta_i)
+        Supports prospective evaluation of candidate legs before order entry.
         Returns BetaResult with UNKNOWN status when data is insufficient.
         """
-        if self.benchmark not in prices_series or len(self.open_positions) == 0:
+        eval_legs: List[Tuple[str, int, Decimal]] = []
+        for s, pos in self.open_positions.items():
+            eval_legs.append((s, pos.direction, pos.qty))
+        if candidate_legs:
+            eval_legs.extend(candidate_legs)
+
+        if self.benchmark not in prices_series or len(eval_legs) == 0:
             return BetaResult(status=BetaStatus.UNKNOWN, beta=None, reason="No benchmark data or no open positions")
 
         btc_bars = prices_series[self.benchmark]
@@ -462,9 +501,9 @@ class AlphaPairsEngineRepaired:
 
         total_weighted_beta = Decimal("0.0")
 
-        for s, pos in self.open_positions.items():
+        for s, direction, qty in eval_legs:
             if s not in prices_series:
-                return BetaResult(status=BetaStatus.UNKNOWN, beta=None, reason=f"Missing bar series for active {s}")
+                return BetaResult(status=BetaStatus.UNKNOWN, beta=None, reason=f"Missing bar series for {s}")
             s_bars = prices_series[s]
             s_map = {int(b["start"]): float(b["close"]) for b in s_bars if "start" in b and "close" in b}
 
@@ -487,9 +526,9 @@ class AlphaPairsEngineRepaired:
             coin_beta = Decimal(str(cov / btc_var))
 
             # Mark-to-market notional weight normalized by equity
-            curr_p = prices.get(s, pos.entry_price)
-            notional = pos.qty * curr_p
-            weight = (Decimal(str(pos.direction)) * notional) / curr_eq
+            curr_p = prices.get(s, Decimal(str(s_synced[-1])))
+            notional = qty * curr_p
+            weight = (Decimal(str(direction)) * notional) / curr_eq
             total_weighted_beta += weight * coin_beta
 
         return BetaResult(
@@ -535,24 +574,35 @@ class AlphaPairsEngineRepaired:
         bar_ts: int,
         bid: Optional[Decimal] = None,
         ask: Optional[Decimal] = None,
+        quote_ts: Optional[int] = None,
         current_clock: Optional[int] = None,
     ) -> bool:
         """
-        Enters a single leg with fail-closed checks and atomic FinancialLedger journaling.
+        Enters a single leg with:
+        - Mandatory live orderbook bid/ask and freshness timestamps.
+        - Fail-closed quote and spread validation.
+        - Direction-aware execution price (Long enters at Ask, Short at Bid).
+        - Atomic FinancialLedger check: ledger commit MUST succeed before mutating realized equity or adding position.
         """
-        p = current_prices.get(symbol)
-        if not p or symbol not in metrics:
+        if symbol not in metrics:
             return False
 
-        # Fail-closed market data check if bid/ask provided
-        if bid is not None and ask is not None:
-            now_clock = current_clock or int(time.time() * 1000)
-            is_valid_md, md_reason = self.market_validator.validate_entry_market_data(
-                symbol=symbol, bid=bid, ask=ask, quote_ts=bar_ts, current_ts=now_clock
-            )
-            if not is_valid_md:
-                logger.warning(f"Rejecting {symbol} entry: {md_reason}")
-                return False
+        # Fail-closed market data check: Bid and Ask are STRICTLY mandatory for new entries
+        if bid is None or ask is None or bid <= Decimal("0.0") or ask <= Decimal("0.0"):
+            logger.warning(f"Rejecting {symbol} entry: live Bid/Ask quotes are mandatory (bid={bid}, ask={ask})")
+            return False
+
+        now_clock = current_clock or int(time.time() * 1000)
+        q_ts = quote_ts or bar_ts
+        is_valid_md, md_reason = self.market_validator.validate_entry_market_data(
+            symbol=symbol, bid=bid, ask=ask, quote_ts=q_ts, current_ts=now_clock
+        )
+        if not is_valid_md:
+            logger.warning(f"Rejecting {symbol} entry due to invalid market data: {md_reason}")
+            return False
+
+        # Direction-aware execution price: Long executes at Ask, Short executes at Bid
+        exec_price = ask if direction == 1 else bid
 
         atr = Decimal(str(metrics[symbol]["atr24"]))
         stop_dist = STOP_LOSS_ATR_MULT * atr
@@ -562,59 +612,62 @@ class AlphaPairsEngineRepaired:
         risk_usd = current_eq * (BASE_RISK_PER_LEG_PCT / Decimal("100.0"))
         raw_qty = risk_usd / stop_dist
         max_notional = current_eq * MAX_LEVERAGE_PER_LEG
-        if raw_qty * p > max_notional:
-            raw_qty = max_notional / p
+        if raw_qty * exec_price > max_notional:
+            raw_qty = max_notional / exec_price
 
         # Fail-closed contract validation
-        is_valid, qty, reason = self.validate_order_constraints(symbol, raw_qty, p, current_ts=bar_ts)
+        is_valid, qty, reason = self.validate_order_constraints(symbol, raw_qty, exec_price, current_ts=bar_ts)
         if not is_valid:
             logger.warning(f"Rejecting {symbol} entry: {reason}")
             return False
 
-        notional = qty * p
-
-        # Deduct entry fee from realized equity (Cash Accounting)
+        notional = qty * exec_price
         entry_fee = notional * self.fee_taker
-        self.realized_equity -= entry_fee
+        prospective_equity = self.realized_equity - entry_fee
 
         # Atomic Financial Ledger journaling with exec_id idempotency
         exec_id = f"EXEC_ENTER_{symbol}_{bar_ts}_{direction}"
-        self.ledger.record_entry_fee(
+        ok, ev = self.ledger.record_entry_fee(
             exec_id=exec_id,
             symbol=symbol,
             trade_id=f"TRADE_{symbol}_{bar_ts}",
             fee_amount=entry_fee,
-            equity_after=self.realized_equity,
+            equity_after=prospective_equity,
             timestamp=bar_ts,
         )
+        if not ok or ev is None:
+            logger.error(f"Ledger rejected entry fee for {symbol} (exec_id={exec_id}). Aborting entry.")
+            return False
 
-        stop_price = p - stop_dist if direction == 1 else p + stop_dist
+        # Only on successful ledger commit: update engine equity and open position
+        self.realized_equity = ev.balance_after
+        stop_price = exec_price - stop_dist if direction == 1 else exec_price + stop_dist
         self.open_positions[symbol] = ActivePairPosition(
             symbol=symbol,
             direction=direction,
             qty=qty,
-            entry_price=p,
+            entry_price=exec_price,
             stop_price=stop_price,
             initial_risk_dist=stop_dist,
             initial_atr=atr,
-            highest_p=p,
-            lowest_p=p,
+            highest_p=exec_price,
+            lowest_p=exec_price,
             entry_bar=self.bar_counter,
             entry_ts=bar_ts,
             entry_fee=entry_fee,
         )
         side_str = "LONG" if direction == 1 else "SHORT"
         logger.info(
-            f"Entered {side_str} pair leg on {symbol} @ {p} "
+            f"Entered {side_str} pair leg on {symbol} @ {exec_price} "
             f"(qty={qty}, notional=${notional:.2f}, entry_fee=${entry_fee:.4f})"
         )
         return True
 
-    def _unwind_leg(self, symbol: str, current_prices: Dict[str, Decimal], bar_ts: int) -> None:
+    def _unwind_leg(self, symbol: str, current_prices: Dict[str, Decimal], bar_ts: int) -> bool:
         """Emergency unwind of a single leg with atomic ledger recording."""
-        pos = self.open_positions.pop(symbol, None)
+        pos = self.open_positions.get(symbol)
         if not pos:
-            return
+            return False
         curr_p = current_prices.get(symbol, pos.entry_price)
         if pos.direction == 1:
             exit_p = curr_p * (Decimal("1.0") - self.slippage)
@@ -624,10 +677,10 @@ class AlphaPairsEngineRepaired:
         gross_pnl = pos.qty * (exit_p - pos.entry_price) * Decimal(str(pos.direction))
         exit_fee = pos.qty * exit_p * self.fee_taker
         net_pnl = gross_pnl - pos.entry_fee - exit_fee
-        self.realized_equity += (gross_pnl - exit_fee)
+        prospective_equity = self.realized_equity + (gross_pnl - exit_fee)
 
         exec_id = f"EXEC_UNWIND_{symbol}_{bar_ts}"
-        self.ledger.record_emergency_unwind(
+        ok, ev = self.ledger.record_emergency_unwind(
             exec_id=exec_id,
             symbol=symbol,
             trade_id=f"TRADE_{symbol}_{pos.entry_ts}",
@@ -635,10 +688,16 @@ class AlphaPairsEngineRepaired:
             gross_pnl=gross_pnl,
             entry_fee_allocated=pos.entry_fee,
             exit_fee_paid=exit_fee,
-            equity_after=self.realized_equity,
+            equity_after=prospective_equity,
             timestamp=bar_ts,
         )
+        if not ok or ev is None:
+            logger.error(f"Ledger rejected unwind for {symbol} ({exec_id}). Position retained.")
+            return False
 
+        # Only on successful ledger commit: mutate state
+        self.realized_equity = ev.balance_after
+        del self.open_positions[symbol]
         self.closed_trades.append(
             ClosedPairTrade(
                 symbol=symbol,
@@ -658,6 +717,7 @@ class AlphaPairsEngineRepaired:
             )
         )
         logger.warning(f"Unwound broken pair leg on {symbol}: NetPnL=${net_pnl:.2f}")
+        return True
 
     def execute_candle_stress_stop_gap(
         self,
@@ -711,11 +771,24 @@ class AlphaPairsEngineRepaired:
         settlements: List[FundingSettlement],
     ) -> Decimal:
         """
-        Applies Bybit funding settlement cashflow per instrument with settlement idempotency.
+        Applies Bybit funding settlement cashflow per instrument with:
+        - Settlement idempotency guard (duplicate exec_id rejected).
+        - Historical exposure check: position must have existed strictly before settlement timestamp.
+        - Transactional ledger verification: equity updated ONLY after successful ledger commit.
         """
         net_cashflow = Decimal("0.0")
         for s in settlements:
             if s.symbol not in self.open_positions:
+                continue
+
+            pos = self.open_positions[s.symbol]
+
+            # Historical exposure guard: position must have existed strictly before settlement timestamp
+            if pos.entry_ts >= s.settlement_ts:
+                logger.warning(
+                    f"Rejecting funding for {s.symbol}: position opened at {pos.entry_ts} "
+                    f"is not prior to settlement timestamp {s.settlement_ts}"
+                )
                 continue
 
             exec_id = f"EXEC_FUNDING_{s.symbol}_{s.settlement_ts}"
@@ -723,23 +796,27 @@ class AlphaPairsEngineRepaired:
                 logger.warning(f"Duplicate funding settlement {exec_id} rejected by idempotency guard.")
                 continue
 
-            pos = self.open_positions[s.symbol]
             notional = pos.qty * s.mark_price
 
             # Bybit convention: Cashflow = -1 * direction * notional * rate
             cashflow = -Decimal(str(pos.direction)) * notional * s.rate
-            net_cashflow += cashflow
-            self.realized_equity += cashflow
+            prospective_equity = self.realized_equity + cashflow
 
-            self.ledger.record_funding(
+            ok, ev = self.ledger.record_funding(
                 exec_id=exec_id,
                 symbol=s.symbol,
                 cashflow_amount=cashflow,
-                equity_after=self.realized_equity,
+                equity_after=prospective_equity,
                 rate=s.rate,
                 notional=notional,
                 settlement_ts=s.settlement_ts,
             )
+            if not ok or ev is None:
+                logger.error(f"Ledger failed to record funding for {s.symbol} ({exec_id}). Zero balance mutation.")
+                continue
+
+            self.realized_equity = ev.balance_after
+            net_cashflow += cashflow
             self.funding_events.append(s)
 
         return net_cashflow
@@ -812,19 +889,11 @@ class AlphaPairsEngineRepaired:
                     tp_gross = tp_qty * (curr_p - pos.entry_price) * Decimal(str(direction))
                     tp_exit_fee = tp_qty * curr_p * self.fee_maker
                     tp_entry_fee = pos.entry_fee * PARTIAL_TP_RATIO
-
-                    # Update remaining position
-                    pos.entry_fee -= tp_entry_fee
-                    pos.qty -= tp_qty
-                    pos.tp_taken = True
-                    pos.stop_price = pos.entry_price + (Decimal(str(direction)) * atr * Decimal("0.1"))
-
-                    # Cash accounting & Ledger journaling
-                    self.realized_equity += (tp_gross - tp_exit_fee)
                     slice_net = tp_gross - tp_entry_fee - tp_exit_fee
+                    prospective_equity = self.realized_equity + (tp_gross - tp_exit_fee)
 
                     exec_id = f"EXEC_PARTIAL_TP_{s}_{bar_ts}"
-                    self.ledger.record_slice(
+                    ok, ev = self.ledger.record_slice(
                         exec_id=exec_id,
                         symbol=s,
                         trade_id=f"TRADE_{s}_{pos.entry_ts}",
@@ -832,29 +901,36 @@ class AlphaPairsEngineRepaired:
                         gross_pnl=tp_gross,
                         entry_fee_allocated=tp_entry_fee,
                         exit_fee_paid=tp_exit_fee,
-                        equity_after=self.realized_equity,
+                        equity_after=prospective_equity,
                         timestamp=bar_ts,
                     )
-
-                    self.closed_trades.append(
-                        ClosedPairTrade(
-                            symbol=s,
-                            direction=direction,
-                            entry_price=pos.entry_price,
-                            exit_price=curr_p,
-                            qty=tp_qty,
-                            gross_pnl=tp_gross,
-                            entry_fee_allocated=tp_entry_fee,
-                            exit_fee_paid=tp_exit_fee,
-                            net_pnl=slice_net,
-                            reason="PARTIAL_TP_4R",
-                            entry_bar=pos.entry_bar,
-                            exit_bar=self.bar_counter,
-                            entry_ts=pos.entry_ts,
-                            exit_ts=bar_ts,
+                    if not ok or ev is None:
+                        logger.error(f"Ledger rejected partial TP slice for {s} ({exec_id}). Slice aborted.")
+                    else:
+                        self.realized_equity = ev.balance_after
+                        pos.entry_fee -= tp_entry_fee
+                        pos.qty -= tp_qty
+                        pos.tp_taken = True
+                        pos.stop_price = pos.entry_price + (Decimal(str(direction)) * atr * Decimal("0.1"))
+                        self.closed_trades.append(
+                            ClosedPairTrade(
+                                symbol=s,
+                                direction=direction,
+                                entry_price=pos.entry_price,
+                                exit_price=curr_p,
+                                qty=tp_qty,
+                                gross_pnl=tp_gross,
+                                entry_fee_allocated=tp_entry_fee,
+                                exit_fee_paid=tp_exit_fee,
+                                net_pnl=slice_net,
+                                reason="PARTIAL_TP_4R",
+                                entry_bar=pos.entry_bar,
+                                exit_bar=self.bar_counter,
+                                entry_ts=pos.entry_ts,
+                                exit_ts=bar_ts,
+                            )
                         )
-                    )
-                    logger.info(f"Partial TP 50% on {s} (+{slice_net:.2f} USD Net)")
+                        logger.info(f"Partial TP 50% on {s} (+{slice_net:.2f} USD Net)")
 
             # Stop Loss Evaluation with realistic gap execution
             is_stopped = False
@@ -874,10 +950,10 @@ class AlphaPairsEngineRepaired:
                 gross_pnl = pos.qty * (exit_p - pos.entry_price) * Decimal(str(direction))
                 exit_fee = pos.qty * exit_p * self.fee_taker
                 net_pnl = gross_pnl - pos.entry_fee - exit_fee
+                prospective_equity = self.realized_equity + (gross_pnl - exit_fee)
 
-                self.realized_equity += (gross_pnl - exit_fee)
                 exec_id = f"EXEC_STOP_LOSS_{s}_{bar_ts}"
-                self.ledger.record_full_close(
+                ok, ev = self.ledger.record_full_close(
                     exec_id=exec_id,
                     symbol=s,
                     trade_id=f"TRADE_{s}_{pos.entry_ts}",
@@ -885,30 +961,33 @@ class AlphaPairsEngineRepaired:
                     gross_pnl=gross_pnl,
                     entry_fee_allocated=pos.entry_fee,
                     exit_fee_paid=exit_fee,
-                    equity_after=self.realized_equity,
+                    equity_after=prospective_equity,
                     reason="STOP_LOSS",
                     timestamp=bar_ts,
                 )
-
-                self.closed_trades.append(
-                    ClosedPairTrade(
-                        symbol=s,
-                        direction=direction,
-                        entry_price=pos.entry_price,
-                        exit_price=exit_p,
-                        qty=pos.qty,
-                        gross_pnl=gross_pnl,
-                        entry_fee_allocated=pos.entry_fee,
-                        exit_fee_paid=exit_fee,
-                        net_pnl=net_pnl,
-                        reason="STOP_LOSS",
-                        entry_bar=pos.entry_bar,
-                        exit_bar=self.bar_counter,
-                        entry_ts=pos.entry_ts,
-                        exit_ts=bar_ts,
+                if not ok or ev is None:
+                    logger.error(f"Ledger rejected stop loss close for {s} ({exec_id}). Position retained.")
+                else:
+                    self.realized_equity = ev.balance_after
+                    self.closed_trades.append(
+                        ClosedPairTrade(
+                            symbol=s,
+                            direction=direction,
+                            entry_price=pos.entry_price,
+                            exit_price=exit_p,
+                            qty=pos.qty,
+                            gross_pnl=gross_pnl,
+                            entry_fee_allocated=pos.entry_fee,
+                            exit_fee_paid=exit_fee,
+                            net_pnl=net_pnl,
+                            reason="STOP_LOSS",
+                            entry_bar=pos.entry_bar,
+                            exit_bar=self.bar_counter,
+                            entry_ts=pos.entry_ts,
+                            exit_ts=bar_ts,
+                        )
                     )
-                )
-                to_close.append(s)
+                    to_close.append(s)
 
         for s in to_close:
             del self.open_positions[s]
@@ -968,10 +1047,10 @@ class AlphaPairsEngineRepaired:
                     gross_pnl = pos.qty * (exit_p - pos.entry_price) * Decimal(str(pos.direction))
                     exit_fee = pos.qty * exit_p * self.fee_taker
                     net_pnl = gross_pnl - pos.entry_fee - exit_fee
+                    prospective_equity = self.realized_equity + (gross_pnl - exit_fee)
 
-                    self.realized_equity += (gross_pnl - exit_fee)
                     exec_id = f"EXEC_HYSTERESIS_{s}_{bar_ts}"
-                    self.ledger.record_full_close(
+                    ok, ev = self.ledger.record_full_close(
                         exec_id=exec_id,
                         symbol=s,
                         trade_id=f"TRADE_{s}_{pos.entry_ts}",
@@ -979,30 +1058,33 @@ class AlphaPairsEngineRepaired:
                         gross_pnl=gross_pnl,
                         entry_fee_allocated=pos.entry_fee,
                         exit_fee_paid=exit_fee,
-                        equity_after=self.realized_equity,
+                        equity_after=prospective_equity,
                         reason="HYSTERESIS_EXIT",
                         timestamp=bar_ts,
                     )
-
-                    self.closed_trades.append(
-                        ClosedPairTrade(
-                            symbol=s,
-                            direction=pos.direction,
-                            entry_price=pos.entry_price,
-                            exit_price=exit_p,
-                            qty=pos.qty,
-                            gross_pnl=gross_pnl,
-                            entry_fee_allocated=pos.entry_fee,
-                            exit_fee_paid=exit_fee,
-                            net_pnl=net_pnl,
-                            reason="HYSTERESIS_EXIT",
-                            entry_bar=pos.entry_bar,
-                            exit_bar=self.bar_counter,
-                            entry_ts=pos.entry_ts,
-                            exit_ts=bar_ts,
+                    if not ok or ev is None:
+                        logger.error(f"Ledger rejected hysteresis close for {s} ({exec_id}). Position retained.")
+                    else:
+                        self.realized_equity = ev.balance_after
+                        self.closed_trades.append(
+                            ClosedPairTrade(
+                                symbol=s,
+                                direction=pos.direction,
+                                entry_price=pos.entry_price,
+                                exit_price=exit_p,
+                                qty=pos.qty,
+                                gross_pnl=gross_pnl,
+                                entry_fee_allocated=pos.entry_fee,
+                                exit_fee_paid=exit_fee,
+                                net_pnl=net_pnl,
+                                reason="HYSTERESIS_EXIT",
+                                entry_bar=pos.entry_bar,
+                                exit_bar=self.bar_counter,
+                                entry_ts=pos.entry_ts,
+                                exit_ts=bar_ts,
+                            )
                         )
-                    )
-                    del self.open_positions[s]
+                        del self.open_positions[s]
 
             # -----------------------------------------------------------------
             # 3. New Entry Candidate Evaluation (BLOCKED WHEN HALTED OR LOCKOUT)
@@ -1033,17 +1115,73 @@ class AlphaPairsEngineRepaired:
                         if net_spread < MIN_PAIR_NET_ALPHA_SPREAD:
                             continue
 
+                        l_sym = l_item["symbol"]
+                        s_sym = s_item["symbol"]
+
+                        # Check mandatory orderbook quotes
+                        l_bid, l_ask = bids.get(l_sym), asks.get(l_sym)
+                        s_bid, s_ask = bids.get(s_sym), asks.get(s_sym)
+                        if l_bid is None or l_ask is None or s_bid is None or s_ask is None:
+                            logger.warning(f"Rejecting pair ({l_sym}, {s_sym}): missing live orderbook quotes.")
+                            continue
+
+                        # Pre-trade Leverage Guard (P1-7)
+                        l_atr = Decimal(str(metrics[l_sym]["atr24"]))
+                        s_atr = Decimal(str(metrics[s_sym]["atr24"]))
+                        l_stop_dist = STOP_LOSS_ATR_MULT * l_atr
+                        s_stop_dist = STOP_LOSS_ATR_MULT * s_atr
+                        risk_usd = current_eq * (BASE_RISK_PER_LEG_PCT / Decimal("100.0"))
+
+                        l_est_qty = min(risk_usd / l_stop_dist, (current_eq * MAX_LEVERAGE_PER_LEG) / l_ask)
+                        s_est_qty = min(risk_usd / s_stop_dist, (current_eq * MAX_LEVERAGE_PER_LEG) / s_bid)
+
+                        curr_notional = sum(p.qty * current_prices.get(sym, p.entry_price) for sym, p in self.open_positions.items())
+                        pair_notional = (l_est_qty * l_ask) + (s_est_qty * s_bid)
+                        prospective_leverage = (curr_notional + pair_notional) / current_eq
+                        if prospective_leverage > MAX_PORTFOLIO_LEVERAGE:
+                            logger.warning(
+                                f"Rejecting pair ({l_sym}, {s_sym}): prospective leverage {prospective_leverage:.2f}x > "
+                                f"{MAX_PORTFOLIO_LEVERAGE}x limit"
+                            )
+                            continue
+
+                        # Pre-trade Portfolio Beta Guard (P1-7)
+                        candidate_legs = [(l_sym, 1, l_est_qty), (s_sym, -1, s_est_qty)]
+                        beta_res = self.calculate_portfolio_beta(
+                            prices_series=prices_series,
+                            current_prices=current_prices,
+                            candidate_legs=candidate_legs,
+                        )
+                        if beta_res.status == BetaStatus.UNKNOWN or beta_res.status == BetaStatus.INSUFFICIENT_DATA:
+                            logger.warning(
+                                f"Rejecting pair ({l_sym}, {s_sym}): prospective portfolio beta is {beta_res.status} "
+                                f"({beta_res.reason}) - UNKNOWN beta cannot be assumed market-neutral"
+                            )
+                            continue
+                        if beta_res.beta is not None and abs(beta_res.beta) > MAX_PORTFOLIO_BETA:
+                            logger.warning(
+                                f"Rejecting pair ({l_sym}, {s_sym}): prospective portfolio beta {beta_res.beta} "
+                                f"exceeds limit {MAX_PORTFOLIO_BETA}"
+                            )
+                            continue
+
                         # Atomic matched pair entry
-                        l_ok = self._enter_leg(l_item["symbol"], 1, current_prices, metrics, current_eq, bar_ts)
-                        s_ok = self._enter_leg(s_item["symbol"], -1, current_prices, metrics, current_eq, bar_ts)
+                        l_ok = self._enter_leg(
+                            l_sym, 1, current_prices, metrics, current_eq, bar_ts,
+                            bid=l_bid, ask=l_ask, quote_ts=bar_ts, current_clock=bar_ts,
+                        )
+                        s_ok = self._enter_leg(
+                            s_sym, -1, current_prices, metrics, current_eq, bar_ts,
+                            bid=s_bid, ask=s_ask, quote_ts=bar_ts, current_clock=bar_ts,
+                        )
 
                         # If one leg fails, unwind the other to avoid unhedged directional exposure
                         if l_ok and not s_ok:
-                            logger.error(f"Broken pair leg: {l_item['symbol']} entered, but {s_item['symbol']} failed. Unwinding {l_item['symbol']}.")
-                            self._unwind_leg(l_item["symbol"], current_prices, bar_ts)
+                            logger.error(f"Broken pair leg: {l_sym} entered, but {s_sym} failed. Unwinding {l_sym}.")
+                            self._unwind_leg(l_sym, current_prices, bar_ts)
                         elif s_ok and not l_ok:
-                            logger.error(f"Broken pair leg: {s_item['symbol']} entered, but {l_item['symbol']} failed. Unwinding {s_item['symbol']}.")
-                            self._unwind_leg(s_item["symbol"], current_prices, bar_ts)
+                            logger.error(f"Broken pair leg: {s_sym} entered, but {l_sym} failed. Unwinding {s_sym}.")
+                            self._unwind_leg(s_sym, current_prices, bar_ts)
                         elif l_ok and s_ok:
                             active_longs += 1
                             active_shorts += 1
@@ -1052,14 +1190,28 @@ class AlphaPairsEngineRepaired:
                     for l_item in entry_long_candidates:
                         if active_longs >= active_shorts or active_longs >= ENTRY_TOP_K:
                             break
-                        if self._enter_leg(l_item["symbol"], 1, current_prices, metrics, current_eq, bar_ts):
+                        l_sym = l_item["symbol"]
+                        l_bid, l_ask = bids.get(l_sym), asks.get(l_sym)
+                        if l_bid is None or l_ask is None:
+                            continue
+                        if self._enter_leg(
+                            l_sym, 1, current_prices, metrics, current_eq, bar_ts,
+                            bid=l_bid, ask=l_ask, quote_ts=bar_ts, current_clock=bar_ts,
+                        ):
                             active_longs += 1
 
                 elif active_shorts < active_longs and entry_short_candidates:
                     for s_item in entry_short_candidates:
                         if active_shorts >= active_longs or active_shorts >= ENTRY_BOTTOM_K:
                             break
-                        if self._enter_leg(s_item["symbol"], -1, current_prices, metrics, current_eq, bar_ts):
+                        s_sym = s_item["symbol"]
+                        s_bid, s_ask = bids.get(s_sym), asks.get(s_sym)
+                        if s_bid is None or s_ask is None:
+                            continue
+                        if self._enter_leg(
+                            s_sym, -1, current_prices, metrics, current_eq, bar_ts,
+                            bid=s_bid, ask=s_ask, quote_ts=bar_ts, current_clock=bar_ts,
+                        ):
                             active_shorts += 1
             elif self.trading_halted:
                 logger.warning("[HALT ACTIVE] Trading halted due to max drawdown limit. No new entries allowed.")
@@ -1191,3 +1343,90 @@ class AlphaPairsEngineRepaired:
                     exit_ts=int(t_data["exit_ts"]),
                 )
             )
+
+    def reconcile_and_recover(self, snapshot: Dict[str, Any]) -> Tuple[str, List[str]]:
+        """
+        Cross-reconciles SQLite financial ledger with persistent snapshot state upon restart.
+        Verifies:
+        - Reconstructs authoritative equity from SQLite ledger.
+        - Compares snapshot realized equity vs reconstructed equity (penny-perfect tolerance).
+        - Verifies that every active open position in snapshot has a corresponding ENTRY_FEE event in SQLite.
+        - Verifies that any position with tp_taken=True has a corresponding PARTIAL_TP_SLICE event.
+        - Verifies that position attributes (qty, entry_price, stop_price) are strictly valid.
+        - Verifies that closed trades in snapshot have corresponding close events in SQLite.
+        If ANY discrepancy or missing event is detected:
+          Sets trading_halted = True and returns ("NO_NEW_TRADES", errors).
+        If 100% clean and consistent:
+          Sets realized_equity = reconstructed_equity and returns ("RECONCILED", []).
+        """
+        errors: List[str] = []
+
+        # 1. Authoritative SQLite Ledger Recovery
+        reconstructed_equity, event_count = self.ledger.restore_from_db(self.initial_capital)
+
+        # 2. Parse Snapshot State
+        try:
+            self.load_state(snapshot)
+        except Exception as e:
+            errors.append(f"Snapshot deserialization failed: {e}")
+            self.trading_halted = True
+            return "NO_NEW_TRADES", errors
+
+        # 3. Penny-perfect Equity Reconciliation
+        equity_diff = abs(self.realized_equity - reconstructed_equity)
+        if equity_diff > Decimal("0.0001"):
+            errors.append(
+                f"Equity mismatch: Snapshot=${self.realized_equity:.4f} vs "
+                f"SQLite Ledger=${reconstructed_equity:.4f} (diff=${equity_diff:.4f})"
+            )
+
+        # 4. Open Positions Integrity vs Ledger Events
+        for s, pos in list(self.open_positions.items()):
+            # Must have an entry event in SQLite
+            enter_events = [
+                e for e in self.ledger.events
+                if e.symbol == s and e.event_type == "ENTRY_FEE"
+            ]
+            if not enter_events:
+                errors.append(f"Open position {s} lacks corresponding ENTRY_FEE event in SQLite ledger journal!")
+
+            # If TP slice taken, must have a PARTIAL_TP_SLICE event
+            if pos.tp_taken:
+                tp_events = [
+                    e for e in self.ledger.events
+                    if e.symbol == s and e.event_type == "PARTIAL_TP_SLICE"
+                ]
+                if not tp_events:
+                    errors.append(f"Open position {s} has tp_taken=True but lacks PARTIAL_TP_SLICE event in SQLite!")
+
+            # Price & stop sanity
+            if pos.qty <= Decimal("0.0"):
+                errors.append(f"Open position {s} has non-positive quantity: {pos.qty}")
+            if pos.entry_price <= Decimal("0.0"):
+                errors.append(f"Open position {s} has non-positive entry_price: {pos.entry_price}")
+            if pos.stop_price <= Decimal("0.0"):
+                errors.append(f"Open position {s} has non-positive stop_price: {pos.stop_price}")
+
+        # 5. Closed Trades Integrity vs Ledger Events
+        for trade in self.closed_trades:
+            close_events = [
+                e for e in self.ledger.events
+                if e.symbol == trade.symbol and e.event_type in ("FULL_CLOSE", "EMERGENCY_UNWIND", "PARTIAL_TP_SLICE")
+            ]
+            if not close_events:
+                errors.append(f"Closed trade {trade.symbol} (exit_ts={trade.exit_ts}) lacks close event in SQLite!")
+
+        if errors:
+            self.trading_halted = True
+            logger.error(f"[RESTART AUDIT FAILED] {len(errors)} discrepancies found. Entering NO_NEW_TRADES.")
+            for err in errors:
+                logger.error(f"  * {err}")
+            return "NO_NEW_TRADES", errors
+
+        # Perfectly consistent
+        self.realized_equity = reconstructed_equity
+        logger.info(
+            f"[RESTART AUDIT PASSED] 100% reconciled across {event_count} ledger events and "
+            f"{len(self.open_positions)} active positions. Equity=${self.realized_equity:.4f}."
+        )
+        return "RECONCILED", []

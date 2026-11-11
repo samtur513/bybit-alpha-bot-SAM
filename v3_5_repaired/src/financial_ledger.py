@@ -42,6 +42,8 @@ class FinancialLedger:
         self.db_path = db_path
         self.events: List[LedgerEvent] = []
         self.seen_exec_ids: Set[str] = set()
+        self.fault_injection_pre_commit: bool = False
+        self.fault_injection_during_commit: bool = False
         if self.db_path:
             self._init_sqlite()
             self._load_existing_exec_ids()
@@ -107,37 +109,25 @@ class FinancialLedger:
         balance_after: Decimal,
         timestamp: Optional[int] = None,
         metadata: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[bool, LedgerEvent]:
+    ) -> Tuple[bool, Optional[LedgerEvent]]:
         """
-        Records an atomic financial transaction with idempotency protection.
-        Returns:
-            (is_new, event)
-            If exec_id was already processed, returns (False, existing_event) without modifying balance.
+        Records an atomic financial transaction with strict ACID idempotency.
+        
+        Guarantees:
+        - SQLite insert & commit happen BEFORE in-memory state is touched.
+        - If SQLite fails or rolls back, in-memory events and seen_exec_ids remain 100% untouched.
+        - If exec_id was already processed, returns (False, existing_event) with zero mutation.
         """
         if self.has_exec_id(exec_id):
-            logger.warning(f"Duplicate exec_id '{exec_id}' detected! Idempotently ignored.")
+            logger.warning(f"Duplicate exec_id '{exec_id}' detected! Idempotently rejected.")
             existing = next((e for e in self.events if e.exec_id == exec_id), None)
-            if existing:
-                return False, existing
-            return False, LedgerEvent(
-                event_id="DUPLICATE",
-                exec_id=exec_id,
-                timestamp=timestamp or int(time.time() * 1000),
-                event_type=event_type,
-                symbol=symbol,
-                trade_id=trade_id,
-                direction=direction,
-                gross_amount=Decimal(str(gross_amount)),
-                fee_amount=Decimal(str(fee_amount)),
-                net_cashflow=Decimal(str(net_cashflow)),
-                balance_after=Decimal(str(balance_after)),
-                metadata=metadata or {},
-            )
+            return False, existing
 
+        event_ts = timestamp or int(time.time() * 1000)
         ev = LedgerEvent(
             event_id=str(uuid.uuid4()),
             exec_id=exec_id,
-            timestamp=timestamp or int(time.time() * 1000),
+            timestamp=event_ts,
             event_type=event_type,
             symbol=symbol,
             trade_id=trade_id,
@@ -148,13 +138,17 @@ class FinancialLedger:
             balance_after=Decimal(str(balance_after)),
             metadata=metadata or {},
         )
-        self.events.append(ev)
-        self.seen_exec_ids.add(exec_id)
 
+        # 1. SQLite Transaction Execution FIRST
         if self.db_path:
-            with sqlite3.connect(self.db_path) as conn:
-                try:
-                    conn.execute(
+            if getattr(self, "fault_injection_pre_commit", False):
+                logger.error(f"Fault injection triggered: pre-commit failure on exec_id '{exec_id}'")
+                return False, None
+
+            try:
+                with sqlite3.connect(self.db_path, timeout=10.0) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
                         """
                         INSERT INTO financial_events (
                             event_id, exec_id, timestamp, event_type, symbol, trade_id, direction,
@@ -176,11 +170,20 @@ class FinancialLedger:
                             json.dumps(ev.metadata),
                         ),
                     )
+                    if getattr(self, "fault_injection_during_commit", False):
+                        logger.error(f"Fault injection triggered: failure during commit on exec_id '{exec_id}'")
+                        return False, None
                     conn.commit()
-                except sqlite3.IntegrityError:
-                    logger.warning(f"IntegrityError: Duplicate exec_id {exec_id} on SQLite insert.")
-                    return False, ev
+            except sqlite3.IntegrityError:
+                logger.warning(f"IntegrityError: Duplicate exec_id '{exec_id}' on SQLite insert. Rejected.")
+                return False, None
+            except Exception as e:
+                logger.error(f"SQLite transaction failed for exec_id '{exec_id}': {e}. Rollback clean.")
+                return False, None
 
+        # 2. In-Memory update ONLY on successful commit
+        self.events.append(ev)
+        self.seen_exec_ids.add(exec_id)
         return True, ev
 
     def record_entry_fee(
@@ -191,7 +194,7 @@ class FinancialLedger:
         fee_amount: Decimal,
         equity_after: Decimal,
         timestamp: Optional[int] = None,
-    ) -> Tuple[bool, LedgerEvent]:
+    ) -> Tuple[bool, Optional[LedgerEvent]]:
         """Deducts entry fee from realized cash."""
         return self.record_event(
             exec_id=exec_id,
@@ -217,7 +220,7 @@ class FinancialLedger:
         exit_fee_paid: Decimal,
         equity_after: Decimal,
         timestamp: Optional[int] = None,
-    ) -> Tuple[bool, LedgerEvent]:
+    ) -> Tuple[bool, Optional[LedgerEvent]]:
         """
         Records partial take profit slice.
         Cash change to equity is (gross_pnl - exit_fee_paid).
@@ -253,7 +256,7 @@ class FinancialLedger:
         equity_after: Decimal,
         reason: str = "STOP_LOSS",
         timestamp: Optional[int] = None,
-    ) -> Tuple[bool, LedgerEvent]:
+    ) -> Tuple[bool, Optional[LedgerEvent]]:
         """Records full closure of remaining position."""
         cash_delta = gross_pnl - exit_fee_paid
         net_analytical = gross_pnl - entry_fee_allocated - exit_fee_paid
@@ -286,7 +289,7 @@ class FinancialLedger:
         exit_fee_paid: Decimal,
         equity_after: Decimal,
         timestamp: Optional[int] = None,
-    ) -> Tuple[bool, LedgerEvent]:
+    ) -> Tuple[bool, Optional[LedgerEvent]]:
         """Records emergency leg unwind when counterpart leg fails."""
         cash_delta = gross_pnl - exit_fee_paid
         net_analytical = gross_pnl - entry_fee_allocated - exit_fee_paid
@@ -317,7 +320,7 @@ class FinancialLedger:
         rate: Decimal,
         notional: Decimal,
         settlement_ts: int,
-    ) -> Tuple[bool, LedgerEvent]:
+    ) -> Tuple[bool, Optional[LedgerEvent]]:
         """Records settlement funding cashflow with settlement idempotency."""
         return self.record_event(
             exec_id=exec_id,

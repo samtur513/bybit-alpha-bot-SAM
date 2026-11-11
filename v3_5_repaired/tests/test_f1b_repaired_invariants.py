@@ -53,7 +53,10 @@ class TestF1BRepairedInvariants:
         bar_ts = int(time.time() * 1000)
 
         # Enter Long leg (Notional = $30.00 >= $5.00 minNotional)
-        entered = engine._enter_leg("BTCUSDT", 1, current_prices, metrics, start_equity, bar_ts)
+        entered = engine._enter_leg(
+            "BTCUSDT", 1, current_prices, metrics, start_equity, bar_ts,
+            bid=Decimal("99.98"), ask=Decimal("100.00"), quote_ts=bar_ts, current_clock=bar_ts,
+        )
         assert entered is True
         pos = engine.open_positions["BTCUSDT"]
 
@@ -95,7 +98,10 @@ class TestF1BRepairedInvariants:
         metrics = {"BTCUSDT": {"atr24": 2.0}}
         bar_ts = int(time.time() * 1000)
 
-        engine._enter_leg("BTCUSDT", 1, current_prices, metrics, engine.realized_equity, bar_ts)
+        engine._enter_leg(
+            "BTCUSDT", 1, current_prices, metrics, engine.realized_equity, bar_ts,
+            bid=Decimal("99.98"), ask=Decimal("100.00"), quote_ts=bar_ts, current_clock=bar_ts,
+        )
         pos = engine.open_positions["BTCUSDT"]
         initial_qty = pos.qty
         initial_entry_fee = pos.entry_fee
@@ -136,7 +142,10 @@ class TestF1BRepairedInvariants:
         metrics = {"BTCUSDT": {"atr24": 2.0}}
         bar_ts = int(time.time() * 1000)
 
-        engine_long._enter_leg("BTCUSDT", 1, current_prices, metrics, engine_long.realized_equity, bar_ts)
+        engine_long._enter_leg(
+            "BTCUSDT", 1, current_prices, metrics, engine_long.realized_equity, bar_ts,
+            bid=Decimal("99.98"), ask=Decimal("100.00"), quote_ts=bar_ts, current_clock=bar_ts,
+        )
         pos_l = engine_long.open_positions["BTCUSDT"]
         assert pos_l.stop_price == Decimal("95.0")
 
@@ -158,7 +167,10 @@ class TestF1BRepairedInvariants:
         current_prices_s = {"ETHUSDT": Decimal("100.0")}
         metrics_s = {"ETHUSDT": {"atr24": 2.0}}
 
-        engine_short._enter_leg("ETHUSDT", -1, current_prices_s, metrics_s, engine_short.realized_equity, bar_ts)
+        engine_short._enter_leg(
+            "ETHUSDT", -1, current_prices_s, metrics_s, engine_short.realized_equity, bar_ts,
+            bid=Decimal("100.00"), ask=Decimal("100.02"), quote_ts=bar_ts, current_clock=bar_ts,
+        )
         pos_s = engine_short.open_positions["ETHUSDT"]
         assert pos_s.stop_price == Decimal("105.0")
 
@@ -190,7 +202,10 @@ class TestF1BRepairedInvariants:
         # First, enter an initial position
         current_prices = {"BTCUSDT": Decimal("100.0"), "ETHUSDT": Decimal("100.0"), "SOLUSDT": Decimal("100.0")}
         metrics = {"BTCUSDT": {"atr24": 2.0}, "ETHUSDT": {"atr24": 2.0}, "SOLUSDT": {"atr24": 2.0}}
-        engine._enter_leg("BTCUSDT", 1, current_prices, metrics, engine.realized_equity, bar_ts)
+        engine._enter_leg(
+            "BTCUSDT", 1, current_prices, metrics, engine.realized_equity, bar_ts,
+            bid=Decimal("99.98"), ask=Decimal("100.00"), quote_ts=bar_ts, current_clock=bar_ts,
+        )
         assert len(engine.open_positions) == 1
 
         # Activate Kill Switch (halt trading)
@@ -230,6 +245,7 @@ class TestF1BRepairedInvariants:
         trader.latest_prices = {}
         trader.processed_kline_keys = set()
         trader.pending_bars_by_ts = {}
+        trader.pending_bars_first_seen = {}
         trader.last_processed_bar_ts = 0
 
         unconfirmed_msg = {
@@ -371,7 +387,10 @@ class TestF1BRepairedInvariants:
         current_prices = {"BTCUSDT": Decimal("100.0"), "ETHUSDT": Decimal("100.0"), "SOLUSDT": Decimal("100.0")}
         metrics = {"BTCUSDT": {"atr24": 2.0}, "ETHUSDT": {"atr24": 2.0}, "SOLUSDT": {"atr24": 2.0}}
         bar_ts = int(time.time() * 1000)
-        engine._enter_leg("BTCUSDT", 1, current_prices, metrics, engine.realized_equity, bar_ts)
+        engine._enter_leg(
+            "BTCUSDT", 1, current_prices, metrics, engine.realized_equity, bar_ts,
+            bid=Decimal("99.98"), ask=Decimal("100.00"), quote_ts=bar_ts, current_clock=bar_ts,
+        )
 
         # On next bar, equity drops: BTC drops to 50.0 (catastrophic drop)
         # Total equity drops from 300 to ~250. Peak=400. Drawdown = (400 - 250)/400 = 37.5% > 30% limit!
@@ -478,7 +497,10 @@ class TestF1BRepairedInvariants:
         bar_ts = int(time.time() * 1000)
 
         # Simulate Long entered, but Short rejected due to exchange constraints
-        engine._enter_leg("BTCUSDT", 1, current_prices, metrics, engine.realized_equity, bar_ts)
+        engine._enter_leg(
+            "BTCUSDT", 1, current_prices, metrics, engine.realized_equity, bar_ts,
+            bid=Decimal("99.98"), ask=Decimal("100.00"), quote_ts=bar_ts, current_clock=bar_ts,
+        )
         assert len(engine.open_positions) == 1
 
         # Unwind Long leg

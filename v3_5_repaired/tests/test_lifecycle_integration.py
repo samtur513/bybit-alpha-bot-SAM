@@ -56,9 +56,15 @@ def test_pure_production_lifecycle_integration_with_crash_recovery():
     current_prices = {"BTCUSDT": Decimal("100.00"), "ETHUSDT": Decimal("50.00")}
     metrics = {"BTCUSDT": {"atr24": 2.0}, "ETHUSDT": {"atr24": 1.0}}
 
-    l_ok = engine._enter_leg("BTCUSDT", 1, current_prices, metrics, engine.realized_equity, start_ts)
+    l_ok = engine._enter_leg(
+        "BTCUSDT", 1, current_prices, metrics, engine.realized_equity, start_ts,
+        bid=Decimal("99.98"), ask=Decimal("100.00"), quote_ts=start_ts, current_clock=start_ts,
+    )
     assert l_ok is True
-    s_ok = engine._enter_leg("ETHUSDT", -1, current_prices, metrics, engine.realized_equity, start_ts)
+    s_ok = engine._enter_leg(
+        "ETHUSDT", -1, current_prices, metrics, engine.realized_equity, start_ts,
+        bid=Decimal("50.00"), ask=Decimal("50.02"), quote_ts=start_ts, current_clock=start_ts,
+    )
     assert s_ok is True
 
     # Assert 2 positions opened

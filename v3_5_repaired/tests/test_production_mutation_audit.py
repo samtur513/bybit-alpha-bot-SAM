@@ -51,7 +51,10 @@ class TestProductionMutationAudit:
         current_prices = {"BTCUSDT": Decimal("100.0")}
         metrics = {"BTCUSDT": {"atr24": 2.0}}
         bar_ts = int(time.time() * 1000)
-        engine._enter_leg("BTCUSDT", 1, current_prices, metrics, engine.realized_equity, bar_ts)
+        engine._enter_leg(
+            "BTCUSDT", 1, current_prices, metrics, engine.realized_equity, bar_ts,
+            bid=Decimal("99.98"), ask=Decimal("100.00"), quote_ts=bar_ts, current_clock=bar_ts,
+        )
 
         # Close position
         pos = engine.open_positions["BTCUSDT"]
@@ -75,7 +78,10 @@ class TestProductionMutationAudit:
         current_prices = {"BTCUSDT": Decimal("100.0")}
         metrics = {"BTCUSDT": {"atr24": 2.0}}
         bar_ts = int(time.time() * 1000)
-        engine._enter_leg("BTCUSDT", 1, current_prices, metrics, engine.realized_equity, bar_ts)
+        engine._enter_leg(
+            "BTCUSDT", 1, current_prices, metrics, engine.realized_equity, bar_ts,
+            bid=Decimal("99.98"), ask=Decimal("100.00"), quote_ts=bar_ts, current_clock=bar_ts,
+        )
 
         # Mutate realized_equity when close happens
         orig_process = engine.process_bar
@@ -160,7 +166,10 @@ class TestProductionMutationAudit:
         current_prices = {"BTCUSDT": Decimal("100.0")}
         metrics = {"BTCUSDT": {"atr24": 2.0}}
         bar_ts = int(time.time() * 1000)
-        engine._enter_leg("BTCUSDT", 1, current_prices, metrics, engine.realized_equity, bar_ts)
+        engine._enter_leg(
+            "BTCUSDT", 1, current_prices, metrics, engine.realized_equity, bar_ts,
+            bid=Decimal("99.98"), ask=Decimal("100.00"), quote_ts=bar_ts, current_clock=bar_ts,
+        )
 
         # Mutate apply_funding_settlements to omit idempotency check
         orig_funding = engine.apply_funding_settlements
@@ -200,13 +209,18 @@ class TestProductionMutationAudit:
 
         monkeypatch.setattr(engine, "process_bar", buggy_process_bar)
 
-        btc_bars = [{'start': i*3600000, 'open': 100.0, 'high': 100.5, 'low': 99.5, 'close': 100.0, 'volume': 1000.0} for i in range(75)]
-        eth_bars = [{'start': i*3600000, 'open': 100.0 + i*0.4, 'high': 100.0 + i*0.4 + 0.5, 'low': 100.0 + i*0.4 - 0.5, 'close': 100.0 + i*0.4, 'volume': 1000.0} for i in range(75)]
-        sol_bars = [{'start': i*3600000, 'open': 100.0 - i*0.4, 'high': 100.0 - i*0.4 + 0.5, 'low': 100.0 - i*0.4 - 0.5, 'close': 100.0 - i*0.4, 'volume': 1000.0} for i in range(75)]
+        btc_bars = [{'start': i*3600000, 'open': 100.0 + (i%5)*0.2, 'high': 102.0, 'low': 98.0, 'close': 100.0 + (i%5)*0.2, 'volume': 1000.0} for i in range(75)]
+        eth_bars = [{'start': i*3600000, 'open': 100.0 + i*0.4, 'high': 100.0 + i*0.4 + 1.0, 'low': 100.0 + i*0.4 - 1.0, 'close': 100.0 + i*0.4, 'volume': 1000.0} for i in range(75)]
+        sol_bars = [{'start': i*3600000, 'open': 100.0 - i*0.4, 'high': 100.0 - i*0.4 + 1.0, 'low': 100.0 - i*0.4 - 1.0, 'close': 100.0 - i*0.4, 'volume': 1000.0} for i in range(75)]
         prices_series = {"BTCUSDT": btc_bars, "ETHUSDT": eth_bars, "SOLUSDT": sol_bars}
         current_prices = {"BTCUSDT": Decimal("100.0"), "ETHUSDT": Decimal(str(eth_bars[-1]["close"])), "SOLUSDT": Decimal(str(sol_bars[-1]["close"]))}
+        orderbook_bids = {s: p * Decimal("0.9998") for s, p in current_prices.items()}
+        orderbook_asks = {s: p * Decimal("1.0002") for s, p in current_prices.items()}
 
-        engine.process_bar(prices_series, current_prices, int(time.time() * 1000))
+        engine.process_bar(
+            prices_series, current_prices, int(time.time() * 1000),
+            orderbook_bids=orderbook_bids, orderbook_asks=orderbook_asks,
+        )
 
         # Invariant: open positions MUST be 0 when halted!
         with pytest.raises(AssertionError):

@@ -18,7 +18,16 @@ Features:
 """
 
 from decimal import Decimal
+from enum import Enum
 from pathlib import Path
+
+class RuleSource(str, Enum):
+    STATIC_CONFIG = "STATIC_CONFIG"
+    EXCHANGE_REST = "EXCHANGE_REST"
+    MOCK = "MOCK"
+
+RULE_SPEC_VERSION = "bybit_v5_spec_2026_03"
+RULE_STATIC_TIMESTAMP = 1709251200000  # Explicit static release timestamp (2026-03-01 UTC)
 
 # Paths
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -71,8 +80,11 @@ PROTECT_PROFITABLE_RUNNERS = True
 INITIAL_CAPITAL = Decimal("300.0")
 BASE_RISK_PER_LEG_PCT = Decimal("1.0") # 1.0% capital risk per individual leg
 MAX_LEVERAGE_PER_LEG = Decimal("1.5")  # Max 1.5x leverage per leg
-MAX_PORTFOLIO_LEVERAGE = Decimal("4.0")
-DRAWDOWN_LIMIT_PCT = Decimal("30.0")   # Trading halt threshold
+MAX_PORTFOLIO_LEVERAGE = Decimal("2.0")  # Max 2.0x aggregate leverage across all open positions
+MAX_PORTFOLIO_BETA = Decimal("0.35")     # Max allowable net portfolio beta vs BTC
+DRAWDOWN_LIMIT_PCT = Decimal("15.0")    # Trading halt threshold (Aligned to 15.0% as per audit spec)
+BAR_SYNC_TIMEOUT_SECONDS = 30.0         # Max seconds to wait for 18-symbol kline synchronization
+MAX_QUOTE_AGE_MS = 5000                 # Max 5.0 seconds orderbook quote staleness
 
 # Stop Loss & Take Profit Parameters (100% UNCHANGED)
 ATR_PERIOD = 24

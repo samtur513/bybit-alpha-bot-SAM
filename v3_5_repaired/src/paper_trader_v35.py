@@ -40,6 +40,7 @@ from v3_5_repaired.src.config import (
     FEE_TAKER,
     FEE_MAKER,
     BASE_SLIPPAGE,
+    BAR_SYNC_TIMEOUT_SECONDS,
 )
 from v3_5_repaired.src.alpha_pairs_engine import (
     AlphaPairsEngineRepaired,
@@ -107,6 +108,7 @@ class PaperTraderV35Repaired:
         # Kline deduplication and synchronization barrier (Task 3)
         self.processed_kline_keys: Set[str] = set()
         self.pending_bars_by_ts: Dict[int, Dict[str, Dict[str, float]]] = {}
+        self.pending_bars_first_seen: Dict[int, float] = {}
         self.last_processed_bar_ts: int = 0
 
         self.stream: Optional[MarketStream] = None
@@ -172,6 +174,17 @@ class PaperTraderV35Repaired:
         if start_ts <= 0:
             return False
 
+        now_ms = int(time.time() * 1000)
+        # Anti-lookahead: candle cannot start in the future
+        if start_ts > now_ms:
+            logger.warning(f"Lookahead violation: kline start_ts {start_ts} is in the future (> {now_ms}). Discarded.")
+            return False
+
+        # Monotonicity: candle cannot be older than already processed bar
+        if self.last_processed_bar_ts > 0 and start_ts < self.last_processed_bar_ts:
+            logger.debug(f"Discarding obsolete kline {start_ts} < last_processed {self.last_processed_bar_ts}")
+            return False
+
         # 4. Deduplication
         bar_key = f"{symbol}_{CANDLE_INTERVAL}_{start_ts}"
         with self.lock:
@@ -193,21 +206,39 @@ class PaperTraderV35Repaired:
             # 5. 18-Instrument Synchronization Barrier
             if start_ts not in self.pending_bars_by_ts:
                 self.pending_bars_by_ts[start_ts] = {}
+                self.pending_bars_first_seen[start_ts] = time.time()
             self.pending_bars_by_ts[start_ts][symbol] = bar
 
             arrived_symbols = set(self.pending_bars_by_ts[start_ts].keys())
             missing_symbols = set(self.symbols) - arrived_symbols
 
-            # Check if all arrived or quorum reached
+            # Check if all 18 symbols arrived
             if len(missing_symbols) == 0:
+                self.pending_bars_first_seen.pop(start_ts, None)
                 self._commit_synchronized_bar(start_ts)
                 return True
-            elif len(arrived_symbols) >= (len(self.symbols) - 2):
-                # Attempt REST backfill for the remaining 1-2 symbols
+
+            first_seen = self.pending_bars_first_seen.get(start_ts, time.time())
+            elapsed = time.time() - first_seen
+
+            # Attempt REST backfill if quorum reached (>= 16 symbols) or if timeout is approaching
+            if len(arrived_symbols) >= (len(self.symbols) - 2) or elapsed >= BAR_SYNC_TIMEOUT_SECONDS:
                 self._attempt_rest_backfill(start_ts, list(missing_symbols))
                 if set(self.pending_bars_by_ts[start_ts].keys()) == set(self.symbols):
+                    self.pending_bars_first_seen.pop(start_ts, None)
                     self._commit_synchronized_bar(start_ts)
                     return True
+
+            # If timeout expired and still missing symbols, fail safe: drop bar, do not trade on partial universe
+            if elapsed >= BAR_SYNC_TIMEOUT_SECONDS:
+                logger.warning(
+                    f"Kline sync timed out ({elapsed:.1f}s) for bar {start_ts}: only {len(arrived_symbols)}/18 arrived. "
+                    f"Dropping pending bar buffer to prevent lookahead or biased partial ranking."
+                )
+                self.pending_bars_by_ts.pop(start_ts, None)
+                self.pending_bars_first_seen.pop(start_ts, None)
+                self.last_processed_bar_ts = start_ts
+                return False
 
             return True
 
@@ -216,7 +247,14 @@ class PaperTraderV35Repaired:
         for sym in missing_symbols:
             try:
                 res = self.client.get_kline(symbol=sym, interval=CANDLE_INTERVAL, limit=5, category="linear")
-                rows = res.get("result", {}).get("list", [])
+                # Handle both BybitClient return type (List[List[str]]) and raw HTTP dict response
+                if isinstance(res, list):
+                    rows = res
+                elif isinstance(res, dict):
+                    rows = res.get("result", {}).get("list", [])
+                else:
+                    rows = []
+
                 for r in rows:
                     r_start = int(r[0])
                     if r_start == target_ts:
@@ -251,11 +289,15 @@ class PaperTraderV35Repaired:
         logger.info(f"Synchronized 18-symbol bar committed at {bar_ts}. Running process_bar...")
 
         is_blackout = self.is_macro_blackout()
+        orderbook_bids = {s: p * (Decimal("1.0") - Decimal("0.0002")) for s, p in self.latest_prices.items()}
+        orderbook_asks = {s: p * (Decimal("1.0") + Decimal("0.0002")) for s, p in self.latest_prices.items()}
         self.engine.process_bar(
             prices_series=self.kline_history,
             current_prices=self.latest_prices,
             bar_ts=bar_ts,
             macro_lockout=is_blackout,
+            orderbook_bids=orderbook_bids,
+            orderbook_asks=orderbook_asks,
         )
         self.save_persistent_state()
         self._export_status()
@@ -271,10 +313,11 @@ class PaperTraderV35Repaired:
             try:
                 with open(self.state_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                self.engine.load_state(data)
-                # Recover equity from ledger to verify conservation
-                self.engine.recover_from_ledger()
-                logger.info(f"Restored state: Equity=${self.engine.realized_equity:.2f}, Positions={len(self.engine.open_positions)}")
+                status, errors = self.engine.reconcile_and_recover(data)
+                if status == "NO_NEW_TRADES":
+                    logger.critical(f"Reconciliation error on restart: {errors}. Trading halted in NO_NEW_TRADES mode.")
+                else:
+                    logger.info(f"Restored and reconciled state: Equity=${self.engine.realized_equity:.2f}, Positions={len(self.engine.open_positions)}")
             except Exception as e:
                 logger.error(f"Failed to load persistent state from {self.state_file}: {e}")
 
