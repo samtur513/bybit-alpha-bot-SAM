@@ -1,7 +1,8 @@
 """
 Phase F1B Verification Suite: Tests on v3_5_repaired.
-Verifies that all 6 authorized defect fixes (T1, T2, T3, T8, T10, T12)
-pass 100% GREEN on AlphaPairsEngineRepaired, while preserving all original signals.
+Verifies that all institutional defect fixes and quantitative invariants
+pass 100% GREEN on AlphaPairsEngineRepaired, PaperTraderV35Repaired, and FinancialLedger,
+while strictly preserving all original 72h momentum and pair-trading rules.
 """
 
 from decimal import Decimal
@@ -18,15 +19,27 @@ from v3_5_repaired.src.alpha_pairs_engine import (
     AlphaPairsEngineRepaired,
     ActivePairPosition,
     ClosedPairTrade,
+    BybitInstrumentRule,
 )
-from v3_5_repaired.src.config import INITIAL_CAPITAL, FEE_TAKER, FEE_MAKER, BASE_SLIPPAGE
+from v3_5_repaired.src.paper_trader_v35 import PaperTraderV35Repaired
+from v3_5_repaired.src.financial_ledger import FinancialLedger
+from v3_5_repaired.src.config import (
+    INITIAL_CAPITAL,
+    FEE_TAKER,
+    FEE_MAKER,
+    BASE_SLIPPAGE,
+    MIN_NOTIONAL_USDT,
+)
 
 
 class TestF1BRepairedInvariants:
     """
-    Verification tests for v3_5_repaired.
+    Complete Verification Test Suite for Phase F1B.
     """
 
+    # -------------------------------------------------------------------------
+    # T1: Financial Ledger: Complete Entry + Exit Fee Accounting
+    # -------------------------------------------------------------------------
     def test_t01_repaired_complete_accounting_invariant(self):
         """
         T1 Repaired: Conservation of Realized Equity upon full closure:
@@ -64,7 +77,12 @@ class TestF1BRepairedInvariants:
         assert delta_equity == sum_trade_pnl, (
             f"F1B Invariant Failed: Delta Equity={delta_equity} != Sum(Trade Net PnL)={sum_trade_pnl}"
         )
+        is_balanced, _, _ = engine.verify_ledger_conservation()
+        assert is_balanced is True
 
+    # -------------------------------------------------------------------------
+    # T2: Partial Take Profit Slicing with Proportional Fee Allocation
+    # -------------------------------------------------------------------------
     def test_t02_repaired_partial_tp_slicing_proportional_fee(self):
         """
         T2 Repaired: When Partial TP (+4.0R) triggers, a closed trade slice is
@@ -103,6 +121,9 @@ class TestF1BRepairedInvariants:
         assert pos.qty == initial_qty * Decimal("0.50")
         assert pos.entry_fee == initial_entry_fee * Decimal("0.50")
 
+    # -------------------------------------------------------------------------
+    # T3: Stop Gap Slippage Realism with Long/Short Symmetry
+    # -------------------------------------------------------------------------
     def test_t03_repaired_stop_gap_slippage_symmetry(self):
         """
         T3 Repaired: Tests Stop-Gap slippage realism for BOTH Long and Short.
@@ -154,52 +175,298 @@ class TestF1BRepairedInvariants:
         # Must exit at >= 120 * (1 + slippage) = 120.06
         assert trade_s.exit_price >= gap_up_p * (Decimal("1.0") + engine_short.slippage)
 
-    def test_t08_repaired_min_notional_rejection(self):
+    # -------------------------------------------------------------------------
+    # T4: Kill Switch: Blocks Entries while Protecting Open Positions
+    # -------------------------------------------------------------------------
+    def test_t04_repaired_kill_switch_blocks_entries_protects_positions(self):
         """
-        T8 Repaired: An order with notional < min_notional ($5.0) is rejected.
+        T4 Repaired: When trading_halted = True:
+        1. New entries are strictly prohibited even with valid candidates.
+        2. Existing open positions continue to be monitored and stopped out.
         """
-        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("50.0"))
-        current_prices = {"BTCUSDT": Decimal("100.0")}
-        # Wide ATR -> tiny qty -> notional $0.40 < $5.00
-        metrics = {"BTCUSDT": {"atr24": 50.0}}
+        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"))
         bar_ts = int(time.time() * 1000)
 
-        entered = engine._enter_leg("BTCUSDT", 1, current_prices, metrics, engine.realized_equity, bar_ts)
-        # Must be rejected!
-        assert entered is False
-        assert "BTCUSDT" not in engine.open_positions
+        # First, enter an initial position
+        current_prices = {"BTCUSDT": Decimal("100.0"), "ETHUSDT": Decimal("100.0"), "SOLUSDT": Decimal("100.0")}
+        metrics = {"BTCUSDT": {"atr24": 2.0}, "ETHUSDT": {"atr24": 2.0}, "SOLUSDT": {"atr24": 2.0}}
+        engine._enter_leg("BTCUSDT", 1, current_prices, metrics, engine.realized_equity, bar_ts)
+        assert len(engine.open_positions) == 1
 
+        # Activate Kill Switch (halt trading)
+        engine.trading_halted = True
+
+        # Candidate series where ETH/SOL would normally trigger new entry
+        btc_bars = [{"open": 100.0, "high": 100.0, "low": 100.0, "close": 100.0, "volume": 1000.0}] * 75
+        eth_bars = [{"open": 100.0, "high": 105.0, "low": 99.0, "close": 100.0 + i * 0.4, "volume": 1000.0} for i in range(75)]
+        sol_bars = [{"open": 100.0, "high": 101.0, "low": 69.0, "close": 100.0 - i * 0.4, "volume": 1000.0} for i in range(75)]
+
+        prices_series = {"BTCUSDT": btc_bars, "ETHUSDT": eth_bars, "SOLUSDT": sol_bars}
+        # BTC price drops to 90 (breaches stop of 95)
+        current_prices["BTCUSDT"] = Decimal("90.0")
+
+        engine.process_bar(prices_series, current_prices, bar_ts + 3600000)
+
+        # Verification 1: Existing position WAS safely stopped out!
+        assert len(engine.closed_trades) == 1
+        assert engine.closed_trades[0].reason == "STOP_LOSS"
+
+        # Verification 2: NO new positions were entered!
+        assert len(engine.open_positions) == 0
+
+    # -------------------------------------------------------------------------
+    # T5: Event-Driven Kline Pipeline: confirm=True Enforcement
+    # -------------------------------------------------------------------------
+    def test_t05_repaired_event_driven_kline_confirm_true(self):
+        """
+        T5 Repaired: PaperTraderV35Repaired.on_kline_event rejects unconfirmed bars
+        and accepts confirmed bars.
+        """
+        trader = PaperTraderV35Repaired.__new__(PaperTraderV35Repaired)
+        import threading
+        trader.lock = threading.RLock()
+        trader.symbols = ["BTCUSDT", "ETHUSDT"]
+        trader.kline_history = {"BTCUSDT": [], "ETHUSDT": []}
+        trader.latest_prices = {}
+
+        unconfirmed_msg = {
+            "topic": "kline.60.BTCUSDT",
+            "data": [{"start": 1794000000000, "close": "73000.0", "confirm": False, "open": "72900", "high": "73100", "low": "72800", "volume": "50"}],
+        }
+        confirmed_msg = {
+            "topic": "kline.60.BTCUSDT",
+            "data": [{"start": 1794000000000, "close": "73100.0", "confirm": True, "open": "72900", "high": "73150", "low": "72800", "volume": "100"}],
+        }
+
+        # Unconfirmed bar must be rejected
+        res_unconf = trader.on_kline_event(unconfirmed_msg)
+        assert res_unconf is False
+        assert len(trader.kline_history["BTCUSDT"]) == 0
+
+        # Confirmed bar must be accepted
+        res_conf = trader.on_kline_event(confirmed_msg)
+        assert res_conf is True
+        assert len(trader.kline_history["BTCUSDT"]) == 1
+        assert trader.latest_prices["BTCUSDT"] == Decimal("73100.0")
+
+    # -------------------------------------------------------------------------
+    # T6: Signed Absolute Portfolio Beta Risk Monitoring
+    # -------------------------------------------------------------------------
+    def test_t06_repaired_signed_statistical_portfolio_beta(self):
+        """
+        T6 Repaired: calculate_portfolio_beta calculates true covariance beta
+        relative to BTC benchmark.
+        """
+        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"))
+        # Synthetic 50-bar price series
+        btc_bars = [{"open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0 + i * 0.2, "volume": 1000.0} for i in range(50)]
+        # ETH has 1.5x beta (moves 1.5x of BTC)
+        eth_bars = [{"open": 100.0, "high": 101.5, "low": 98.5, "close": 100.0 + i * 0.3, "volume": 1000.0} for i in range(50)]
+        # SOL has 0.8x beta
+        sol_bars = [{"open": 100.0, "high": 100.8, "low": 99.2, "close": 100.0 + i * 0.16, "volume": 1000.0} for i in range(50)]
+
+        prices_series = {"BTCUSDT": btc_bars, "ETHUSDT": eth_bars, "SOLUSDT": sol_bars}
+
+        # Put 1 Long on ETH and 1 Short on SOL
+        engine.open_positions["ETHUSDT"] = ActivePairPosition("ETHUSDT", 1, Decimal("1.0"), Decimal("100.0"), Decimal("95.0"), Decimal("5.0"), Decimal("2.0"), Decimal("100.0"), Decimal("100.0"), 0, 0)
+        engine.open_positions["SOLUSDT"] = ActivePairPosition("SOLUSDT", -1, Decimal("1.0"), Decimal("100.0"), Decimal("105.0"), Decimal("5.0"), Decimal("2.0"), Decimal("100.0"), Decimal("100.0"), 0, 0)
+
+        port_beta = engine.calculate_portfolio_beta(prices_series)
+        # Port beta = (1.0 * 1.5 - 1.0 * 0.8) / 2.0 = +0.35
+        assert isinstance(port_beta, Decimal)
+        assert port_beta > Decimal("0.20"), f"Expected positive spread beta, got {port_beta}"
+
+    # -------------------------------------------------------------------------
+    # T8: Bybit Exchange Constraints (Lot Sizing, Step & MinNotional)
+    # -------------------------------------------------------------------------
+    def test_t08_repaired_full_bybit_contract_specifications(self):
+        """
+        T8 Repaired: Verifies full Bybit contract rules:
+        - minNotionalValue rejection
+        - qtyStep flooring (e.g. SOL 0.1 step)
+        - minOrderQty check
+        - Inactive instrument rejection
+        """
+        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"))
+
+        # Test 1: Min notional rejection
+        is_ok, qty, reason = engine.validate_order_constraints("BTCUSDT", Decimal("0.001"), Decimal("1000.0"))
+        # Notional = 0.001 * 1000 = $1.00 < $5.00 minNotional
+        assert is_ok is False
+        assert "minNotionalValue" in reason
+
+        # Test 2: QtyStep flooring for SOLUSDT (step=0.1)
+        is_ok, qty, reason = engine.validate_order_constraints("SOLUSDT", Decimal("2.385"), Decimal("150.0"))
+        assert is_ok is True
+        assert qty == Decimal("2.3")  # floored to 0.1 step!
+
+        # Test 3: Min order qty rejection
+        is_ok, qty, reason = engine.validate_order_constraints("SOLUSDT", Decimal("0.05"), Decimal("150.0"))
+        assert is_ok is False
+        assert "minOrderQty" in reason
+
+        # Test 4: Inactive instrument rejection
+        engine.instrument_rules["SOLUSDT"].status = "Delivering"
+        is_ok, qty, reason = engine.validate_order_constraints("SOLUSDT", Decimal("5.0"), Decimal("150.0"))
+        assert is_ok is False
+        assert "Delivering" in reason
+        engine.instrument_rules["SOLUSDT"].status = "Trading"
+
+    # -------------------------------------------------------------------------
+    # T9: Append-Only Financial Ledger & Balance Reconciliation
+    # -------------------------------------------------------------------------
+    def test_t09_repaired_financial_ledger_reconciliation(self):
+        """
+        T9 Repaired: FinancialLedger double-entry cashflow tracking and reconciliation.
+        """
+        ledger = FinancialLedger()
+        initial_cap = Decimal("300.00")
+        current_eq = initial_cap
+
+        # Event 1: Entry fee deduction
+        entry_fee = Decimal("0.30")
+        current_eq -= entry_fee
+        ledger.record_entry_fee("BTCUSDT", "T1", entry_fee, current_eq)
+
+        # Event 2: Partial TP slice
+        gross_slice = Decimal("6.00")
+        fee_slice = Decimal("0.05")
+        current_eq += (gross_slice - fee_slice)
+        ledger.record_slice("BTCUSDT", "T1", 1, gross_slice, Decimal("0.15"), fee_slice, current_eq)
+
+        # Event 3: Funding cashflow
+        funding_cf = Decimal("0.04")
+        current_eq += funding_cf
+        ledger.record_funding("BTCUSDT", funding_cf, current_eq, Decimal("0.0001"), Decimal("400.0"))
+
+        # Reconcile
+        is_balanced, expected_eq, curr_eq, disc = ledger.reconcile(initial_cap, current_eq)
+        assert is_balanced is True
+        assert disc == Decimal("0.0")
+
+    # -------------------------------------------------------------------------
+    # T10: v3.8 No Synthetic APT Trade Generation
+    # -------------------------------------------------------------------------
     def test_t10_repaired_v38_no_synthetic_apt_trade(self):
         """
         T10 Repaired: v3_8 paper_trader_v38.py has no hardcoded synthetic APT trade.
         """
         source_code = Path(REPO_ROOT / "v3_8" / "src" / "paper_trader_v38.py").read_text(encoding="utf-8")
         assert 'symbol="APTUSDT"' not in source_code
-        assert "STAGE2_MAKER_TP (+1.40R)" not in source_code
+        assert "STAGE2_MAKER_TP" not in source_code
 
-    def test_t12_repaired_bad_data_spike_ignored(self):
+    # -------------------------------------------------------------------------
+    # T12: Multi-Criteria Market Data Validity & Non-Blocking Protection
+    # -------------------------------------------------------------------------
+    def test_t12_repaired_market_data_validity_and_protective_exit(self):
         """
-        T12 Repaired: An anomalous wick/spike (+100%) is ignored and does NOT drag stop price.
+        T12 Repaired:
+        1. Staleness check: age > 15s is rejected.
+        2. Bid/Ask spread check: spread > 0.5% is rejected.
+        3. Volatility jump: > 3.5x ATR freezes trailing advancement.
+        4. Protective exit: If stop is breached, protective exit is NOT blocked
+           when corroborated or confirmed.
         """
         engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"))
-        current_prices = {"BTCUSDT": Decimal("100.0")}
-        metrics = {"BTCUSDT": {"atr24": 2.0}}
+        validator = engine.market_validator
+        atr = Decimal("2.0")
+
+        # Test 1: Staleness check
+        now_ts = 1794000020000
+        old_ts = now_ts - 25000  # 25s old
+        allow_adv, reason, allow_exit = validator.validate_quote(
+            symbol="BTCUSDT", price=Decimal("100.0"), timestamp=old_ts, atr=atr, current_time=now_ts
+        )
+        assert allow_adv is False
+        assert "Stale" in reason
+
+        # Test 2: Wide bid/ask spread
+        allow_adv, reason, allow_exit = validator.validate_quote(
+            symbol="BTCUSDT", price=Decimal("100.0"), timestamp=now_ts, atr=atr,
+            bid=Decimal("95.0"), ask=Decimal("105.0")  # 10% spread
+        )
+        assert allow_adv is False
+        assert "Hollow book" in reason
+
+        # Test 3: Volatility jump relative to previous valid price (3.5x ATR = 7.0)
+        # Establish valid price of 100.0
+        validator.validate_quote(symbol="BTCUSDT", price=Decimal("100.0"), timestamp=now_ts, atr=atr)
+
+        # Spike to 110.0 (jump = 10.0 > 7.0)
+        allow_adv, reason, allow_exit = validator.validate_quote(
+            symbol="BTCUSDT", price=Decimal("110.0"), timestamp=now_ts + 1000, atr=atr
+        )
+        assert allow_adv is False  # trailing advancement frozen!
+        assert "Volatility jump" in reason
+
+        # Test 4: Non-blocking protective stop exit
+        # Long position entered at 100 with stop at 95.0. Market drops sharply to 92.0.
+        # First tick: unconfirmed breach
+        allow_adv, reason, allow_exit_1 = validator.validate_quote(
+            symbol="BTCUSDT", price=Decimal("92.0"), timestamp=now_ts + 2000, atr=atr,
+            stop_price=Decimal("95.0"), direction=1
+        )
+        # Second tick: confirmed breach -> allow_exit MUST be True!
+        allow_adv, reason, allow_exit_2 = validator.validate_quote(
+            symbol="BTCUSDT", price=Decimal("92.0"), timestamp=now_ts + 3000, atr=atr,
+            stop_price=Decimal("95.0"), direction=1
+        )
+        assert allow_exit_2 is True, "Protective exit must NOT be blocked on confirmed breach!"
+
+    # -------------------------------------------------------------------------
+    # T17: Broken Pair Leg Emergency Unwind
+    # -------------------------------------------------------------------------
+    def test_t17_repaired_broken_pair_leg_unwind(self):
+        """
+        T17 Repaired: When matched pair execution breaks (Long enters but Short fails),
+        engine immediately unwinds the Long leg to restore portfolio neutrality.
+        """
+        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"))
+        current_prices = {"BTCUSDT": Decimal("100.0"), "ETHUSDT": Decimal("100.0")}
+        metrics = {"BTCUSDT": {"atr24": 2.0}, "ETHUSDT": {"atr24": 2.0}}
         bar_ts = int(time.time() * 1000)
 
+        # Simulate Long entered, but Short rejected due to exchange constraints
         engine._enter_leg("BTCUSDT", 1, current_prices, metrics, engine.realized_equity, bar_ts)
-        pos = engine.open_positions["BTCUSDT"]
-        initial_stop = pos.stop_price
+        assert len(engine.open_positions) == 1
 
-        # Corrupt anomalous spike tick: 200.0 (+100%)
-        corrupt_spike_p = Decimal("200.0")
-        current_prices["BTCUSDT"] = corrupt_spike_p
-        prices_series = {
-            s: [{"open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0, "volume": 1000.0}] * 60
-            for s in ["BTCUSDT", "ETHUSDT"]
-        }
+        # Unwind Long leg
+        engine._unwind_leg("BTCUSDT", current_prices, bar_ts)
 
-        engine.process_bar(prices_series, current_prices, bar_ts + 3600000)
+        assert len(engine.open_positions) == 0
+        assert len(engine.closed_trades) == 1
+        assert engine.closed_trades[0].reason == "UNWIND_BROKEN_PAIR"
 
-        # Stop price must remain at initial_stop (95.0), NOT dragged to 196.0!
-        assert pos.stop_price == initial_stop
-        assert pos.highest_p == Decimal("100.0")  # corrupt tick was discarded!
+    # -------------------------------------------------------------------------
+    # Auditor Item 4: Candle Stress Stop-Gap vs Orderbook Fill Separation
+    # -------------------------------------------------------------------------
+    def test_candle_stress_vs_orderbook_fill_separation(self):
+        """
+        Auditor Item 4: Verifies distinct implementations of:
+        1. execute_candle_stress_stop_gap (candle Open/Low gap penetration)
+        2. execute_orderbook_fill (Bid/Ask orderbook fill)
+        """
+        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"))
+        pos = ActivePairPosition(
+            symbol="BTCUSDT", direction=1, qty=Decimal("1.0"),
+            entry_price=Decimal("100.0"), stop_price=Decimal("95.0"),
+            initial_risk_dist=Decimal("5.0"), initial_atr=Decimal("2.0"),
+            highest_p=Decimal("100.0"), lowest_p=Decimal("100.0"),
+            entry_bar=0, entry_ts=0, entry_fee=Decimal("0.10")
+        )
+
+        # 1. Candle Stress Gap-Through
+        is_hit, fill_p, mode = engine.execute_candle_stress_stop_gap(
+            pos, bar_open=Decimal("90.0"), bar_low=Decimal("88.0"), bar_high=Decimal("91.0")
+        )
+        assert is_hit is True
+        assert mode == "STOP_GAP_OPEN"
+        assert fill_p == Decimal("90.0") * (Decimal("1.0") - engine.slippage)
+
+        # 2. Orderbook Fill against Bid
+        is_hit_ob, fill_p_ob, mode_ob = engine.execute_orderbook_fill(
+            pos, bid=Decimal("94.50"), ask=Decimal("94.60"), last_trade=Decimal("94.55")
+        )
+        assert is_hit_ob is True
+        assert mode_ob == "ORDERBOOK_STOP_FILL_BID"
+        assert fill_p_ob == Decimal("94.50") * (Decimal("1.0") - engine.slippage)

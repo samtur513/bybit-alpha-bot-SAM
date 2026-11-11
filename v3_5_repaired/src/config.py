@@ -90,3 +90,46 @@ BASE_SLIPPAGE = Decimal("0.00050")     # 5 bps conservative adverse execution pe
 MIN_NOTIONAL_USDT = Decimal("5.0")     # Bybit linear perpetual minNotionalValue threshold
 MIN_ORDER_QTY_DEFAULT = Decimal("0.001")
 MAX_TICK_SPIKE_PCT = Decimal("0.35")   # 35% max allowable 1-tick deviation before freezing trailing stop
+
+# Enhanced Market Validity Parameters (F1B Auditor Requirements)
+MAX_QUOTE_STALENESS_SEC = 15           # Maximum allowable data staleness (seconds)
+MAX_BID_ASK_SPREAD_PCT = Decimal("0.0050")  # 0.50% max allowable bid/ask spread
+MAX_VOLATILITY_JUMP_ATR_MULT = Decimal("3.5")  # Max 3.5x ATR jump from last known valid price
+CONFIRMED_SPIKE_TICKS = 2              # Number of consecutive breach ticks to confirm real move vs bad tick
+
+# Bybit V5 Linear Perpetuals Contract Specifications (Lot & Notional Rules)
+BYBIT_INSTRUMENT_RULES = {
+    "BTCUSDT": {
+        "tick_size": Decimal("0.10"),
+        "qty_step": Decimal("0.001"),
+        "min_order_qty": Decimal("0.001"),
+        "max_order_qty": Decimal("100.0"),
+        "min_notional_value": Decimal("5.0"),
+        "status": "Trading",
+    },
+    "ETHUSDT": {
+        "tick_size": Decimal("0.01"),
+        "qty_step": Decimal("0.01"),
+        "min_order_qty": Decimal("0.01"),
+        "max_order_qty": Decimal("1000.0"),
+        "min_notional_value": Decimal("5.0"),
+        "status": "Trading",
+    },
+    "SOLUSDT": {
+        "tick_size": Decimal("0.01"),
+        "qty_step": Decimal("0.1"),
+        "min_order_qty": Decimal("0.1"),
+        "max_order_qty": Decimal("10000.0"),
+        "min_notional_value": Decimal("5.0"),
+        "status": "Trading",
+    },
+    "DEFAULT": {
+        "tick_size": Decimal("0.0001"),
+        "qty_step": Decimal("0.001"),
+        "min_order_qty": Decimal("0.001"),
+        "max_order_qty": Decimal("1000000.0"),
+        "min_notional_value": Decimal("5.0"),
+        "status": "Trading",
+    },
+}
+

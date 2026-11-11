@@ -172,32 +172,33 @@ class TestF1AAuditInvariants:
         T4: When trading_halted = True, existing open positions must still be
         monitored, trailed, and stopped out if stop price is hit. Only new entries
         and risk increases are prohibited.
+        Defect on original v3_5: AlphaPairsEngine sets trading_halted = True at line 458,
+        but completely lacks 'if not self.trading_halted:' check at line 396,
+        continuing to enter new positions on every rebalance despite being halted!
         """
         engine = AlphaPairsEngine(initial_capital=Decimal("300.0"))
-        current_prices = {"BTCUSDT": Decimal("100.0")}
-        metrics = {"BTCUSDT": {"atr24": 2.0}}
+        engine.trading_halted = True  # Kill Switch active!
+
+        # Construct synthetic series where ETH outperforms (+30% RS) and SOL underperforms (-30% RS)
+        btc_bars = [{"open": 100.0, "high": 100.0, "low": 100.0, "close": 100.0, "volume": 1000.0}] * 75
+        eth_bars = [{"open": 100.0, "high": 105.0, "low": 99.0, "close": 100.0 + i * 0.4, "volume": 1000.0} for i in range(75)]
+        sol_bars = [{"open": 100.0, "high": 101.0, "low": 69.0, "close": 100.0 - i * 0.4, "volume": 1000.0} for i in range(75)]
+
+        prices_series = {"BTCUSDT": btc_bars, "ETHUSDT": eth_bars, "SOLUSDT": sol_bars}
+        current_prices = {
+            "BTCUSDT": Decimal("100.0"),
+            "ETHUSDT": Decimal(str(eth_bars[-1]["close"])),
+            "SOLUSDT": Decimal(str(sol_bars[-1]["close"])),
+        }
         bar_ts = int(time.time() * 1000)
 
-        engine._enter_leg("BTCUSDT", 1, current_prices, metrics, engine.realized_equity, bar_ts)
-        assert len(engine.open_positions) == 1
+        # In a sound engine, process_bar must NOT enter new positions when trading_halted=True
+        engine.process_bar(prices_series, current_prices, bar_ts)
 
-        # Activate Kill Switch (halt trading)
-        engine.trading_halted = True
-
-        # Price drops below stop (e.g. to 90.0)
-        current_prices["BTCUSDT"] = Decimal("90.0")
-        prices_series = {
-            s: [{"open": 90.0, "high": 91.0, "low": 89.0, "close": 90.0, "volume": 1000.0}] * 60
-            for s in ["BTCUSDT", "ETHUSDT"]
-        }
-
-        engine.process_bar(prices_series, current_prices, bar_ts + 3600000)
-
-        # The open position MUST be stopped out despite trading_halted=True!
         assert len(engine.open_positions) == 0, (
-            "Kill Switch Defect: Position was not closed when stopped out during trading halt!"
+            f"Kill Switch Defect in v3_5: Engine entered {len(engine.open_positions)} positions "
+            f"despite trading_halted=True! The original code lacked 'if not self.trading_halted:' guard."
         )
-        assert len(engine.closed_trades) == 1
 
     # -------------------------------------------------------------------------
     # T5: Event-Driven Kline Pipeline: confirm=True Enforcement
@@ -206,22 +207,17 @@ class TestF1AAuditInvariants:
         """
         T5: Kline updates must only trigger signal processing when confirm == True.
         Unconfirmed bars (confirm == False) must be discarded.
+        Defect on original v3_5: PaperTraderV35 polled tickers in a time.sleep() loop
+        and ran process_bar based on wall-clock time without an event-driven kline handler.
         """
-        raw_ws_unconfirmed = {
-            "topic": "kline.60.BTCUSDT",
-            "data": [{"start": 1794000000000, "close": "73000.0", "confirm": False}],
-        }
-        raw_ws_confirmed = {
-            "topic": "kline.60.BTCUSDT",
-            "data": [{"start": 1794000000000, "close": "73100.0", "confirm": True}],
-        }
+        from v3_5.src.paper_trader_v35 import PaperTraderV35
 
-        # Contract assertion: confirm=False must be rejected by validator
-        is_valid_unconfirmed = raw_ws_unconfirmed["data"][0]["confirm"] is True
-        is_valid_confirmed = raw_ws_confirmed["data"][0]["confirm"] is True
-
-        assert is_valid_unconfirmed is False
-        assert is_valid_confirmed is True
+        has_kline_handler = hasattr(PaperTraderV35, "on_kline_event") or hasattr(PaperTraderV35, "on_kline_message")
+        if not has_kline_handler:
+            pytest.fail(
+                "RED/NOT_IMPLEMENTED: Original PaperTraderV35 lacks event-driven on_kline_event handler! "
+                "It polled tickers in a time.sleep(5) loop and triggered bars on wall-clock time without confirm=True check."
+            )
 
     # -------------------------------------------------------------------------
     # T6: Signed Absolute Portfolio Beta Risk Monitoring
@@ -231,20 +227,18 @@ class TestF1AAuditInvariants:
         T6: Portfolio beta must be calculated as weighted sum of signed notionals
         relative to BTC. A negative beta of -0.40 must trigger a risk breach
         (|beta| > 0.15).
-        Defect on original code: net_beta = 0.05 * (active_longs - active_shorts),
-        which cannot detect real factor exposure.
+        Defect on original v3_5: PaperTraderV35 line 274 hardcoded:
+        net_beta = 0.05 * (active_longs - active_shorts), which cannot detect real factor exposure.
         """
-        # Let's say we have 2 shorts on high-beta coins (beta = 1.8 each)
-        signed_weights = [-1.0, -1.0]  # shorts
-        coin_betas = [1.5, 1.3]
-        portfolio_beta = sum(w * b for w, b in zip(signed_weights, coin_betas)) / 2.0  # -1.40
+        from v3_5.src.paper_trader_v35 import PaperTraderV35
 
-        # Invariant: |beta| must be <= 0.15 for market-neutral strategy
-        is_neutral = abs(portfolio_beta) <= 0.15
-        assert is_neutral is False, (
-            f"Beta Defect: Portfolio beta is {portfolio_beta:.2f}, which is severely directional (-1.40), "
-            f"yet naive count-based beta would report 0 if longs=shorts!"
-        )
+        has_stat_beta = hasattr(AlphaPairsEngine, "calculate_portfolio_beta")
+        if not has_stat_beta:
+            pytest.fail(
+                "RED/NOT_IMPLEMENTED: Original AlphaPairsEngine in v3_5 lacks calculate_portfolio_beta method! "
+                "PaperTraderV35 line 274 used naive count 'net_beta = 0.05 * (active_longs - active_shorts)'."
+            )
+
 
     # -------------------------------------------------------------------------
     # T7: Maker Touch-Only Rejection (No Guaranteed Fills on Touch)
@@ -310,26 +304,17 @@ class TestF1AAuditInvariants:
     def test_t09_ledger_database_fail_closed(self):
         """
         T9: If database connection fails, the trading engine must transition to
-        NO_NEW_TRADES (Fail-Closed). It must NEVER silently switch to a dummy mock.
+        NO_NEW_TRADES (Fail-Closed). It must NEVER silently ignore errors.
+        Defect on original v3_10_sweep: ShadowTCALedger lacks fail-closed circuit breaker.
         """
-        class MockTcaLedger:
-            def __init__(self, db_corrupt=True):
-                self.db_corrupt = db_corrupt
+        from v3_10_sweep.tca_ledger import ShadowTCALedger
 
-            def record_trade(self, trade):
-                if self.db_corrupt:
-                    raise IOError("Database locked / disk I/O error")
-                return True
-
-        ledger = MockTcaLedger(db_corrupt=True)
-        # Test fail-closed state
-        can_trade = True
-        try:
-            ledger.record_trade({"trade_id": "T1"})
-        except IOError:
-            can_trade = False  # Fail-Closed
-
-        assert can_trade is False, "Fail-Closed Invariant Violated: Engine traded despite database failure!"
+        has_fail_closed = hasattr(ShadowTCALedger, "fail_closed") or hasattr(ShadowTCALedger, "is_healthy")
+        if not has_fail_closed:
+            pytest.fail(
+                "RED/NOT_IMPLEMENTED: Original ShadowTCALedger in v3_10_sweep lacks fail-closed circuit breaker! "
+                "If database encounters locks or I/O failure, errors bubble unhandled without safe mode transition."
+            )
 
     # -------------------------------------------------------------------------
     # T10: v3.8 No Synthetic APT Trade Generation
@@ -524,16 +509,17 @@ class TestF1AAuditInvariants:
         T17: In pair execution (Long A + Short B), if Long A fills but Short B
         is rejected by exchange, the engine must immediately unwind Leg A or
         route an emergency hedge, never remaining unhedged naked directional.
+        Defect on original v3_5: AlphaPairsEngine lines 429-432 enter legs sequentially:
+        if Long enters and Short fails, Long is left unhedged with NO unwind method.
         """
-        leg_a_filled = True
-        leg_b_rejected = True
+        from v3_5.src.alpha_pairs_engine import AlphaPairsEngine
 
-        # Invariant check:
-        unwind_triggered = False
-        if leg_a_filled and leg_b_rejected:
-            unwind_triggered = True  # Emergency unwind of Leg A
-
-        assert unwind_triggered is True, "Legged Execution Defect: Unhedged naked leg was left open!"
+        has_unwind = hasattr(AlphaPairsEngine, "_unwind_leg")
+        if not has_unwind:
+            pytest.fail(
+                "RED/NOT_IMPLEMENTED: Original AlphaPairsEngine in v3_5 lacks _unwind_leg emergency mechanism! "
+                "When one leg of a pair fails to enter (lines 429-432), the other leg is left open as a naked unhedged position."
+            )
 
     # -------------------------------------------------------------------------
     # T18: Maker Queue Volume Exhaustion Invariant

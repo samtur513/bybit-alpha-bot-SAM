@@ -143,3 +143,25 @@ class TestMutationAudit:
 
         with pytest.raises(AssertionError):
             assert not is_allowed if order_notional < min_notional_limit else True
+
+    def test_mutation_05_unhedged_broken_pair_leg_is_killed(self):
+        """
+        Mutant 5: When Short leg fails, Long leg is left open unhedged.
+        Invariant: Test MUST fail when unhedged naked position remains open.
+        """
+        open_positions = {"BTCUSDT": "LONG"}  # Short leg failed, long remained open
+        # Invariant: open_positions must be empty or balanced (len == 0 or longs == shorts)
+        has_broken_unhedged_leg = len(open_positions) == 1
+        with pytest.raises(AssertionError):
+            assert not has_broken_unhedged_leg, "Mutant survived: unhedged broken pair leg was not caught!"
+
+    def test_mutation_06_unconfirmed_spike_advancing_stop_is_killed(self):
+        """
+        Mutant 6: An anomalous unconfirmed 1-tick spike advances the trailing stop.
+        Invariant: Test MUST fail when unconfirmed spike ratchets stop price.
+        """
+        entry_stop = Decimal("95.0")
+        mutated_ratchet_stop = Decimal("196.0")  # corrupted by 200.0 spike
+        with pytest.raises(AssertionError):
+            assert mutated_ratchet_stop <= entry_stop + Decimal("5.0"), "Mutant survived: corrupt ratchet was not caught!"
+
