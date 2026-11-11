@@ -8,6 +8,7 @@ archive_path_f1b = repo_root / ".scratch" / "f1b_audit_package_sanitized.zip"
 archive_path_f1c = repo_root / ".scratch" / "f1c_audit_package_sanitized.zip"
 archive_path_f1c_r2 = repo_root / ".scratch" / "f1c_r2_audit_package_sanitized.zip"
 archive_path_f1c_r3 = repo_root / ".scratch" / "f1c_r3_audit_package_sanitized.zip"
+archive_path_f1c_final = repo_root / ".scratch" / "f1c_final_audit_package_sanitized.zip"
 
 files_to_include = [
     # Repaired package
@@ -23,13 +24,14 @@ files_to_include = [
     "v3_5_repaired/tests/test_mutation_audit.py",
     "v3_5_repaired/tests/test_production_mutation_audit.py",
     "v3_5_repaired/tests/test_f1c_r2_audit_suite.py",
+    "v3_5_repaired/tests/test_original_vs_repaired_signal_parity.py",
     # Original test suite
     "tests/test_f1a_audit_invariants.py",
     # Repaired v3.8 trader (synthetic APT trade removed)
     "v3_8/src/paper_trader_v38.py",
 ]
 
-for archive_path in [archive_path_f1b, archive_path_f1c, archive_path_f1c_r2, archive_path_f1c_r3]:
+for archive_path in [archive_path_f1c_r3, archive_path_f1c_final]:
     with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for rel_path in files_to_include:
             full_path = repo_root / rel_path

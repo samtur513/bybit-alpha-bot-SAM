@@ -128,6 +128,113 @@ class PaperTraderV35Repaired:
             self.last_ping_ms = round(float(ping_ms), 2)
             self.ws_connected = True
 
+    def on_orderbook_l1_event(self, message: Dict[str, Any]) -> bool:
+        """
+        Handles Bybit V5 orderbook.1.{symbol} L1 updates.
+        Topic format: "orderbook.1.BTCUSDT"
+        Extracts bid1, ask1, sizes, quote timestamp, and populates self.live_quotes.
+        """
+        topic = message.get("topic", "")
+        if not topic.startswith("orderbook.1"):
+            return False
+        data = message.get("data", {})
+        symbol = data.get("s") or topic.split(".")[-1]
+        if symbol not in self.symbols:
+            return False
+        bids = data.get("b", [])
+        asks = data.get("a", [])
+        if not bids or not asks:
+            return False
+        try:
+            bid_p = Decimal(str(bids[0][0]))
+            bid_sz = Decimal(str(bids[0][1])) if len(bids[0]) > 1 else None
+            ask_p = Decimal(str(asks[0][0]))
+            ask_sz = Decimal(str(asks[0][1])) if len(asks[0]) > 1 else None
+            ts = int(message.get("ts", time.time() * 1000))
+            if ask_p > bid_p > Decimal("0.0"):
+                quote = OrderbookQuote(
+                    symbol=symbol,
+                    bid=bid_p,
+                    ask=ask_p,
+                    quote_ts=ts,
+                    source=QuoteSource.EXCHANGE_L1,
+                    bid_size=bid_sz,
+                    ask_size=ask_sz,
+                )
+                with self.lock:
+                    self.live_quotes[symbol] = quote
+                return True
+        except Exception as e:
+            logger.error(f"Error parsing orderbook.1 event for {symbol}: {e}")
+        return False
+
+    def on_ticker_event(self, message: Dict[str, Any]) -> bool:
+        """
+        Handles Bybit V5 tickers.{symbol} WebSocket updates.
+        Topic format: "tickers.BTCUSDT"
+        Extracts bid1Price, ask1Price, sizes, quote timestamp, and populates self.live_quotes.
+        """
+        topic = message.get("topic", "")
+        if not topic.startswith("tickers"):
+            return False
+        data = message.get("data", {})
+        symbol = data.get("symbol") or topic.split(".")[-1]
+        if symbol not in self.symbols:
+            return False
+        bid_str = data.get("bid1Price")
+        ask_str = data.get("ask1Price")
+        if not bid_str or not ask_str:
+            return False
+        try:
+            bid_p = Decimal(str(bid_str))
+            ask_p = Decimal(str(ask_str))
+            bid_sz = Decimal(str(data["bid1Size"])) if "bid1Size" in data else None
+            ask_sz = Decimal(str(data["ask1Size"])) if "ask1Size" in data else None
+            ts = int(message.get("ts", time.time() * 1000))
+            if ask_p > bid_p > Decimal("0.0"):
+                quote = OrderbookQuote(
+                    symbol=symbol,
+                    bid=bid_p,
+                    ask=ask_p,
+                    quote_ts=ts,
+                    source=QuoteSource.EXCHANGE_TICKER,
+                    bid_size=bid_sz,
+                    ask_size=ask_sz,
+                )
+                with self.lock:
+                    self.live_quotes[symbol] = quote
+                return True
+        except Exception as e:
+            logger.error(f"Error parsing ticker event for {symbol}: {e}")
+        return False
+
+    def update_live_quote(self, quote: OrderbookQuote) -> None:
+        """Explicitly ingests a validated OrderbookQuote."""
+        if not isinstance(quote, OrderbookQuote):
+            raise TypeError("quote must be an instance of OrderbookQuote")
+        with self.lock:
+            self.live_quotes[quote.symbol] = quote
+
+    def sync_exchange_instrument_rules(self) -> int:
+        """
+        Fetches authentic Bybit V5 /v5/market/instruments-info and updates engine rules.
+        """
+        try:
+            resp = self.client.get_instruments_info(category="linear")
+            if resp:
+                payload = {
+                    "retCode": 0,
+                    "retMsg": "OK",
+                    "result": {"category": "linear", "list": resp},
+                    "time": int(time.time() * 1000),
+                }
+                count = self.engine.verify_from_bybit_instruments_info(payload)
+                logger.info(f"Verified {count} instrument rules from live Bybit REST API.")
+                return count
+        except Exception as e:
+            logger.error(f"Failed to fetch live Bybit instrument info: {e}")
+        return 0
+
     def is_ws_alive(self) -> bool:
         """Verifies if WebSocket connection is live based on heartbeat (30s timeout)."""
         with self.lock:
@@ -205,6 +312,16 @@ class PaperTraderV35Repaired:
                 "volume": float(candle_data.get("volume", 0.0)),
             }
             self.latest_prices[symbol] = Decimal(str(bar["close"]))
+
+            # 4b. Kline Continuity Verification in Active Event Loop
+            is_cont = self.verify_kline_continuity(symbol)
+            if not is_cont:
+                logger.warning(f"Kline continuity gap on {symbol}")
+
+            # 4c. Active Sync Timeout Sweeper
+            timed_out = self.check_sync_timeouts(now_sec=time.time())
+            if timed_out:
+                logger.warning(f"Swept {len(timed_out)} timed-out bars from sync barrier: {timed_out}")
 
             # 5. 18-Instrument Synchronization Barrier
             if start_ts not in self.pending_bars_by_ts:
@@ -292,9 +409,11 @@ class PaperTraderV35Repaired:
         logger.info(f"Synchronized 18-symbol bar committed at {bar_ts}. Running process_bar...")
 
         is_blackout = self.is_macro_blackout()
+        decision_clock = bar_ts + (60 * 60 * 1000)
         # Collect verified L1 orderbook quotes (synthetic orderbook calculations strictly banned)
-        orderbook_bids = {s: q.bid for s, q in self.live_quotes.items() if q.is_valid_spread}
-        orderbook_asks = {s: q.ask for s, q in self.live_quotes.items() if q.is_valid_spread}
+        valid_quotes = {s: q for s, q in self.live_quotes.items() if q.is_valid_spread}
+        orderbook_bids = {s: q.bid for s, q in valid_quotes.items()}
+        orderbook_asks = {s: q.ask for s, q in valid_quotes.items()}
         self.engine.process_bar(
             prices_series=self.kline_history,
             current_prices=self.latest_prices,
@@ -302,6 +421,8 @@ class PaperTraderV35Repaired:
             macro_lockout=is_blackout,
             orderbook_bids=orderbook_bids,
             orderbook_asks=orderbook_asks,
+            orderbook_quotes=valid_quotes,
+            current_clock=decision_clock,
         )
         self.save_persistent_state()
         self._export_status()
