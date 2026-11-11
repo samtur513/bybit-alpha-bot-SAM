@@ -29,10 +29,11 @@ REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 PERSISTENT_STATE_FILE = REPORTS_DIR / "BOT_STATE_PERSISTENT_V35_REPAIRED.json"
 LIVE_STATUS_FILE = REPORTS_DIR / "PAPER_TRADING_LIVE_V35_REPAIRED.json"
 LIVE_MD_FILE = REPORTS_DIR / "PAPER_TRADING_LIVE_V35_REPAIRED.md"
+LEDGER_DB_FILE = REPORTS_DIR / "financial_ledger_v35_repaired.db"
 
-# Server Port (Dedicated for v3.5-REPAIRED)
-PORT = 8088
-VERSION_NAME = "v3.5-REPAIRED Alpha Pairs (Audit-Hardened F1B)"
+# Server Port (Dedicated for v3.5-REPAIRED - port 8188 isolates from VPS live v3.5 on 8088)
+PORT = 8188
+VERSION_NAME = "v3.5-REPAIRED Alpha Pairs (Phase F1C Audit Hardened)"
 
 # Trading Universe (18 High-Liquidity Perps + BTC Benchmark)
 BENCHMARK_SYMBOL = "BTCUSDT"
@@ -98,6 +99,7 @@ MAX_VOLATILITY_JUMP_ATR_MULT = Decimal("3.5")  # Max 3.5x ATR jump from last kno
 CONFIRMED_SPIKE_TICKS = 2              # Number of consecutive breach ticks to confirm real move vs bad tick
 
 # Bybit V5 Linear Perpetuals Contract Specifications (Lot & Notional Rules)
+# FAIL-CLOSED: Every universe symbol must be explicitly configured. Unknown or unlisted symbols are strictly rejected.
 BYBIT_INSTRUMENT_RULES = {
     "BTCUSDT": {
         "tick_size": Decimal("0.10"),
@@ -123,13 +125,126 @@ BYBIT_INSTRUMENT_RULES = {
         "min_notional_value": Decimal("5.0"),
         "status": "Trading",
     },
-    "DEFAULT": {
+    "SUIUSDT": {
         "tick_size": Decimal("0.0001"),
-        "qty_step": Decimal("0.001"),
-        "min_order_qty": Decimal("0.001"),
+        "qty_step": Decimal("0.1"),
+        "min_order_qty": Decimal("0.1"),
+        "max_order_qty": Decimal("500000.0"),
+        "min_notional_value": Decimal("5.0"),
+        "status": "Trading",
+    },
+    "DOGEUSDT": {
+        "tick_size": Decimal("0.00001"),
+        "qty_step": Decimal("1.0"),
+        "min_order_qty": Decimal("1.0"),
+        "max_order_qty": Decimal("2000000.0"),
+        "min_notional_value": Decimal("5.0"),
+        "status": "Trading",
+    },
+    "AVAXUSDT": {
+        "tick_size": Decimal("0.001"),
+        "qty_step": Decimal("0.1"),
+        "min_order_qty": Decimal("0.1"),
+        "max_order_qty": Decimal("20000.0"),
+        "min_notional_value": Decimal("5.0"),
+        "status": "Trading",
+    },
+    "NEARUSDT": {
+        "tick_size": Decimal("0.001"),
+        "qty_step": Decimal("0.1"),
+        "min_order_qty": Decimal("0.1"),
+        "max_order_qty": Decimal("100000.0"),
+        "min_notional_value": Decimal("5.0"),
+        "status": "Trading",
+    },
+    "LINKUSDT": {
+        "tick_size": Decimal("0.001"),
+        "qty_step": Decimal("0.1"),
+        "min_order_qty": Decimal("0.1"),
+        "max_order_qty": Decimal("50000.0"),
+        "min_notional_value": Decimal("5.0"),
+        "status": "Trading",
+    },
+    "APTUSDT": {
+        "tick_size": Decimal("0.001"),
+        "qty_step": Decimal("0.1"),
+        "min_order_qty": Decimal("0.1"),
+        "max_order_qty": Decimal("50000.0"),
+        "min_notional_value": Decimal("5.0"),
+        "status": "Trading",
+    },
+    "ADAUSDT": {
+        "tick_size": Decimal("0.0001"),
+        "qty_step": Decimal("1.0"),
+        "min_order_qty": Decimal("1.0"),
         "max_order_qty": Decimal("1000000.0"),
         "min_notional_value": Decimal("5.0"),
         "status": "Trading",
     },
+    "XRPUSDT": {
+        "tick_size": Decimal("0.0001"),
+        "qty_step": Decimal("1.0"),
+        "min_order_qty": Decimal("1.0"),
+        "max_order_qty": Decimal("1000000.0"),
+        "min_notional_value": Decimal("5.0"),
+        "status": "Trading",
+    },
+    "BNBUSDT": {
+        "tick_size": Decimal("0.01"),
+        "qty_step": Decimal("0.01"),
+        "min_order_qty": Decimal("0.01"),
+        "max_order_qty": Decimal("1000.0"),
+        "min_notional_value": Decimal("5.0"),
+        "status": "Trading",
+    },
+    "TIAUSDT": {
+        "tick_size": Decimal("0.001"),
+        "qty_step": Decimal("0.1"),
+        "min_order_qty": Decimal("0.1"),
+        "max_order_qty": Decimal("50000.0"),
+        "min_notional_value": Decimal("5.0"),
+        "status": "Trading",
+    },
+    "INJUSDT": {
+        "tick_size": Decimal("0.001"),
+        "qty_step": Decimal("0.1"),
+        "min_order_qty": Decimal("0.1"),
+        "max_order_qty": Decimal("50000.0"),
+        "min_notional_value": Decimal("5.0"),
+        "status": "Trading",
+    },
+    "ARBUSDT": {
+        "tick_size": Decimal("0.0001"),
+        "qty_step": Decimal("0.1"),
+        "min_order_qty": Decimal("0.1"),
+        "max_order_qty": Decimal("500000.0"),
+        "min_notional_value": Decimal("5.0"),
+        "status": "Trading",
+    },
+    "OPUSDT": {
+        "tick_size": Decimal("0.0001"),
+        "qty_step": Decimal("0.1"),
+        "min_order_qty": Decimal("0.1"),
+        "max_order_qty": Decimal("500000.0"),
+        "min_notional_value": Decimal("5.0"),
+        "status": "Trading",
+    },
+    "1000PEPEUSDT": {
+        "tick_size": Decimal("0.000001"),
+        "qty_step": Decimal("100.0"),
+        "min_order_qty": Decimal("100.0"),
+        "max_order_qty": Decimal("100000000.0"),
+        "min_notional_value": Decimal("5.0"),
+        "status": "Trading",
+    },
+    "RENDERUSDT": {
+        "tick_size": Decimal("0.001"),
+        "qty_step": Decimal("0.1"),
+        "min_order_qty": Decimal("0.1"),
+        "max_order_qty": Decimal("50000.0"),
+        "min_notional_value": Decimal("5.0"),
+        "status": "Trading",
+    },
 }
+
 

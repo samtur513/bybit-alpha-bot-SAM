@@ -1,12 +1,12 @@
 """
-Paper Trading Daemon v3.5-REPAIRED Alpha Pairs (Phase F1B Audit Hardened).
+Paper Trading Daemon v3.5-REPAIRED Alpha Pairs (Phase F1B / F1C Audit Hardened).
 Operates on 1h candles across 18 liquid Bybit linear perpetuals with:
-- Strict confirm=True event-driven Kline processing
-- True statistical signed portfolio beta monitoring (Cov/Var relative to BTC)
-- Bybit VIP-0 Non-MNT Fee Model (0.100% Taker / 0.036% Maker)
-- Bybit V5 instrument validation (qtyStep, minOrderQty, minNotionalValue)
-- Append-only Financial Ledger with double-entry cashflow attribution
-- Isolated in v3_5_repaired package with zero impact on production VPS.
+- Strict interval ("60"), timestamp monotonicity, and deduplicated event-driven Kline processing
+- 18-instrument synchronization barrier with REST backfill fallback
+- Real WebSocket connection lifecycle monitoring (no hardcoded ws_connected=True)
+- Time-synchronized factor portfolio beta reporting with UNKNOWN status
+- Deep FinancialLedger integration (SQLite WAL)
+- Isolated on dedicated port 8188 (zero collision with VPS 8088)
 """
 
 from decimal import Decimal
@@ -16,7 +16,7 @@ from pathlib import Path
 import sys
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -28,6 +28,7 @@ from v3_5_repaired.src.config import (
     PERSISTENT_STATE_FILE,
     LIVE_STATUS_FILE,
     LIVE_MD_FILE,
+    LEDGER_DB_FILE,
     PORT,
     VERSION_NAME,
     INITIAL_CAPITAL,
@@ -40,7 +41,12 @@ from v3_5_repaired.src.config import (
     FEE_MAKER,
     BASE_SLIPPAGE,
 )
-from v3_5_repaired.src.alpha_pairs_engine import AlphaPairsEngineRepaired, ActivePairPosition
+from v3_5_repaired.src.alpha_pairs_engine import (
+    AlphaPairsEngineRepaired,
+    ActivePairPosition,
+    BetaStatus,
+    BetaResult,
+)
 from v3_5_repaired.src.financial_ledger import FinancialLedger
 from v3.src.bybit_client import BybitClient
 from v3.src.market_stream import MarketStream
@@ -52,7 +58,7 @@ logger = logging.getLogger("PaperTraderV35Repaired")
 
 class PaperTraderV35Repaired:
     """
-    Paper trader daemon running v3.5-REPAIRED Alpha Pairs.
+    Paper trader daemon running v3.5-REPAIRED Alpha Pairs on dedicated port 8188.
     """
 
     def __init__(
@@ -62,6 +68,7 @@ class PaperTraderV35Repaired:
         state_file: Path = PERSISTENT_STATE_FILE,
         status_file: Path = LIVE_STATUS_FILE,
         md_file: Path = LIVE_MD_FILE,
+        ledger_db_file: Path = LEDGER_DB_FILE,
         enable_news_defense: bool = True,
         client: Optional[BybitClient] = None,
         poll_interval_seconds: int = 5,
@@ -71,6 +78,7 @@ class PaperTraderV35Repaired:
         self.state_file = state_file
         self.live_status_file = status_file
         self.live_md_file = md_file
+        self.ledger_db_file = ledger_db_file
         self.enable_news_defense = enable_news_defense
         self.poll_interval = poll_interval_seconds
         self.client = client or BybitClient(timeout=10, max_retries=3)
@@ -82,15 +90,25 @@ class PaperTraderV35Repaired:
             fee_taker=FEE_TAKER,
             fee_maker=FEE_MAKER,
             slippage=BASE_SLIPPAGE,
+            ledger_db_path=str(self.ledger_db_file),
         )
-        self.ledger = FinancialLedger()
+        self.ledger = self.engine.ledger
 
         self.kline_history: Dict[str, List[Dict[str, float]]] = {s: [] for s in self.symbols}
         self.latest_prices: Dict[str, Decimal] = {}
         self.last_status_cache: Dict[str, Any] = {}
         self.running = False
-        self.ws_connected = True
-        self.last_ping_ms = 1.8
+
+        # Real WebSocket connection tracking (Task 9: no fake ws_connected=True)
+        self.ws_connected = False
+        self.last_ping_ms: Optional[float] = None
+        self.last_heartbeat_ts: Optional[float] = None
+
+        # Kline deduplication and synchronization barrier (Task 3)
+        self.processed_kline_keys: Set[str] = set()
+        self.pending_bars_by_ts: Dict[int, Dict[str, Dict[str, float]]] = {}
+        self.last_processed_bar_ts: int = 0
+
         self.stream: Optional[MarketStream] = None
         self.news_streamer: Optional[LiveNewsStreamer] = None
         self.macro_blackout_until: float = 0.0
@@ -98,13 +116,31 @@ class PaperTraderV35Repaired:
         self._load_persistent_state()
         self._export_status()
 
+    def update_ws_heartbeat(self, ping_ms: float) -> None:
+        """Updates real WebSocket heartbeat."""
+        with self.lock:
+            self.last_heartbeat_ts = time.time()
+            self.last_ping_ms = round(float(ping_ms), 2)
+            self.ws_connected = True
+
+    def is_ws_alive(self) -> bool:
+        """Verifies if WebSocket connection is live based on heartbeat (30s timeout)."""
+        with self.lock:
+            if self.last_heartbeat_ts is None:
+                return False
+            is_alive = (time.time() - self.last_heartbeat_ts) < 30.0
+            self.ws_connected = is_alive
+            return is_alive
+
     def on_kline_event(self, message: Dict[str, Any]) -> bool:
         """
-        Event-driven Kline update handler.
-        Invariant: Kline signals must ONLY trigger processing when confirm == True.
-        Unconfirmed bars (confirm == False) are discarded.
-        Returns:
-            bool: True if closed bar was accepted and processed; False if ignored/unconfirmed.
+        Event-driven Kline update handler with:
+        - Interval validation (must match CANDLE_INTERVAL = "60")
+        - confirm=True enforcement
+        - Timestamp validation and deduplication
+        - 18-instrument synchronization barrier
+        - Automatic REST backfill fallback
+        Returns True if bar was accepted.
         """
         topic = message.get("topic", "")
         data = message.get("data", [])
@@ -112,35 +148,117 @@ class PaperTraderV35Repaired:
             return False
 
         candle_data = data[0] if isinstance(data, list) else data
+
+        # 1. Interval Check
+        interval = str(candle_data.get("interval", ""))
+        parts = topic.split(".")
+        topic_interval = parts[1] if len(parts) >= 3 else interval
+        if topic_interval != CANDLE_INTERVAL and interval != CANDLE_INTERVAL:
+            logger.debug(f"Discarding kline with non-matching interval: {topic_interval}")
+            return False
+
+        # 2. confirm=True Check
         is_confirmed = candle_data.get("confirm", False)
         if not is_confirmed:
             logger.debug(f"Discarding unconfirmed kline update on {topic}")
             return False
 
-        # Extract symbol from topic (e.g. kline.60.BTCUSDT)
-        parts = topic.split(".")
-        symbol = parts[-1] if len(parts) >= 3 else ""
+        # 3. Extract symbol
+        symbol = parts[-1] if len(parts) >= 3 else candle_data.get("symbol", "")
         if symbol not in self.symbols:
             return False
 
+        start_ts = int(candle_data.get("start", 0))
+        if start_ts <= 0:
+            return False
+
+        # 4. Deduplication
+        bar_key = f"{symbol}_{CANDLE_INTERVAL}_{start_ts}"
         with self.lock:
+            if bar_key in self.processed_kline_keys:
+                logger.debug(f"Duplicate kline {bar_key} ignored.")
+                return False
+            self.processed_kline_keys.add(bar_key)
+
             bar = {
-                "start": int(candle_data.get("start", 0)),
+                "start": start_ts,
                 "open": float(candle_data.get("open", 0.0)),
                 "high": float(candle_data.get("high", 0.0)),
                 "low": float(candle_data.get("low", 0.0)),
                 "close": float(candle_data.get("close", 0.0)),
                 "volume": float(candle_data.get("volume", 0.0)),
             }
-            if symbol not in self.kline_history:
-                self.kline_history[symbol] = []
-            self.kline_history[symbol].append(bar)
-            if len(self.kline_history[symbol]) > 200:
-                self.kline_history[symbol] = self.kline_history[symbol][-200:]
-
             self.latest_prices[symbol] = Decimal(str(bar["close"]))
-            logger.info(f"Accepted confirmed 1h kline on {symbol} @ {bar['close']}")
+
+            # 5. 18-Instrument Synchronization Barrier
+            if start_ts not in self.pending_bars_by_ts:
+                self.pending_bars_by_ts[start_ts] = {}
+            self.pending_bars_by_ts[start_ts][symbol] = bar
+
+            arrived_symbols = set(self.pending_bars_by_ts[start_ts].keys())
+            missing_symbols = set(self.symbols) - arrived_symbols
+
+            # Check if all arrived or quorum reached
+            if len(missing_symbols) == 0:
+                self._commit_synchronized_bar(start_ts)
+                return True
+            elif len(arrived_symbols) >= (len(self.symbols) - 2):
+                # Attempt REST backfill for the remaining 1-2 symbols
+                self._attempt_rest_backfill(start_ts, list(missing_symbols))
+                if set(self.pending_bars_by_ts[start_ts].keys()) == set(self.symbols):
+                    self._commit_synchronized_bar(start_ts)
+                    return True
+
             return True
+
+    def _attempt_rest_backfill(self, target_ts: int, missing_symbols: List[str]) -> None:
+        """Fetches missing candle via REST if WebSocket missed it."""
+        for sym in missing_symbols:
+            try:
+                res = self.client.get_kline(symbol=sym, interval=CANDLE_INTERVAL, limit=5, category="linear")
+                rows = res.get("result", {}).get("list", [])
+                for r in rows:
+                    r_start = int(r[0])
+                    if r_start == target_ts:
+                        self.pending_bars_by_ts[target_ts][sym] = {
+                            "start": r_start,
+                            "open": float(r[1]),
+                            "high": float(r[2]),
+                            "low": float(r[3]),
+                            "close": float(r[4]),
+                            "volume": float(r[5]),
+                        }
+                        self.latest_prices[sym] = Decimal(str(r[4]))
+                        logger.info(f"REST backfilled missing candle for {sym} at {target_ts}")
+                        break
+            except Exception as e:
+                logger.warning(f"Failed REST backfill for {sym}: {e}")
+
+    def _commit_synchronized_bar(self, bar_ts: int) -> None:
+        """Commits all synchronized bars to kline history and triggers process_bar."""
+        if bar_ts <= self.last_processed_bar_ts:
+            return
+
+        bars_dict = self.pending_bars_by_ts.pop(bar_ts, {})
+        for sym, b in bars_dict.items():
+            if sym not in self.kline_history:
+                self.kline_history[sym] = []
+            self.kline_history[sym].append(b)
+            if len(self.kline_history[sym]) > 200:
+                self.kline_history[sym] = self.kline_history[sym][-200:]
+
+        self.last_processed_bar_ts = bar_ts
+        logger.info(f"Synchronized 18-symbol bar committed at {bar_ts}. Running process_bar...")
+
+        is_blackout = self.is_macro_blackout()
+        self.engine.process_bar(
+            prices_series=self.kline_history,
+            current_prices=self.latest_prices,
+            bar_ts=bar_ts,
+            macro_lockout=is_blackout,
+        )
+        self.save_persistent_state()
+        self._export_status()
 
     def is_macro_blackout(self) -> bool:
         return time.time() < self.macro_blackout_until
@@ -154,6 +272,8 @@ class PaperTraderV35Repaired:
                 with open(self.state_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 self.engine.load_state(data)
+                # Recover equity from ledger to verify conservation
+                self.engine.recover_from_ledger()
                 logger.info(f"Restored state: Equity=${self.engine.realized_equity:.2f}, Positions={len(self.engine.open_positions)}")
             except Exception as e:
                 logger.error(f"Failed to load persistent state from {self.state_file}: {e}")
@@ -173,8 +293,8 @@ class PaperTraderV35Repaired:
             active_longs = sum(1 for p in self.engine.open_positions.values() if p.direction == 1)
             active_shorts = sum(1 for p in self.engine.open_positions.values() if p.direction == -1)
 
-            # Statistical signed portfolio beta (Cov/Var relative to BTC)
-            stat_beta = self.engine.calculate_portfolio_beta(self.kline_history)
+            # Accurate time-synchronized portfolio beta
+            beta_res = self.engine.calculate_portfolio_beta(self.kline_history, self.latest_prices)
 
             status = {
                 "system": VERSION_NAME,
@@ -186,9 +306,12 @@ class PaperTraderV35Repaired:
                 "open_positions_count": len(self.engine.open_positions),
                 "active_longs": active_longs,
                 "active_shorts": active_shorts,
-                "portfolio_beta": round(float(stat_beta), 4),
+                "portfolio_beta": float(beta_res.beta) if beta_res.beta is not None else "UNKNOWN",
+                "beta_status": beta_res.status.value,
                 "closed_trades_count": len(self.engine.closed_trades),
                 "trading_halted": self.engine.trading_halted,
+                "ws_connected": self.is_ws_alive(),
+                "last_ping_ms": self.last_ping_ms,
                 "timestamp": int(time.time() * 1000),
             }
             self.last_status_cache = status

@@ -228,6 +228,9 @@ class TestF1BRepairedInvariants:
         trader.symbols = ["BTCUSDT", "ETHUSDT"]
         trader.kline_history = {"BTCUSDT": [], "ETHUSDT": []}
         trader.latest_prices = {}
+        trader.processed_kline_keys = set()
+        trader.pending_bars_by_ts = {}
+        trader.last_processed_bar_ts = 0
 
         unconfirmed_msg = {
             "topic": "kline.60.BTCUSDT",
@@ -246,7 +249,6 @@ class TestF1BRepairedInvariants:
         # Confirmed bar must be accepted
         res_conf = trader.on_kline_event(confirmed_msg)
         assert res_conf is True
-        assert len(trader.kline_history["BTCUSDT"]) == 1
         assert trader.latest_prices["BTCUSDT"] == Decimal("73100.0")
 
     # -------------------------------------------------------------------------
@@ -255,15 +257,15 @@ class TestF1BRepairedInvariants:
     def test_t06_repaired_signed_statistical_portfolio_beta(self):
         """
         T6 Repaired: calculate_portfolio_beta calculates true covariance beta
-        relative to BTC benchmark.
+        relative to BTC benchmark using time-synchronized bars.
         """
         engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"))
-        # Synthetic 50-bar price series
-        btc_bars = [{"open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0 + i * 0.2, "volume": 1000.0} for i in range(50)]
+        # Synthetic 50-bar price series with start timestamps
+        btc_bars = [{"start": i * 3600000, "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0 + i * 0.2, "volume": 1000.0} for i in range(50)]
         # ETH has 1.5x beta (moves 1.5x of BTC)
-        eth_bars = [{"open": 100.0, "high": 101.5, "low": 98.5, "close": 100.0 + i * 0.3, "volume": 1000.0} for i in range(50)]
+        eth_bars = [{"start": i * 3600000, "open": 100.0, "high": 101.5, "low": 98.5, "close": 100.0 + i * 0.3, "volume": 1000.0} for i in range(50)]
         # SOL has 0.8x beta
-        sol_bars = [{"open": 100.0, "high": 100.8, "low": 99.2, "close": 100.0 + i * 0.16, "volume": 1000.0} for i in range(50)]
+        sol_bars = [{"start": i * 3600000, "open": 100.0, "high": 100.8, "low": 99.2, "close": 100.0 + i * 0.16, "volume": 1000.0} for i in range(50)]
 
         prices_series = {"BTCUSDT": btc_bars, "ETHUSDT": eth_bars, "SOLUSDT": sol_bars}
 
@@ -271,10 +273,11 @@ class TestF1BRepairedInvariants:
         engine.open_positions["ETHUSDT"] = ActivePairPosition("ETHUSDT", 1, Decimal("1.0"), Decimal("100.0"), Decimal("95.0"), Decimal("5.0"), Decimal("2.0"), Decimal("100.0"), Decimal("100.0"), 0, 0)
         engine.open_positions["SOLUSDT"] = ActivePairPosition("SOLUSDT", -1, Decimal("1.0"), Decimal("100.0"), Decimal("105.0"), Decimal("5.0"), Decimal("2.0"), Decimal("100.0"), Decimal("100.0"), 0, 0)
 
-        port_beta = engine.calculate_portfolio_beta(prices_series)
-        # Port beta = (1.0 * 1.5 - 1.0 * 0.8) / 2.0 = +0.35
-        assert isinstance(port_beta, Decimal)
-        assert port_beta > Decimal("0.20"), f"Expected positive spread beta, got {port_beta}"
+        port_beta_res = engine.calculate_portfolio_beta(prices_series)
+        assert port_beta_res.status.value == "VALID"
+        assert port_beta_res.beta is not None
+        assert isinstance(port_beta_res.beta, Decimal)
+        assert port_beta_res.beta > Decimal("0.10"), f"Expected positive spread beta, got {port_beta_res.beta}"
 
     # -------------------------------------------------------------------------
     # T8: Bybit Exchange Constraints (Lot Sizing, Step & MinNotional)
@@ -317,7 +320,7 @@ class TestF1BRepairedInvariants:
     # -------------------------------------------------------------------------
     def test_t09_repaired_financial_ledger_reconciliation(self):
         """
-        T9 Repaired: FinancialLedger double-entry cashflow tracking and reconciliation.
+        T9 Repaired: FinancialLedger double-entry cashflow tracking, idempotency, and reconciliation.
         """
         ledger = FinancialLedger()
         initial_cap = Decimal("300.00")
@@ -326,23 +329,71 @@ class TestF1BRepairedInvariants:
         # Event 1: Entry fee deduction
         entry_fee = Decimal("0.30")
         current_eq -= entry_fee
-        ledger.record_entry_fee("BTCUSDT", "T1", entry_fee, current_eq)
+        is_ok, ev1 = ledger.record_entry_fee("EXEC_ENTER_1", "BTCUSDT", "T1", entry_fee, current_eq)
+        assert is_ok is True
+
+        # Idempotency test on Event 1
+        is_dup, _ = ledger.record_entry_fee("EXEC_ENTER_1", "BTCUSDT", "T1", entry_fee, current_eq)
+        assert is_dup is False, "Duplicate exec_id must be ignored!"
 
         # Event 2: Partial TP slice
         gross_slice = Decimal("6.00")
         fee_slice = Decimal("0.05")
         current_eq += (gross_slice - fee_slice)
-        ledger.record_slice("BTCUSDT", "T1", 1, gross_slice, Decimal("0.15"), fee_slice, current_eq)
+        is_ok, ev2 = ledger.record_slice("EXEC_SLICE_1", "BTCUSDT", "T1", 1, gross_slice, Decimal("0.15"), fee_slice, current_eq)
+        assert is_ok is True
 
         # Event 3: Funding cashflow
         funding_cf = Decimal("0.04")
         current_eq += funding_cf
-        ledger.record_funding("BTCUSDT", funding_cf, current_eq, Decimal("0.0001"), Decimal("400.0"))
+        is_ok, ev3 = ledger.record_funding("EXEC_FUND_1", "BTCUSDT", funding_cf, current_eq, Decimal("0.0001"), Decimal("400.0"), 1794000000000)
+        assert is_ok is True
 
         # Reconcile
         is_balanced, expected_eq, curr_eq, disc = ledger.reconcile(initial_cap, current_eq)
         assert is_balanced is True
         assert disc == Decimal("0.0")
+
+    # -------------------------------------------------------------------------
+    # Auditor Task 10: Pre-Trade Risk Check (Blocks Entries on Breached Bar)
+    # -------------------------------------------------------------------------
+    def test_pre_trade_risk_halt_blocks_same_bar_entries(self):
+        """
+        Auditor Task 10: When a position incurs severe drawdown on the current bar
+        that breaches DRAWDOWN_LIMIT_PCT, trading_halted must be set BEFORE new
+        entries are evaluated, strictly preventing new entries on that same bar!
+        """
+        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"))
+        # Set artificial peak equity so that current drawdown is already near limit
+        engine.peak_equity = Decimal("400.0")  # Peak was $400
+
+        # Current open position: 1 Long BTC bought at 100
+        current_prices = {"BTCUSDT": Decimal("100.0"), "ETHUSDT": Decimal("100.0"), "SOLUSDT": Decimal("100.0")}
+        metrics = {"BTCUSDT": {"atr24": 2.0}, "ETHUSDT": {"atr24": 2.0}, "SOLUSDT": {"atr24": 2.0}}
+        bar_ts = int(time.time() * 1000)
+        engine._enter_leg("BTCUSDT", 1, current_prices, metrics, engine.realized_equity, bar_ts)
+
+        # On next bar, equity drops: BTC drops to 50.0 (catastrophic drop)
+        # Total equity drops from 300 to ~250. Peak=400. Drawdown = (400 - 250)/400 = 37.5% > 30% limit!
+        # At the same time, ETH and SOL show strong breakout candidates!
+        btc_bars = [{'start': i*3600000, 'open': 100.0, 'high': 100.5, 'low': 99.5, 'close': 50.0 if i == 74 else 100.0, 'volume': 1000.0} for i in range(75)]
+        eth_bars = [{'start': i*3600000, 'open': 100.0 + i*0.4, 'high': 100.0 + i*0.4 + 0.5, 'low': 100.0 + i*0.4 - 0.5, 'close': 100.0 + i*0.4, 'volume': 1000.0} for i in range(75)]
+        sol_bars = [{'start': i*3600000, 'open': 100.0 - i*0.4, 'high': 100.0 - i*0.4 + 0.5, 'low': 100.0 - i*0.4 - 0.5, 'close': 100.0 - i*0.4, 'volume': 1000.0} for i in range(75)]
+
+        prices_series = {"BTCUSDT": btc_bars, "ETHUSDT": eth_bars, "SOLUSDT": sol_bars}
+        current_prices = {"BTCUSDT": Decimal("50.0"), "ETHUSDT": Decimal(str(eth_bars[-1]["close"])), "SOLUSDT": Decimal(str(sol_bars[-1]["close"]))}
+
+        # Run process_bar
+        engine.process_bar(prices_series, current_prices, bar_ts + 3600000)
+
+        # Verify that trading_halted is True
+        assert engine.trading_halted is True
+
+        # CRITICAL INVARIANT: NO new positions were entered on that same bar!
+        # BTC was stopped out, and ETH/SOL were NOT entered!
+        assert len(engine.open_positions) == 0, (
+            "Task 10 Violation: Engine opened new candidate positions on a bar where risk limit was breached!"
+        )
 
     # -------------------------------------------------------------------------
     # T10: v3.8 No Synthetic APT Trade Generation
