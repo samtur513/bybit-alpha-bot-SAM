@@ -26,6 +26,17 @@ class TestMutationAudit:
     Each test asserts that an injected bug MUST cause an assertion failure.
     """
 
+    @pytest.fixture(autouse=True)
+    def enable_test_verification_mode(self, monkeypatch):
+        orig_init = AlphaPairsEngineRepaired.__init__
+        def patched_init(self_engine, *args, **kwargs):
+            if "auto_verify_rules" not in kwargs:
+                kwargs["auto_verify_rules"] = True
+            if "allow_synthetic_quotes" not in kwargs:
+                kwargs["allow_synthetic_quotes"] = True
+            orig_init(self_engine, *args, **kwargs)
+        monkeypatch.setattr(AlphaPairsEngineRepaired, "__init__", patched_init)
+
     def test_mutation_01_inverted_fee_sign_is_killed(self):
         """
         Mutant 1: Inverting fee sign in net_pnl calculation (adding fees instead of subtracting).

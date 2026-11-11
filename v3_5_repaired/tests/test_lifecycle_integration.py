@@ -47,7 +47,12 @@ def test_pure_production_lifecycle_integration_with_crash_recovery():
     initial_capital = Decimal("300.00")
 
     # Instantiate engine with real SQLite WAL ledger
-    engine = AlphaPairsEngineRepaired(initial_capital=initial_capital, ledger_db_path=db_path)
+    engine = AlphaPairsEngineRepaired(
+        initial_capital=initial_capital,
+        ledger_db_path=db_path,
+        auto_verify_rules=True,
+        allow_synthetic_quotes=True,
+    )
     start_ts = int(time.time() * 1000)
 
     # -------------------------------------------------------------------------

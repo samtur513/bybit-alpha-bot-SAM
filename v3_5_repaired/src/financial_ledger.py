@@ -145,40 +145,49 @@ class FinancialLedger:
                 logger.error(f"Fault injection triggered: pre-commit failure on exec_id '{exec_id}'")
                 return False, None
 
+            conn = sqlite3.connect(self.db_path, timeout=10.0)
             try:
-                with sqlite3.connect(self.db_path, timeout=10.0) as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        """
-                        INSERT INTO financial_events (
-                            event_id, exec_id, timestamp, event_type, symbol, trade_id, direction,
-                            gross_amount, fee_amount, net_cashflow, balance_after, metadata_json
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            ev.event_id,
-                            ev.exec_id,
-                            ev.timestamp,
-                            ev.event_type,
-                            ev.symbol,
-                            ev.trade_id,
-                            ev.direction,
-                            str(ev.gross_amount),
-                            str(ev.fee_amount),
-                            str(ev.net_cashflow),
-                            str(ev.balance_after),
-                            json.dumps(ev.metadata),
-                        ),
-                    )
-                    if getattr(self, "fault_injection_during_commit", False):
-                        logger.error(f"Fault injection triggered: failure during commit on exec_id '{exec_id}'")
-                        return False, None
-                    conn.commit()
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO financial_events (
+                        event_id, exec_id, timestamp, event_type, symbol, trade_id, direction,
+                        gross_amount, fee_amount, net_cashflow, balance_after, metadata_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        ev.event_id,
+                        ev.exec_id,
+                        ev.timestamp,
+                        ev.event_type,
+                        ev.symbol,
+                        ev.trade_id,
+                        ev.direction,
+                        str(ev.gross_amount),
+                        str(ev.fee_amount),
+                        str(ev.net_cashflow),
+                        str(ev.balance_after),
+                        json.dumps(ev.metadata),
+                    ),
+                )
+                if getattr(self, "fault_injection_during_commit", False):
+                    conn.rollback()
+                    logger.error(f"Fault injection triggered: failure during commit on exec_id '{exec_id}' - explicit rollback")
+                    return False, None
+                conn.commit()
             except sqlite3.IntegrityError:
-                logger.warning(f"IntegrityError: Duplicate exec_id '{exec_id}' on SQLite insert. Rejected.")
+                conn.rollback()
+                logger.warning(f"IntegrityError: Duplicate exec_id '{exec_id}' on SQLite insert. Rolled back.")
                 return False, None
             except Exception as e:
-                logger.error(f"SQLite transaction failed for exec_id '{exec_id}': {e}. Rollback clean.")
+                conn.rollback()
+                logger.error(f"SQLite transaction failed for exec_id '{exec_id}': {e}. Rolled back.")
+                return False, None
+            finally:
+                conn.close()
+
+            if getattr(self, "fault_injection_post_commit_pre_memory", False):
+                logger.error(f"Fault injection triggered: crash post-commit pre-memory on exec_id '{exec_id}'")
                 return False, None
 
         # 2. In-Memory update ONLY on successful commit
@@ -194,6 +203,7 @@ class FinancialLedger:
         fee_amount: Decimal,
         equity_after: Decimal,
         timestamp: Optional[int] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Tuple[bool, Optional[LedgerEvent]]:
         """Deducts entry fee from realized cash."""
         return self.record_event(
@@ -207,6 +217,7 @@ class FinancialLedger:
             net_cashflow=-fee_amount,
             balance_after=equity_after,
             timestamp=timestamp,
+            metadata=metadata or {},
         )
 
     def record_slice(
@@ -220,6 +231,7 @@ class FinancialLedger:
         exit_fee_paid: Decimal,
         equity_after: Decimal,
         timestamp: Optional[int] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Tuple[bool, Optional[LedgerEvent]]:
         """
         Records partial take profit slice.
@@ -227,6 +239,12 @@ class FinancialLedger:
         """
         cash_delta = gross_pnl - exit_fee_paid
         net_analytical = gross_pnl - entry_fee_allocated - exit_fee_paid
+        meta = {
+            "entry_fee_allocated": str(entry_fee_allocated),
+            "analytical_net_pnl": str(net_analytical),
+        }
+        if metadata:
+            meta.update(metadata)
         return self.record_event(
             exec_id=exec_id,
             event_type="PARTIAL_TP_SLICE",
@@ -238,10 +256,7 @@ class FinancialLedger:
             net_cashflow=cash_delta,
             balance_after=equity_after,
             timestamp=timestamp,
-            metadata={
-                "entry_fee_allocated": str(entry_fee_allocated),
-                "analytical_net_pnl": str(net_analytical),
-            },
+            metadata=meta,
         )
 
     def record_full_close(
@@ -256,10 +271,18 @@ class FinancialLedger:
         equity_after: Decimal,
         reason: str = "STOP_LOSS",
         timestamp: Optional[int] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Tuple[bool, Optional[LedgerEvent]]:
         """Records full closure of remaining position."""
         cash_delta = gross_pnl - exit_fee_paid
         net_analytical = gross_pnl - entry_fee_allocated - exit_fee_paid
+        meta = {
+            "entry_fee_allocated": str(entry_fee_allocated),
+            "analytical_net_pnl": str(net_analytical),
+            "reason": reason,
+        }
+        if metadata:
+            meta.update(metadata)
         return self.record_event(
             exec_id=exec_id,
             event_type="FULL_CLOSE",
@@ -271,11 +294,7 @@ class FinancialLedger:
             net_cashflow=cash_delta,
             balance_after=equity_after,
             timestamp=timestamp,
-            metadata={
-                "entry_fee_allocated": str(entry_fee_allocated),
-                "analytical_net_pnl": str(net_analytical),
-                "reason": reason,
-            },
+            metadata=meta,
         )
 
     def record_emergency_unwind(
@@ -289,10 +308,18 @@ class FinancialLedger:
         exit_fee_paid: Decimal,
         equity_after: Decimal,
         timestamp: Optional[int] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Tuple[bool, Optional[LedgerEvent]]:
         """Records emergency leg unwind when counterpart leg fails."""
         cash_delta = gross_pnl - exit_fee_paid
         net_analytical = gross_pnl - entry_fee_allocated - exit_fee_paid
+        meta = {
+            "entry_fee_allocated": str(entry_fee_allocated),
+            "analytical_net_pnl": str(net_analytical),
+            "reason": "UNWIND_BROKEN_PAIR",
+        }
+        if metadata:
+            meta.update(metadata)
         return self.record_event(
             exec_id=exec_id,
             event_type="EMERGENCY_UNWIND",
@@ -304,11 +331,7 @@ class FinancialLedger:
             net_cashflow=cash_delta,
             balance_after=equity_after,
             timestamp=timestamp,
-            metadata={
-                "entry_fee_allocated": str(entry_fee_allocated),
-                "analytical_net_pnl": str(net_analytical),
-                "reason": "UNWIND_BROKEN_PAIR",
-            },
+            metadata=meta,
         )
 
     def record_funding(

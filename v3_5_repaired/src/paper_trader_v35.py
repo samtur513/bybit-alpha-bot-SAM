@@ -47,6 +47,8 @@ from v3_5_repaired.src.alpha_pairs_engine import (
     ActivePairPosition,
     BetaStatus,
     BetaResult,
+    OrderbookQuote,
+    QuoteSource,
 )
 from v3_5_repaired.src.financial_ledger import FinancialLedger
 from v3.src.bybit_client import BybitClient
@@ -110,6 +112,7 @@ class PaperTraderV35Repaired:
         self.pending_bars_by_ts: Dict[int, Dict[str, Dict[str, float]]] = {}
         self.pending_bars_first_seen: Dict[int, float] = {}
         self.last_processed_bar_ts: int = 0
+        self.live_quotes: Dict[str, OrderbookQuote] = {}
 
         self.stream: Optional[MarketStream] = None
         self.news_streamer: Optional[LiveNewsStreamer] = None
@@ -289,8 +292,9 @@ class PaperTraderV35Repaired:
         logger.info(f"Synchronized 18-symbol bar committed at {bar_ts}. Running process_bar...")
 
         is_blackout = self.is_macro_blackout()
-        orderbook_bids = {s: p * (Decimal("1.0") - Decimal("0.0002")) for s, p in self.latest_prices.items()}
-        orderbook_asks = {s: p * (Decimal("1.0") + Decimal("0.0002")) for s, p in self.latest_prices.items()}
+        # Collect verified L1 orderbook quotes (synthetic orderbook calculations strictly banned)
+        orderbook_bids = {s: q.bid for s, q in self.live_quotes.items() if q.is_valid_spread}
+        orderbook_asks = {s: q.ask for s, q in self.live_quotes.items() if q.is_valid_spread}
         self.engine.process_bar(
             prices_series=self.kline_history,
             current_prices=self.latest_prices,
@@ -302,24 +306,67 @@ class PaperTraderV35Repaired:
         self.save_persistent_state()
         self._export_status()
 
+    def check_sync_timeouts(self, now_sec: Optional[float] = None) -> List[int]:
+        """
+        Autonomous synchronization timeout handler:
+        Drops partial buffers that have exceeded BAR_SYNC_TIMEOUT_SECONDS without reaching universe count.
+        """
+        current_time = now_sec if now_sec is not None else time.time()
+        dropped_bars = []
+
+        with self.lock:
+            for start_ts, first_seen in list(self.pending_bars_first_seen.items()):
+                elapsed = current_time - first_seen
+                if elapsed > BAR_SYNC_TIMEOUT_SECONDS:
+                    symbols_arrived = list(self.pending_bars_by_ts.get(start_ts, {}).keys())
+                    logger.warning(
+                        f"Synchronization timeout for bar {start_ts} after {elapsed:.1f}s! "
+                        f"Dropping incomplete buffer ({len(symbols_arrived)}/18 symbols: {symbols_arrived})."
+                    )
+                    self.pending_bars_by_ts.pop(start_ts, None)
+                    self.pending_bars_first_seen.pop(start_ts, None)
+                    dropped_bars.append(start_ts)
+
+        return dropped_bars
+
+    def verify_kline_continuity(self, symbol: str) -> bool:
+        """
+        Verifies hourly continuity of historical candles for a symbol.
+        Returns True if all consecutive candles differ by exactly BAR_INTERVAL_MS (3600000ms).
+        """
+        history = self.kline_history.get(symbol, [])
+        if len(history) < 2:
+            return True
+
+        for i in range(1, len(history)):
+            prev_ts = int(history[i - 1]["start"])
+            curr_ts = int(history[i]["start"])
+            if curr_ts - prev_ts != BAR_INTERVAL_MS:
+                logger.error(
+                    f"Kline continuity breach for {symbol}: gap between {prev_ts} and {curr_ts} "
+                    f"(expected delta {BAR_INTERVAL_MS}ms, got {curr_ts - prev_ts}ms)"
+                )
+                return False
+        return True
+
     def is_macro_blackout(self) -> bool:
         return time.time() < self.macro_blackout_until
 
     def _load_persistent_state(self) -> None:
         with self.lock:
-            if not self.state_file.exists():
-                logger.info(f"No persistent state at {self.state_file}. Starting fresh.")
-                return
-            try:
-                with open(self.state_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                status, errors = self.engine.reconcile_and_recover(data)
-                if status == "NO_NEW_TRADES":
-                    logger.critical(f"Reconciliation error on restart: {errors}. Trading halted in NO_NEW_TRADES mode.")
-                else:
-                    logger.info(f"Restored and reconciled state: Equity=${self.engine.realized_equity:.2f}, Positions={len(self.engine.open_positions)}")
-            except Exception as e:
-                logger.error(f"Failed to load persistent state from {self.state_file}: {e}")
+            data = None
+            if self.state_file.exists():
+                try:
+                    with open(self.state_file, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                except Exception as e:
+                    logger.error(f"Failed to load persistent state from {self.state_file}: {e}")
+
+            status, errors = self.engine.reconcile_and_recover(data)
+            if status == "NO_NEW_TRADES":
+                logger.critical(f"Reconciliation error on restart: {errors}. Trading halted in NO_NEW_TRADES mode.")
+            else:
+                logger.info(f"Restored and reconciled state: Equity=${self.engine.realized_equity:.2f}, Positions={len(self.engine.open_positions)}")
 
     def save_persistent_state(self) -> None:
         with self.lock:

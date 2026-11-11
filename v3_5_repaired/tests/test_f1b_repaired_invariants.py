@@ -37,6 +37,17 @@ class TestF1BRepairedInvariants:
     Complete Verification Test Suite for Phase F1B.
     """
 
+    @pytest.fixture(autouse=True)
+    def enable_test_verification_mode(self, monkeypatch):
+        orig_init = AlphaPairsEngineRepaired.__init__
+        def patched_init(self_engine, *args, **kwargs):
+            if "auto_verify_rules" not in kwargs:
+                kwargs["auto_verify_rules"] = True
+            if "allow_synthetic_quotes" not in kwargs:
+                kwargs["allow_synthetic_quotes"] = True
+            orig_init(self_engine, *args, **kwargs)
+        monkeypatch.setattr(AlphaPairsEngineRepaired, "__init__", patched_init)
+
     # -------------------------------------------------------------------------
     # T1: Financial Ledger: Complete Entry + Exit Fee Accounting
     # -------------------------------------------------------------------------

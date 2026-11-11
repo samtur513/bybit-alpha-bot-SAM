@@ -54,7 +54,9 @@ from v3_5_repaired.src.config import (
     MAX_PORTFOLIO_BETA,
     MAX_PORTFOLIO_LEVERAGE,
     MAX_QUOTE_AGE_MS,
+    MAX_RULE_AGE_MS,
     RuleSource,
+    QuoteSource,
     RULE_SPEC_VERSION,
     RULE_STATIC_TIMESTAMP,
     BENCHMARK_SYMBOL,
@@ -63,6 +65,19 @@ from v3_5_repaired.src.config import (
 from v3_5_repaired.src.financial_ledger import FinancialLedger, LedgerEvent
 
 logger = logging.getLogger("AlphaPairsEngineRepaired")
+
+
+@dataclass
+class OrderbookQuote:
+    symbol: str
+    bid: Decimal
+    ask: Decimal
+    quote_ts: int
+    source: QuoteSource = QuoteSource.EXCHANGE_L1
+
+    @property
+    def is_valid_spread(self) -> bool:
+        return self.ask > self.bid > Decimal("0.0")
 
 
 class BetaStatus(str, Enum):
@@ -138,13 +153,13 @@ class BybitInstrumentRule:
     max_order_qty: Decimal = Decimal("100000.0")
     min_notional_value: Decimal = Decimal("5.00")
     status: str = "Trading"
-    source: RuleSource = RuleSource.STATIC_CONFIG
-    version: str = RULE_SPEC_VERSION
-    updated_at_ms: int = RULE_STATIC_TIMESTAMP
+    source: RuleSource = RuleSource.STATIC_UNVERIFIED
+    version: str = "unverified"
+    updated_at_ms: int = 0
     last_exchange_sync_ts: Optional[int] = None
     is_verified: bool = False
     verified_at_ms: Optional[int] = None
-    max_rule_age_ms: int = 86400 * 1000  # 24 hours
+    max_rule_age_ms: int = MAX_RULE_AGE_MS  # 24 hours
 
     def round_qty(self, raw_qty: Decimal) -> Decimal:
         """Floor to exact qty_step multiple using Decimal arithmetic."""
@@ -166,12 +181,20 @@ class BybitInstrumentRule:
         price: Decimal,
         current_ts: Optional[int] = None,
     ) -> Tuple[bool, Decimal, str]:
+        # Fail-closed check: verification status
+        if not self.is_verified:
+            return False, Decimal("0.0"), f"FAIL_CLOSED: Instrument rule for '{self.symbol}' is unverified"
+
+        # Fail-closed check: verified exchange sync timestamp
+        if self.last_exchange_sync_ts is None:
+            return False, Decimal("0.0"), f"FAIL_CLOSED: Instrument rule for '{self.symbol}' lacks verified exchange sync timestamp"
+
         # Fail-closed check: instrument status
         if self.status != "Trading":
             return False, Decimal("0.0"), f"FAIL_CLOSED: Instrument status '{self.status}' != 'Trading'"
 
         # Fail-closed check: live exchange rule staleness
-        if current_ts is not None and self.last_exchange_sync_ts is not None:
+        if current_ts is not None:
             if current_ts - self.last_exchange_sync_ts > self.max_rule_age_ms:
                 return False, Decimal("0.0"), f"FAIL_CLOSED: Live instrument rule for '{self.symbol}' is expired (>24h)"
 
@@ -341,6 +364,8 @@ class AlphaPairsEngineRepaired:
         min_notional: Decimal = MIN_NOTIONAL_USDT,
         max_tick_spike: Decimal = MAX_TICK_SPIKE_PCT,
         ledger_db_path: Optional[str] = None,
+        auto_verify_rules: bool = False,
+        allow_synthetic_quotes: bool = False,
     ):
         self.initial_capital = Decimal(str(initial_capital))
         self.realized_equity = Decimal(str(initial_capital))
@@ -356,6 +381,7 @@ class AlphaPairsEngineRepaired:
 
         self.trading_halted = False
         self.bar_counter = 0
+        self.allow_synthetic_quotes = allow_synthetic_quotes
 
         self.open_positions: Dict[str, ActivePairPosition] = {}
         self.closed_trades: List[ClosedPairTrade] = []
@@ -369,7 +395,7 @@ class AlphaPairsEngineRepaired:
         # Market validator
         self.market_validator = MarketDataValidator()
 
-        # Bybit instrument rules (Fail-Closed: strictly configured)
+        # Bybit instrument rules (Fail-Closed: strictly configured, initially unverified)
         self.instrument_rules: Dict[str, BybitInstrumentRule] = {}
         for sym, cfg in BYBIT_INSTRUMENT_RULES.items():
             self.instrument_rules[sym] = BybitInstrumentRule(
@@ -380,12 +406,94 @@ class AlphaPairsEngineRepaired:
                 max_order_qty=cfg["max_order_qty"],
                 min_notional_value=cfg["min_notional_value"],
                 status=cfg.get("status", "Trading"),
-                source=RuleSource.STATIC_CONFIG,
-                version=RULE_SPEC_VERSION,
-                updated_at_ms=RULE_STATIC_TIMESTAMP,
+                source=RuleSource.STATIC_UNVERIFIED,
+                version="unverified",
+                updated_at_ms=0,
                 last_exchange_sync_ts=None,
                 is_verified=False,
             )
+
+        if auto_verify_rules:
+            self.verify_instrument_rules()
+
+    def verify_from_bybit_instruments_info(
+        self,
+        api_response: Dict[str, Any],
+        sync_ts: Optional[int] = None,
+    ) -> int:
+        """
+        Parses authentic Bybit V5 /v5/market/instruments-info REST response.
+        Updates instrument rules and marks them verified with exact exchange timestamp.
+        """
+        ret_code = api_response.get("retCode")
+        if ret_code != 0 and ret_code != "0":
+            logger.error(f"Bybit instruments-info response returned error retCode={ret_code}")
+            return 0
+
+        server_time = api_response.get("time")
+        now_ts = sync_ts or (int(server_time) if server_time else int(time.time() * 1000))
+        items = api_response.get("result", {}).get("list", [])
+        verified_count = 0
+
+        for item in items:
+            sym = item.get("symbol")
+            if not sym or sym not in self.instrument_rules:
+                continue
+
+            status = item.get("status", "Trading")
+            lot_filter = item.get("lotSizeFilter", {})
+            price_filter = item.get("priceFilter", {})
+
+            try:
+                tick_size = Decimal(str(price_filter.get("tickSize", "0.01")))
+                qty_step = Decimal(str(lot_filter.get("qtyStep", "0.001")))
+                min_order_qty = Decimal(str(lot_filter.get("minOrderQty", "0.001")))
+                max_order_qty = Decimal(str(lot_filter.get("maxOrderQty", "100000.0")))
+                min_notional = Decimal(str(lot_filter.get("minNotionalValue", "5.0")))
+
+                rule = self.instrument_rules[sym]
+                rule.tick_size = tick_size
+                rule.qty_step = qty_step
+                rule.min_order_qty = min_order_qty
+                rule.max_order_qty = max_order_qty
+                rule.min_notional_value = min_notional
+                rule.status = status
+                rule.source = RuleSource.EXCHANGE_REST
+                rule.version = "bybit_v5_rest"
+                rule.updated_at_ms = now_ts
+                rule.last_exchange_sync_ts = now_ts
+                rule.is_verified = (status == "Trading")
+                rule.verified_at_ms = now_ts
+                if rule.is_verified:
+                    verified_count += 1
+            except Exception as e:
+                logger.error(f"Failed to parse Bybit instrument info for {sym}: {e}")
+
+        logger.info(f"Verified {verified_count} instrument rules from Bybit V5 REST response at {now_ts}.")
+        return verified_count
+
+    def load_historical_spec_rules(
+        self,
+        historical_rules: Dict[str, Dict[str, Any]],
+        spec_version: str,
+        spec_timestamp: int,
+    ) -> None:
+        """Loads verified historical instrument specifications with exact provenance."""
+        for sym, cfg in historical_rules.items():
+            if sym in self.instrument_rules:
+                rule = self.instrument_rules[sym]
+                rule.tick_size = Decimal(str(cfg.get("tick_size", rule.tick_size)))
+                rule.qty_step = Decimal(str(cfg.get("qty_step", rule.qty_step)))
+                rule.min_order_qty = Decimal(str(cfg.get("min_order_qty", rule.min_order_qty)))
+                rule.max_order_qty = Decimal(str(cfg.get("max_order_qty", rule.max_order_qty)))
+                rule.min_notional_value = Decimal(str(cfg.get("min_notional_value", rule.min_notional_value)))
+                rule.status = cfg.get("status", "Trading")
+                rule.source = RuleSource.HISTORICAL_SPEC
+                rule.version = spec_version
+                rule.updated_at_ms = spec_timestamp
+                rule.last_exchange_sync_ts = spec_timestamp
+                rule.is_verified = True
+                rule.verified_at_ms = spec_timestamp
 
     def verify_instrument_rules(
         self,
@@ -398,9 +506,8 @@ class AlphaPairsEngineRepaired:
             rule.source = source
             rule.is_verified = True
             rule.verified_at_ms = ts
-            if source == RuleSource.EXCHANGE_REST:
-                rule.last_exchange_sync_ts = ts
-                rule.updated_at_ms = ts
+            rule.last_exchange_sync_ts = ts
+            rule.updated_at_ms = ts
 
     def validate_order_constraints(
         self,
@@ -576,15 +683,21 @@ class AlphaPairsEngineRepaired:
         ask: Optional[Decimal] = None,
         quote_ts: Optional[int] = None,
         current_clock: Optional[int] = None,
+        quote_source: QuoteSource = QuoteSource.EXCHANGE_L1,
     ) -> bool:
         """
         Enters a single leg with:
         - Mandatory live orderbook bid/ask and freshness timestamps.
-        - Fail-closed quote and spread validation.
+        - Fail-closed quote and spread validation (synthetic quotes rejected unless explicitly enabled).
         - Direction-aware execution price (Long enters at Ask, Short at Bid).
         - Atomic FinancialLedger check: ledger commit MUST succeed before mutating realized equity or adding position.
         """
         if symbol not in metrics:
+            return False
+
+        # Fail-closed check: synthetic orderbook quotes strictly prohibited in production mode
+        if quote_source == QuoteSource.SYNTHETIC_SCENARIO and not self.allow_synthetic_quotes:
+            logger.warning(f"Rejecting {symbol} entry: synthetic orderbook quotes are prohibited in production mode")
             return False
 
         # Fail-closed market data check: Bid and Ask are STRICTLY mandatory for new entries
@@ -592,8 +705,12 @@ class AlphaPairsEngineRepaired:
             logger.warning(f"Rejecting {symbol} entry: live Bid/Ask quotes are mandatory (bid={bid}, ask={ask})")
             return False
 
+        if ask <= bid:
+            logger.warning(f"Rejecting {symbol} entry: crossed or zero spread orderbook (bid={bid}, ask={ask})")
+            return False
+
         now_clock = current_clock or int(time.time() * 1000)
-        q_ts = quote_ts or bar_ts
+        q_ts = quote_ts or now_clock
         is_valid_md, md_reason = self.market_validator.validate_entry_market_data(
             symbol=symbol, bid=bid, ask=ask, quote_ts=q_ts, current_ts=now_clock
         )
@@ -625,8 +742,20 @@ class AlphaPairsEngineRepaired:
         entry_fee = notional * self.fee_taker
         prospective_equity = self.realized_equity - entry_fee
 
-        # Atomic Financial Ledger journaling with exec_id idempotency
+        stop_price = exec_price - stop_dist if direction == 1 else exec_price + stop_dist
+
+        # Atomic Financial Ledger journaling with exec_id idempotency & rich execution metadata
         exec_id = f"EXEC_ENTER_{symbol}_{bar_ts}_{direction}"
+        metadata = {
+            "qty": str(qty),
+            "entry_price": str(exec_price),
+            "stop_price": str(stop_price),
+            "initial_risk_dist": str(stop_dist),
+            "initial_atr": str(atr),
+            "direction": direction,
+            "quote_source": quote_source.value,
+            "fill_id": f"FILL_ENTER_{symbol}_{bar_ts}",
+        }
         ok, ev = self.ledger.record_entry_fee(
             exec_id=exec_id,
             symbol=symbol,
@@ -634,6 +763,7 @@ class AlphaPairsEngineRepaired:
             fee_amount=entry_fee,
             equity_after=prospective_equity,
             timestamp=bar_ts,
+            metadata=metadata,
         )
         if not ok or ev is None:
             logger.error(f"Ledger rejected entry fee for {symbol} (exec_id={exec_id}). Aborting entry.")
@@ -680,6 +810,12 @@ class AlphaPairsEngineRepaired:
         prospective_equity = self.realized_equity + (gross_pnl - exit_fee)
 
         exec_id = f"EXEC_UNWIND_{symbol}_{bar_ts}"
+        metadata = {
+            "close_qty": str(pos.qty),
+            "close_price": str(exit_p),
+            "direction": pos.direction,
+            "fill_id": f"FILL_UNWIND_{symbol}_{bar_ts}",
+        }
         ok, ev = self.ledger.record_emergency_unwind(
             exec_id=exec_id,
             symbol=symbol,
@@ -690,6 +826,7 @@ class AlphaPairsEngineRepaired:
             exit_fee_paid=exit_fee,
             equity_after=prospective_equity,
             timestamp=bar_ts,
+            metadata=metadata,
         )
         if not ok or ev is None:
             logger.error(f"Ledger rejected unwind for {symbol} ({exec_id}). Position retained.")
@@ -893,6 +1030,14 @@ class AlphaPairsEngineRepaired:
                     prospective_equity = self.realized_equity + (tp_gross - tp_exit_fee)
 
                     exec_id = f"EXEC_PARTIAL_TP_{s}_{bar_ts}"
+                    metadata = {
+                        "slice_qty": str(tp_qty),
+                        "slice_price": str(curr_p),
+                        "remaining_qty": str(pos.qty - tp_qty),
+                        "remaining_entry_fee": str(pos.entry_fee - tp_entry_fee),
+                        "direction": direction,
+                        "fill_id": f"FILL_TP_{s}_{bar_ts}",
+                    }
                     ok, ev = self.ledger.record_slice(
                         exec_id=exec_id,
                         symbol=s,
@@ -903,6 +1048,7 @@ class AlphaPairsEngineRepaired:
                         exit_fee_paid=tp_exit_fee,
                         equity_after=prospective_equity,
                         timestamp=bar_ts,
+                        metadata=metadata,
                     )
                     if not ok or ev is None:
                         logger.error(f"Ledger rejected partial TP slice for {s} ({exec_id}). Slice aborted.")
@@ -953,6 +1099,12 @@ class AlphaPairsEngineRepaired:
                 prospective_equity = self.realized_equity + (gross_pnl - exit_fee)
 
                 exec_id = f"EXEC_STOP_LOSS_{s}_{bar_ts}"
+                metadata = {
+                    "close_qty": str(pos.qty),
+                    "close_price": str(exit_p),
+                    "direction": direction,
+                    "fill_id": f"FILL_STOP_LOSS_{s}_{bar_ts}",
+                }
                 ok, ev = self.ledger.record_full_close(
                     exec_id=exec_id,
                     symbol=s,
@@ -964,6 +1116,7 @@ class AlphaPairsEngineRepaired:
                     equity_after=prospective_equity,
                     reason="STOP_LOSS",
                     timestamp=bar_ts,
+                    metadata=metadata,
                 )
                 if not ok or ev is None:
                     logger.error(f"Ledger rejected stop loss close for {s} ({exec_id}). Position retained.")
@@ -1050,6 +1203,12 @@ class AlphaPairsEngineRepaired:
                     prospective_equity = self.realized_equity + (gross_pnl - exit_fee)
 
                     exec_id = f"EXEC_HYSTERESIS_{s}_{bar_ts}"
+                    metadata = {
+                        "close_qty": str(pos.qty),
+                        "close_price": str(exit_p),
+                        "direction": pos.direction,
+                        "fill_id": f"FILL_HYSTERESIS_{s}_{bar_ts}",
+                    }
                     ok, ev = self.ledger.record_full_close(
                         exec_id=exec_id,
                         symbol=s,
@@ -1061,6 +1220,7 @@ class AlphaPairsEngineRepaired:
                         equity_after=prospective_equity,
                         reason="HYSTERESIS_EXIT",
                         timestamp=bar_ts,
+                        metadata=metadata,
                     )
                     if not ok or ev is None:
                         logger.error(f"Ledger rejected hysteresis close for {s} ({exec_id}). Position retained.")
@@ -1344,27 +1504,92 @@ class AlphaPairsEngineRepaired:
                 )
             )
 
-    def reconcile_and_recover(self, snapshot: Dict[str, Any]) -> Tuple[str, List[str]]:
+    def reconstruct_positions_from_ledger(self) -> Dict[str, ActivePairPosition]:
+        """
+        Independently reconstructs all active open positions from the complete
+        execution and financial event journal stored in SQLite.
+        """
+        reconstructed: Dict[str, ActivePairPosition] = {}
+
+        # Events are ordered by timestamp ASC, rowid ASC
+        for ev in self.ledger.events:
+            sym = ev.symbol
+            if ev.event_type == "ENTRY_FEE":
+                meta = ev.metadata or {}
+                direction = int(meta.get("direction", ev.direction or 1))
+                qty = Decimal(str(meta.get("qty", "0.0")))
+                entry_price = Decimal(str(meta.get("entry_price", "0.0")))
+                stop_price = Decimal(str(meta.get("stop_price", "0.0")))
+                stop_dist = Decimal(str(meta.get("initial_risk_dist", "0.0")))
+                atr = Decimal(str(meta.get("initial_atr", "0.0")))
+                entry_fee = ev.fee_amount
+
+                reconstructed[sym] = ActivePairPosition(
+                    symbol=sym,
+                    direction=direction,
+                    qty=qty,
+                    entry_price=entry_price,
+                    stop_price=stop_price,
+                    initial_risk_dist=stop_dist,
+                    initial_atr=atr,
+                    highest_p=entry_price,
+                    lowest_p=entry_price,
+                    entry_bar=0,
+                    entry_ts=ev.timestamp,
+                    entry_fee=entry_fee,
+                    tp_taken=False,
+                    macro_trimmed=False,
+                )
+            elif ev.event_type == "PARTIAL_TP_SLICE":
+                if sym in reconstructed:
+                    pos = reconstructed[sym]
+                    meta = ev.metadata or {}
+                    rem_qty = Decimal(str(meta.get("remaining_qty", pos.qty * Decimal("0.5"))))
+                    rem_fee = Decimal(str(meta.get("remaining_entry_fee", pos.entry_fee * Decimal("0.5"))))
+                    pos.qty = rem_qty
+                    pos.entry_fee = rem_fee
+                    pos.tp_taken = True
+            elif ev.event_type in ("FULL_CLOSE", "EMERGENCY_UNWIND"):
+                if sym in reconstructed:
+                    del reconstructed[sym]
+
+        return reconstructed
+
+    def reconcile_and_recover(self, snapshot: Optional[Dict[str, Any]]) -> Tuple[str, List[str]]:
         """
         Cross-reconciles SQLite financial ledger with persistent snapshot state upon restart.
         Verifies:
-        - Reconstructs authoritative equity from SQLite ledger.
-        - Compares snapshot realized equity vs reconstructed equity (penny-perfect tolerance).
-        - Verifies that every active open position in snapshot has a corresponding ENTRY_FEE event in SQLite.
-        - Verifies that any position with tp_taken=True has a corresponding PARTIAL_TP_SLICE event.
-        - Verifies that position attributes (qty, entry_price, stop_price) are strictly valid.
-        - Verifies that closed trades in snapshot have corresponding close events in SQLite.
-        If ANY discrepancy or missing event is detected:
+        - Authoritative equity reconstruction from SQLite ledger.
+        - Independent position reconstruction from SQLite execution journal.
+        - Discrepancy checks across trade_id, qty, direction, entry price, entry fee, TP state.
+        - If snapshot is missing and unclosed positions exist in SQLite, strictly blocks empty start.
+        If ANY discrepancy is detected:
           Sets trading_halted = True and returns ("NO_NEW_TRADES", errors).
         If 100% clean and consistent:
           Sets realized_equity = reconstructed_equity and returns ("RECONCILED", []).
         """
         errors: List[str] = []
 
-        # 1. Authoritative SQLite Ledger Recovery
+        # 1. Authoritative SQLite Ledger Recovery & Position Reconstruction
         reconstructed_equity, event_count = self.ledger.restore_from_db(self.initial_capital)
+        ledger_positions = self.reconstruct_positions_from_ledger()
 
-        # 2. Parse Snapshot State
+        # 2. Absence of Snapshot Handling
+        if snapshot is None:
+            if ledger_positions:
+                errors.append(
+                    f"Snapshot state is missing but {len(ledger_positions)} unclosed positions "
+                    f"exist in SQLite ledger! Empty-portfolio start prohibited."
+                )
+                self.trading_halted = True
+                self.open_positions = ledger_positions
+                self.realized_equity = reconstructed_equity
+                return "NO_NEW_TRADES", errors
+            else:
+                self.realized_equity = reconstructed_equity
+                return "RECONCILED", []
+
+        # 3. Parse Snapshot State
         try:
             self.load_state(snapshot)
         except Exception as e:
@@ -1372,7 +1597,7 @@ class AlphaPairsEngineRepaired:
             self.trading_halted = True
             return "NO_NEW_TRADES", errors
 
-        # 3. Penny-perfect Equity Reconciliation
+        # 4. Penny-perfect Equity Reconciliation
         equity_diff = abs(self.realized_equity - reconstructed_equity)
         if equity_diff > Decimal("0.0001"):
             errors.append(
@@ -1380,34 +1605,59 @@ class AlphaPairsEngineRepaired:
                 f"SQLite Ledger=${reconstructed_equity:.4f} (diff=${equity_diff:.4f})"
             )
 
-        # 4. Open Positions Integrity vs Ledger Events
-        for s, pos in list(self.open_positions.items()):
-            # Must have an entry event in SQLite
-            enter_events = [
-                e for e in self.ledger.events
-                if e.symbol == s and e.event_type == "ENTRY_FEE"
-            ]
-            if not enter_events:
-                errors.append(f"Open position {s} lacks corresponding ENTRY_FEE event in SQLite ledger journal!")
+        # 5. Independent Position Verification: Snapshot vs Reconstructed Ledger Positions
+        if len(self.open_positions) != len(ledger_positions):
+            errors.append(
+                f"Open position count mismatch: Snapshot has {len(self.open_positions)} vs "
+                f"SQLite Ledger has {len(ledger_positions)}"
+            )
 
-            # If TP slice taken, must have a PARTIAL_TP_SLICE event
-            if pos.tp_taken:
-                tp_events = [
-                    e for e in self.ledger.events
-                    if e.symbol == s and e.event_type == "PARTIAL_TP_SLICE"
-                ]
-                if not tp_events:
-                    errors.append(f"Open position {s} has tp_taken=True but lacks PARTIAL_TP_SLICE event in SQLite!")
+        for s, snap_pos in self.open_positions.items():
+            if s not in ledger_positions:
+                errors.append(f"Open position {s} in snapshot does not exist in SQLite ledger journal!")
+                continue
 
-            # Price & stop sanity
-            if pos.qty <= Decimal("0.0"):
-                errors.append(f"Open position {s} has non-positive quantity: {pos.qty}")
-            if pos.entry_price <= Decimal("0.0"):
-                errors.append(f"Open position {s} has non-positive entry_price: {pos.entry_price}")
-            if pos.stop_price <= Decimal("0.0"):
-                errors.append(f"Open position {s} has non-positive stop_price: {pos.stop_price}")
+            leg_pos = ledger_positions[s]
 
-        # 5. Closed Trades Integrity vs Ledger Events
+            # Detailed attribute cross-reconciliation
+            qty_diff = abs(snap_pos.qty - leg_pos.qty)
+            if qty_diff > Decimal("1e-8"):
+                errors.append(
+                    f"Position quantity mismatch for {s}: Snapshot={snap_pos.qty} vs "
+                    f"SQLite Ledger={leg_pos.qty} (diff={qty_diff})"
+                )
+
+            if snap_pos.direction != leg_pos.direction:
+                errors.append(
+                    f"Position direction mismatch for {s}: Snapshot={snap_pos.direction} vs "
+                    f"SQLite Ledger={leg_pos.direction}"
+                )
+
+            price_diff = abs(snap_pos.entry_price - leg_pos.entry_price)
+            if price_diff > Decimal("1e-6"):
+                errors.append(
+                    f"Position entry_price mismatch for {s}: Snapshot={snap_pos.entry_price} vs "
+                    f"SQLite Ledger={leg_pos.entry_price}"
+                )
+
+            fee_diff = abs(snap_pos.entry_fee - leg_pos.entry_fee)
+            if fee_diff > Decimal("1e-6"):
+                errors.append(
+                    f"Position entry_fee mismatch for {s}: Snapshot={snap_pos.entry_fee} vs "
+                    f"SQLite Ledger={leg_pos.entry_fee}"
+                )
+
+            if snap_pos.tp_taken != leg_pos.tp_taken:
+                errors.append(
+                    f"Position tp_taken state mismatch for {s}: Snapshot={snap_pos.tp_taken} vs "
+                    f"SQLite Ledger={leg_pos.tp_taken}"
+                )
+
+        for s in ledger_positions:
+            if s not in self.open_positions:
+                errors.append(f"Unclosed position {s} in SQLite ledger is missing from persistent snapshot!")
+
+        # 6. Closed Trades Integrity vs Ledger Events
         for trade in self.closed_trades:
             close_events = [
                 e for e in self.ledger.events

@@ -28,6 +28,17 @@ class TestProductionMutationAudit:
     are strictly killed by invariant checks.
     """
 
+    @pytest.fixture(autouse=True)
+    def enable_test_verification_mode(self, monkeypatch):
+        orig_init = AlphaPairsEngineRepaired.__init__
+        def patched_init(self_engine, *args, **kwargs):
+            if "auto_verify_rules" not in kwargs:
+                kwargs["auto_verify_rules"] = True
+            if "allow_synthetic_quotes" not in kwargs:
+                kwargs["allow_synthetic_quotes"] = True
+            orig_init(self_engine, *args, **kwargs)
+        monkeypatch.setattr(AlphaPairsEngineRepaired, "__init__", patched_init)
+
     def test_production_mutant_01_omitted_entry_fee_killed(self, monkeypatch):
         """
         Mutant 1: In _enter_leg, comment out equity reduction (fee omission defect from v3.5).

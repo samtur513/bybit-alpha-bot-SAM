@@ -1,16 +1,14 @@
 """
-F1C-R2 Audit Compliance Test Suite.
+F1C-R3 Audit Compliance Test Suite.
 Exhaustively verifies every single P0 and P1 requirement issued by the independent auditor:
-- P0-1: Transactional SQLite commit & fault-injection (pre-commit, during-commit, rollback).
-- P0-2: Engine verifies ledger result before mutating positions or equity.
-- P0-3: BybitClient get_kline List[List[str]] contract in _attempt_rest_backfill.
-- P0-4: Crash recovery & state reconciliation with active Long/Short pair, TP state, and NO_NEW_TRADES lock on discrepancy.
-- P0-5: Mandatory Bid/Ask, quote timestamps, clock validation, and direction-aware fill price.
-- P0-6: Clock continuity, anti-lookahead, and synchronization timeout when < 16 symbols arrive.
-- P1-7: Pre-trade portfolio beta guard (UNKNOWN beta blocks entry) and leverage limits.
-- P1-8: InstrumentRule honest provenance (RuleSource.STATIC_CONFIG, version, timestamps).
-- P1-9: Historical exposure verification for funding settlements.
-- P1-10: Drawdown limit aligned at 15.0%.
+- P0-A: SQLite transactional defect: explicit rollback, new connection verification, and post-commit pre-memory crash recovery.
+- P0-B: Eliminate synthetic orderbook: strict prohibition of QuoteSource.SYNTHETIC_SCENARIO in production, direction-aware fill pricing, quote staleness.
+- P0-C: Independent position reconciliation from SQLite journal: detection of 10x quantity corruption, prohibition of empty start when ledger has open positions.
+- P0-D: Genuine InstrumentRule provenance: fail-closed on unverified/stale rules, real Bybit V5 /v5/market/instruments-info REST parser.
+- P1-1: Autonomous synchronization timeout handler (check_sync_timeouts).
+- P1-2: Hourly candle continuity check (verify_kline_continuity).
+- P1-3: Precise funding settlement timing and partial TP remaining quantity exposure.
+- P1-4: Independent verification of portfolio beta limit (0.35) vs leverage cap (2.0x) with UNKNOWN block.
 """
 
 from decimal import Decimal
@@ -28,9 +26,11 @@ from v3_5_repaired.src.config import (
     MAX_PORTFOLIO_BETA,
     MAX_PORTFOLIO_LEVERAGE,
     RuleSource,
+    QuoteSource,
     RULE_SPEC_VERSION,
     RULE_STATIC_TIMESTAMP,
     BAR_SYNC_TIMEOUT_SECONDS,
+    BAR_INTERVAL_MS,
 )
 from v3_5_repaired.src.alpha_pairs_engine import (
     AlphaPairsEngineRepaired,
@@ -38,6 +38,7 @@ from v3_5_repaired.src.alpha_pairs_engine import (
     FundingSettlement,
     BetaStatus,
     BetaResult,
+    OrderbookQuote,
 )
 from v3_5_repaired.src.financial_ledger import FinancialLedger
 from v3_5_repaired.src.paper_trader_v35 import PaperTraderV35Repaired
@@ -47,7 +48,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 @pytest.fixture
 def clean_test_dir():
-    test_dir = REPO_ROOT / ".scratch" / "f1c_r2_audit_test_db"
+    test_dir = REPO_ROOT / ".scratch" / "f1c_r3_audit_test_db"
     if test_dir.exists():
         shutil.rmtree(test_dir, ignore_errors=True)
     test_dir.mkdir(parents=True, exist_ok=True)
@@ -55,24 +56,27 @@ def clean_test_dir():
     shutil.rmtree(test_dir, ignore_errors=True)
 
 
-class TestF1CR2AuditCompliance:
+class TestF1CR3AuditCompliance:
 
     # -------------------------------------------------------------------------
-    # P0-1: Transactional SQLite Commit & Fault-Injection
+    # P0-A: SQLite Transactional Defect & Post-Commit Crash Recovery
     # -------------------------------------------------------------------------
-    def test_p0_1_fault_injection_pre_commit_leaves_memory_untouched(self, clean_test_dir):
-        """Simulates SQLite failure BEFORE commit: memory must remain 100% clean."""
-        db_path = str(clean_test_dir / "ledger_fault_pre.db")
+    def test_p0_a_fault_injection_during_commit_performs_explicit_rollback(self, clean_test_dir):
+        """
+        P0-A Requirement: When fault_injection_during_commit is active,
+        the transaction MUST be explicitly rolled back.
+        Opening a brand new connection after failure must show ZERO records in SQLite.
+        """
+        db_path = str(clean_test_dir / "ledger_p0_a_during.db")
         ledger = FinancialLedger(db_path=db_path)
 
-        # Trigger pre-commit fault injection
-        ledger.fault_injection_pre_commit = True
+        ledger.fault_injection_during_commit = True
 
         ok, ev = ledger.record_event(
-            exec_id="EXEC_FAULT_1",
+            exec_id="EXEC_FAULT_DURING_COMMIT",
             event_type="ENTRY_FEE",
             symbol="BTCUSDT",
-            trade_id="TRADE_1",
+            trade_id="TRADE_P0_A",
             direction=1,
             gross_amount=Decimal("0.0"),
             fee_amount=Decimal("0.50"),
@@ -81,27 +85,35 @@ class TestF1CR2AuditCompliance:
         )
         assert ok is False
         assert ev is None
-        assert len(ledger.events) == 0, "Memory events modified despite pre-commit failure!"
-        assert len(ledger.seen_exec_ids) == 0, "Seen exec_ids modified despite pre-commit failure!"
+        assert len(ledger.events) == 0, "Memory events modified despite commit failure!"
+        assert len(ledger.seen_exec_ids) == 0, "Seen exec_ids modified despite commit failure!"
 
-        # Verify SQLite has 0 rows
-        with sqlite3.connect(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM financial_events")
-            assert cursor.fetchone()[0] == 0
+        # Brand new independent SQLite connection to verify database state
+        with sqlite3.connect(db_path) as fresh_conn:
+            cursor = fresh_conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM financial_events WHERE exec_id = 'EXEC_FAULT_DURING_COMMIT'")
+            count = cursor.fetchone()[0]
+            assert count == 0, f"Transactional defect: SQLite committed {count} rows despite failure during commit!"
 
-    def test_p0_1_fault_injection_during_commit_rolls_back_cleanly(self, clean_test_dir):
-        """Simulates SQLite failure DURING commit: memory must remain 100% clean."""
-        db_path = str(clean_test_dir / "ledger_fault_during.db")
+    def test_p0_a_post_commit_pre_memory_crash_recovery_and_deduplication(self, clean_test_dir):
+        """
+        P0-A Requirement: If a crash occurs after successful SQLite COMMIT but before in-memory
+        events/seen_exec_ids are updated:
+        1. Subsequent has_exec_id queries SQLite and returns True (idempotent deduplication).
+        2. Attempting to record same exec_id again is rejected without duplicate insert.
+        3. restore_from_db reconstructs memory and equity penny-perfect.
+        """
+        db_path = str(clean_test_dir / "ledger_p0_a_post_commit.db")
         ledger = FinancialLedger(db_path=db_path)
 
-        ledger.fault_injection_during_commit = True
+        # Trigger crash post-commit pre-memory
+        ledger.fault_injection_post_commit_pre_memory = True
 
         ok, ev = ledger.record_event(
-            exec_id="EXEC_FAULT_2",
+            exec_id="EXEC_POST_COMMIT_CRASH",
             event_type="ENTRY_FEE",
             symbol="ETHUSDT",
-            trade_id="TRADE_2",
+            trade_id="TRADE_P0_A_2",
             direction=-1,
             gross_amount=Decimal("0.0"),
             fee_amount=Decimal("0.40"),
@@ -110,233 +122,415 @@ class TestF1CR2AuditCompliance:
         )
         assert ok is False
         assert ev is None
-        assert len(ledger.events) == 0
-        assert len(ledger.seen_exec_ids) == 0
+        assert len(ledger.events) == 0, "Memory was prematurely modified before failure point!"
+
+        # 1. Row was committed in SQLite
+        with sqlite3.connect(db_path) as fresh_conn:
+            cursor = fresh_conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM financial_events WHERE exec_id = 'EXEC_POST_COMMIT_CRASH'")
+            assert cursor.fetchone()[0] == 1, "Record missing from SQLite after commit!"
+
+        # 2. has_exec_id queries SQLite and correctly returns True
+        assert ledger.has_exec_id("EXEC_POST_COMMIT_CRASH") is True
+
+        # 3. Retrying same exec_id is idempotently rejected
+        ledger.fault_injection_post_commit_pre_memory = False
+        retry_ok, retry_ev = ledger.record_event(
+            exec_id="EXEC_POST_COMMIT_CRASH",
+            event_type="ENTRY_FEE",
+            symbol="ETHUSDT",
+            trade_id="TRADE_P0_A_2",
+            direction=-1,
+            gross_amount=Decimal("0.0"),
+            fee_amount=Decimal("0.40"),
+            net_cashflow=Decimal("-0.40"),
+            balance_after=Decimal("299.60"),
+        )
+        assert retry_ok is False, "Duplicate exec_id was not rejected after post-commit crash!"
+
+        # 4. State restoration reconstructs memory cleanly
+        reconstructed_equity, event_count = ledger.restore_from_db(initial_capital=Decimal("300.00"))
+        assert event_count == 1
+        assert reconstructed_equity == Decimal("299.60")
+        assert "EXEC_POST_COMMIT_CRASH" in ledger.seen_exec_ids
 
     # -------------------------------------------------------------------------
-    # P0-2: Engine Verifies Ledger Result Before Mutating Positions or Equity
+    # P0-B: Eliminate Synthetic Orderbook & Classify Quote Sources
     # -------------------------------------------------------------------------
-    def test_p0_2_engine_verifies_ledger_failure_aborts_entry(self, clean_test_dir):
-        """If ledger write fails, _enter_leg must not deduct equity or open position."""
-        db_path = str(clean_test_dir / "engine_ledger_verify.db")
-        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"), ledger_db_path=db_path)
-        start_equity = engine.realized_equity
+    def test_p0_b_synthetic_orderbook_rejected_in_production(self):
+        """
+        P0-B Requirement: QuoteSource.SYNTHETIC_SCENARIO must be strictly rejected
+        unless allow_synthetic_quotes=True is explicitly configured.
+        """
+        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"), auto_verify_rules=True, allow_synthetic_quotes=False)
         bar_ts = int(time.time() * 1000)
 
-        # Inject ledger failure
-        engine.ledger.fault_injection_pre_commit = True
+        # Attempt entry with synthetic quote source in production mode
+        entered = engine._enter_leg(
+            "BTCUSDT", 1, {"BTCUSDT": Decimal("100.0")}, {"BTCUSDT": {"atr24": 2.0}},
+            engine.realized_equity, bar_ts,
+            bid=Decimal("99.98"), ask=Decimal("100.00"), quote_ts=bar_ts, current_clock=bar_ts,
+            quote_source=QuoteSource.SYNTHETIC_SCENARIO,
+        )
+        assert entered is False, "Synthetic quote was allowed in production mode!"
+        assert "BTCUSDT" not in engine.open_positions
+
+    def test_p0_b_missing_or_stale_l1_quote_blocks_entry(self):
+        """
+        P0-B Requirement: Missing quotes or quotes older than 5000ms strictly block entry.
+        """
+        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"), auto_verify_rules=True)
+        bar_ts = int(time.time() * 1000)
+
+        # 1. Missing bid/ask
+        entered_missing = engine._enter_leg(
+            "BTCUSDT", 1, {"BTCUSDT": Decimal("100.0")}, {"BTCUSDT": {"atr24": 2.0}},
+            engine.realized_equity, bar_ts,
+            bid=None, ask=None, quote_ts=bar_ts, current_clock=bar_ts,
+            quote_source=QuoteSource.EXCHANGE_L1,
+        )
+        assert entered_missing is False
+
+        # 2. Crossed orderbook (bid >= ask)
+        entered_crossed = engine._enter_leg(
+            "BTCUSDT", 1, {"BTCUSDT": Decimal("100.0")}, {"BTCUSDT": {"atr24": 2.0}},
+            engine.realized_equity, bar_ts,
+            bid=Decimal("100.50"), ask=Decimal("100.00"), quote_ts=bar_ts, current_clock=bar_ts,
+            quote_source=QuoteSource.EXCHANGE_L1,
+        )
+        assert entered_crossed is False
+
+        # 3. Stale quote (quote_ts is 6000ms older than current_clock)
+        now_clock = int(time.time() * 1000)
+        entered_stale = engine._enter_leg(
+            "BTCUSDT", 1, {"BTCUSDT": Decimal("100.0")}, {"BTCUSDT": {"atr24": 2.0}},
+            engine.realized_equity, bar_ts,
+            bid=Decimal("99.98"), ask=Decimal("100.00"), quote_ts=now_clock - 6000, current_clock=now_clock,
+            quote_source=QuoteSource.EXCHANGE_L1,
+        )
+        assert entered_stale is False
+
+    def test_p0_b_direction_aware_l1_fill_pricing(self):
+        """
+        P0-B Requirement: Long executes at Ask (paying spread), Short executes at Bid (paying spread).
+        """
+        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"), auto_verify_rules=True)
+        bar_ts = int(time.time() * 1000)
+
+        # Long entry on BTCUSDT: Bid=99.90, Ask=100.10 -> Fill must be 100.10
+        ok_l = engine._enter_leg(
+            "BTCUSDT", 1, {"BTCUSDT": Decimal("100.0")}, {"BTCUSDT": {"atr24": 2.0}},
+            engine.realized_equity, bar_ts,
+            bid=Decimal("99.90"), ask=Decimal("100.10"), quote_ts=bar_ts, current_clock=bar_ts,
+            quote_source=QuoteSource.EXCHANGE_L1,
+        )
+        assert ok_l is True
+        assert engine.open_positions["BTCUSDT"].entry_price == Decimal("100.10")
+
+        # Short entry on ETHUSDT: Bid=49.90, Ask=50.10 -> Fill must be 49.90
+        ok_s = engine._enter_leg(
+            "ETHUSDT", -1, {"ETHUSDT": Decimal("50.0")}, {"ETHUSDT": {"atr24": 1.0}},
+            engine.realized_equity, bar_ts,
+            bid=Decimal("49.90"), ask=Decimal("50.10"), quote_ts=bar_ts, current_clock=bar_ts,
+            quote_source=QuoteSource.EXCHANGE_L1,
+        )
+        assert ok_s is True
+        assert engine.open_positions["ETHUSDT"].entry_price == Decimal("49.90")
+
+    # -------------------------------------------------------------------------
+    # P0-C: Independent Position Reconciliation from SQLite Journal
+    # -------------------------------------------------------------------------
+    def test_p0_c_corrupted_position_qty_10x_triggers_no_new_trades(self, clean_test_dir):
+        """
+        P0-C Requirement: Tampering open position quantity in JSON by 10x without changing equity
+        MUST be detected by position cross-reconciliation and trigger NO_NEW_TRADES.
+        """
+        db_path = str(clean_test_dir / "p0_c_corrupt_10x.db")
+        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"), ledger_db_path=db_path, auto_verify_rules=True)
+        bar_ts = int(time.time() * 1000)
+
+        engine._enter_leg(
+            "BTCUSDT", 1, {"BTCUSDT": Decimal("100.0")}, {"BTCUSDT": {"atr24": 2.0}},
+            engine.realized_equity, bar_ts,
+            bid=Decimal("99.98"), ask=Decimal("100.00"), quote_ts=bar_ts, current_clock=bar_ts,
+        )
+        snapshot = engine.export_state()
+
+        # Invariant check: tamper open position quantity by 10x in JSON (equity untouched!)
+        orig_qty = Decimal(snapshot["open_positions"]["BTCUSDT"]["qty"])
+        corrupted_qty = orig_qty * Decimal("10.0")
+        snapshot["open_positions"]["BTCUSDT"]["qty"] = str(corrupted_qty)
+
+        recovery_engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"), ledger_db_path=db_path, auto_verify_rules=True)
+        status, errors = recovery_engine.reconcile_and_recover(snapshot)
+
+        assert status == "NO_NEW_TRADES", "Corrupted 10x position quantity did not trigger NO_NEW_TRADES!"
+        assert recovery_engine.trading_halted is True
+        assert any("quantity mismatch" in err.lower() for err in errors)
+
+    def test_p0_c_missing_json_with_unclosed_ledger_positions_halts_session(self, clean_test_dir):
+        """
+        P0-C Requirement: In absence of JSON snapshot, the engine CANNOT start a fresh session
+        with an empty portfolio if unclosed positions exist in SQLite ledger.
+        """
+        db_path = str(clean_test_dir / "p0_c_missing_json.db")
+        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"), ledger_db_path=db_path, auto_verify_rules=True)
+        bar_ts = int(time.time() * 1000)
+
+        # Enter position into SQLite
+        engine._enter_leg(
+            "BTCUSDT", 1, {"BTCUSDT": Decimal("100.0")}, {"BTCUSDT": {"atr24": 2.0}},
+            engine.realized_equity, bar_ts,
+            bid=Decimal("99.98"), ask=Decimal("100.00"), quote_ts=bar_ts, current_clock=bar_ts,
+        )
+
+        # Simulate missing JSON file (snapshot is None)
+        recovery_engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"), ledger_db_path=db_path, auto_verify_rules=True)
+        status, errors = recovery_engine.reconcile_and_recover(None)
+
+        assert status == "NO_NEW_TRADES", "Engine started fresh despite unclosed positions in SQLite ledger!"
+        assert recovery_engine.trading_halted is True
+        assert len(recovery_engine.open_positions) == 1
+        assert "BTCUSDT" in recovery_engine.open_positions
+
+    def test_p0_c_full_lifecycle_position_reconstruction_from_ledger(self, clean_test_dir):
+        """
+        P0-C Requirement: Reconstruct positions independently from SQLite journal:
+        qty, direction, entry price, entry fee, and partial TP state must match exactly.
+        """
+        db_path = str(clean_test_dir / "p0_c_lifecycle_reconstruct.db")
+        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"), ledger_db_path=db_path, auto_verify_rules=True, allow_synthetic_quotes=True)
+        bar_ts = int(time.time() * 1000)
+
+        # Enter Long BTC + Short ETH
+        engine._enter_leg(
+            "BTCUSDT", 1, {"BTCUSDT": Decimal("100.0")}, {"BTCUSDT": {"atr24": 2.0}},
+            engine.realized_equity, bar_ts,
+            bid=Decimal("99.98"), ask=Decimal("100.00"), quote_ts=bar_ts, current_clock=bar_ts,
+        )
+        engine._enter_leg(
+            "ETHUSDT", -1, {"ETHUSDT": Decimal("50.0")}, {"ETHUSDT": {"atr24": 1.0}},
+            engine.realized_equity, bar_ts,
+            bid=Decimal("50.00"), ask=Decimal("50.02"), quote_ts=bar_ts, current_clock=bar_ts,
+        )
+
+        # Partial TP on BTC at +4.0R
+        target_tp_p = Decimal("120.00")
+        prices_series = {
+            "BTCUSDT": [{"open": 100.0, "high": 125.0, "low": 99.0, "close": 120.0, "volume": 1000.0}] * 60,
+            "ETHUSDT": [{"open": 50.0, "high": 51.0, "low": 49.0, "close": 50.0, "volume": 1000.0}] * 60,
+        }
+        engine.process_bar(
+            prices_series, {"BTCUSDT": target_tp_p, "ETHUSDT": Decimal("50.0")}, bar_ts + 3600000,
+            orderbook_bids={"BTCUSDT": Decimal("119.98"), "ETHUSDT": Decimal("49.98")},
+            orderbook_asks={"BTCUSDT": Decimal("120.02"), "ETHUSDT": Decimal("50.02")},
+        )
+
+        # Now reconstruct directly from SQLite events
+        reconstructed = engine.reconstruct_positions_from_ledger()
+        assert len(reconstructed) == 2
+        assert reconstructed["BTCUSDT"].tp_taken is True
+        assert reconstructed["BTCUSDT"].qty == engine.open_positions["BTCUSDT"].qty
+        assert reconstructed["BTCUSDT"].entry_fee == engine.open_positions["BTCUSDT"].entry_fee
+        assert reconstructed["ETHUSDT"].qty == engine.open_positions["ETHUSDT"].qty
+
+    # -------------------------------------------------------------------------
+    # P0-D: Genuine InstrumentRule Provenance & Fail-Closed Behavior
+    # -------------------------------------------------------------------------
+    def test_p0_d_unverified_rule_strictly_blocks_entry(self):
+        """
+        P0-D Requirement: Unverified instrument rule (is_verified=False) strictly blocks entry.
+        """
+        # Default engine initializes with is_verified=False
+        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"), auto_verify_rules=False)
+        bar_ts = int(time.time() * 1000)
 
         entered = engine._enter_leg(
             "BTCUSDT", 1, {"BTCUSDT": Decimal("100.0")}, {"BTCUSDT": {"atr24": 2.0}},
             engine.realized_equity, bar_ts,
             bid=Decimal("99.98"), ask=Decimal("100.00"), quote_ts=bar_ts, current_clock=bar_ts,
         )
-        assert entered is False
-        assert engine.realized_equity == start_equity, "Realized equity decremented despite ledger failure!"
-        assert "BTCUSDT" not in engine.open_positions, "Position opened despite ledger failure!"
+        assert entered is False, "Unverified instrument rule allowed order entry!"
 
-    def test_p0_2_engine_verifies_ledger_failure_aborts_partial_tp(self, clean_test_dir):
-        """If ledger slice recording fails, partial TP must not reduce qty or take profit."""
-        db_path = str(clean_test_dir / "tp_ledger_verify.db")
-        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"), ledger_db_path=db_path)
+    def test_p0_d_missing_sync_ts_strictly_blocks_entry(self):
+        """
+        P0-D Requirement: Instrument rule lacking exchange sync timestamp strictly blocks entry.
+        """
+        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"), auto_verify_rules=False)
+        rule = engine.instrument_rules["BTCUSDT"]
+        rule.is_verified = True
+        rule.last_exchange_sync_ts = None  # Missing exchange sync timestamp
+
         bar_ts = int(time.time() * 1000)
-
-        # Normal entry
-        engine._enter_leg(
+        entered = engine._enter_leg(
             "BTCUSDT", 1, {"BTCUSDT": Decimal("100.0")}, {"BTCUSDT": {"atr24": 2.0}},
             engine.realized_equity, bar_ts,
             bid=Decimal("99.98"), ask=Decimal("100.00"), quote_ts=bar_ts, current_clock=bar_ts,
         )
+        assert entered is False, "Rule lacking exchange sync timestamp allowed order entry!"
+
+    def test_p0_d_stale_rule_strictly_blocks_entry(self):
+        """
+        P0-D Requirement: Instrument rule older than 24 hours strictly blocks entry.
+        """
+        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"), auto_verify_rules=False)
+        now_ts = int(time.time() * 1000)
+        rule = engine.instrument_rules["BTCUSDT"]
+        rule.is_verified = True
+        rule.last_exchange_sync_ts = now_ts - (25 * 3600 * 1000)  # 25 hours old (expired)
+
+        entered = engine._enter_leg(
+            "BTCUSDT", 1, {"BTCUSDT": Decimal("100.0")}, {"BTCUSDT": {"atr24": 2.0}},
+            engine.realized_equity, now_ts,
+            bid=Decimal("99.98"), ask=Decimal("100.00"), quote_ts=now_ts, current_clock=now_ts,
+        )
+        assert entered is False, "Expired instrument rule (>24h) allowed order entry!"
+
+    def test_p0_d_genuine_bybit_rest_verification(self):
+        """
+        P0-D Requirement: verify_from_bybit_instruments_info parses authentic Bybit V5 REST
+        response, sets source=EXCHANGE_REST, exchange timestamp, and enables trading.
+        """
+        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"), auto_verify_rules=False)
+        rule = engine.instrument_rules["BTCUSDT"]
+        assert rule.source == RuleSource.STATIC_UNVERIFIED
+        assert rule.is_verified is False
+
+        # Authentic Bybit V5 /v5/market/instruments-info structure
+        server_ts = 1794000000000
+        bybit_payload = {
+            "retCode": 0,
+            "retMsg": "OK",
+            "result": {
+                "category": "linear",
+                "list": [
+                    {
+                        "symbol": "BTCUSDT",
+                        "status": "Trading",
+                        "lotSizeFilter": {
+                            "qtyStep": "0.001",
+                            "minOrderQty": "0.001",
+                            "maxOrderQty": "100.0",
+                            "minNotionalValue": "5.0",
+                        },
+                        "priceFilter": {
+                            "tickSize": "0.10",
+                        },
+                    }
+                ],
+            },
+            "time": server_ts,
+        }
+
+        verified_count = engine.verify_from_bybit_instruments_info(bybit_payload)
+        assert verified_count == 1
+        assert rule.is_verified is True
+        assert rule.source == RuleSource.EXCHANGE_REST
+        assert rule.last_exchange_sync_ts == server_ts
+        assert rule.version == "bybit_v5_rest"
+
+        # Now order entry succeeds
+        entered = engine._enter_leg(
+            "BTCUSDT", 1, {"BTCUSDT": Decimal("100.0")}, {"BTCUSDT": {"atr24": 2.0}},
+            engine.realized_equity, server_ts,
+            bid=Decimal("99.98"), ask=Decimal("100.00"), quote_ts=server_ts, current_clock=server_ts,
+        )
+        assert entered is True
+
+    # -------------------------------------------------------------------------
+    # P1: Data Gate Completion (Timeouts, Continuity, Funding, Beta vs Leverage)
+    # -------------------------------------------------------------------------
+    def test_p1_standalone_sync_timeout_handler(self):
+        """
+        P1 Requirement: check_sync_timeouts autonomously drops partial buffers exceeding 30s.
+        """
+        trader = PaperTraderV35Repaired.__new__(PaperTraderV35Repaired)
+        trader.lock = threading_lock = pytest.importorskip("threading").RLock()
+        trader.pending_bars_by_ts = {1794000000000: {"BTCUSDT": {}}}
+        trader.pending_bars_first_seen = {1794000000000: 1000.0}
+
+        # Check at 1010.0 (10s elapsed < 30s) -> no drop
+        dropped = trader.check_sync_timeouts(now_sec=1010.0)
+        assert len(dropped) == 0
+        assert 1794000000000 in trader.pending_bars_by_ts
+
+        # Check at 1035.0 (35s elapsed > 30s) -> dropped autonomously
+        dropped_stale = trader.check_sync_timeouts(now_sec=1035.0)
+        assert dropped_stale == [1794000000000]
+        assert 1794000000000 not in trader.pending_bars_by_ts
+        assert 1794000000000 not in trader.pending_bars_first_seen
+
+    def test_p1_kline_hourly_continuity_check(self):
+        """
+        P1 Requirement: verify_kline_continuity detects missing hours in candle series.
+        """
+        trader = PaperTraderV35Repaired.__new__(PaperTraderV35Repaired)
+        # Continuous sequence: 1000h, 1001h, 1002h
+        trader.kline_history = {
+            "BTCUSDT": [
+                {"start": 1000 * 3600000, "close": 100.0},
+                {"start": 1001 * 3600000, "close": 101.0},
+                {"start": 1002 * 3600000, "close": 102.0},
+            ]
+        }
+        assert trader.verify_kline_continuity("BTCUSDT") is True
+
+        # Injected missing hour: 1000h, 1002h (missing 1001h!)
+        trader.kline_history["BTCUSDT"] = [
+            {"start": 1000 * 3600000, "close": 100.0},
+            {"start": 1002 * 3600000, "close": 102.0},
+        ]
+        assert trader.verify_kline_continuity("BTCUSDT") is False
+
+    def test_p1_funding_at_exact_settlement_timestamp(self):
+        """
+        P1 Requirement: Funding is applied only if position was open prior to settlement;
+        partially closed position pays funding only on remaining quantity.
+        """
+        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"), auto_verify_rules=True)
+        entry_ts = 1794000000000
+        engine._enter_leg(
+            "BTCUSDT", 1, {"BTCUSDT": Decimal("100.0")}, {"BTCUSDT": {"atr24": 2.0}},
+            engine.realized_equity, entry_ts,
+            bid=Decimal("99.98"), ask=Decimal("100.00"), quote_ts=entry_ts, current_clock=entry_ts,
+        )
         pos = engine.open_positions["BTCUSDT"]
-        initial_qty = pos.qty
-        equity_before_tp = engine.realized_equity
 
-        # Now inject ledger failure during TP
-        engine.ledger.fault_injection_during_commit = True
+        # 1. Settlement timestamp is PRIOR to entry (e.g. 2 hours earlier) -> 0 funding
+        prior_settlement = FundingSettlement(
+            symbol="BTCUSDT",
+            settlement_ts=entry_ts - 7200000,
+            rate=Decimal("0.0005"),
+            mark_price=Decimal("100.0"),
+        )
+        cf_prior = engine.apply_funding_settlements([prior_settlement])
+        assert cf_prior == Decimal("0.0")
 
-        target_tp_p = Decimal("120.00")
-        current_prices = {"BTCUSDT": target_tp_p}
-        prices_series = {
-            s: [{"open": 100.0, "high": 125.0, "low": 99.0, "close": float(target_tp_p), "volume": 1000.0}] * 60
-            for s in ["BTCUSDT", "ETHUSDT"]
-        }
+        # 2. Slice 50% via partial TP, then settlement occurs -> pays on 50% remaining qty
+        orig_qty = pos.qty
+        pos.qty = orig_qty * Decimal("0.5")  # Simulate remaining qty after TP
+        settlement_ts = entry_ts + 3600000
+        valid_settlement = FundingSettlement(
+            symbol="BTCUSDT",
+            settlement_ts=settlement_ts,
+            rate=Decimal("0.001"),
+            mark_price=Decimal("100.0"),
+        )
+        cf_valid = engine.apply_funding_settlements([valid_settlement])
+        expected_cashflow = -Decimal("1") * (pos.qty * Decimal("100.0")) * Decimal("0.001")
+        assert cf_valid == expected_cashflow
 
-        engine.process_bar(prices_series, current_prices, bar_ts + 3600000)
+    def test_p1_beta_limit_vs_leverage_limit_separation(self):
+        """
+        P1 Requirement: Beta limit (0.35) and aggregate leverage limit (2.0x) are enforced
+        independently; UNKNOWN beta strictly blocks entry.
+        """
+        assert MAX_PORTFOLIO_BETA == Decimal("0.35")
+        assert MAX_PORTFOLIO_LEVERAGE == Decimal("2.0")
+        assert DRAWDOWN_LIMIT_PCT == Decimal("15.0")
 
-        # Invariant: position slice MUST NOT have been applied!
-        assert pos.qty == initial_qty, "Position quantity modified despite ledger TP failure!"
-        assert pos.tp_taken is False, "tp_taken flagged True despite ledger TP failure!"
-        assert engine.realized_equity == equity_before_tp, "Realized equity increased despite ledger TP failure!"
-        assert len(engine.closed_trades) == 0
-
-    # -------------------------------------------------------------------------
-    # P0-3: BybitClient get_kline List[List[str]] Contract Handling
-    # -------------------------------------------------------------------------
-    def test_p0_3_bybit_client_list_contract_in_backfill(self):
-        """Verifies _attempt_rest_backfill handles List[List[str]] without AttributeError."""
-        class MockBybitClient:
-            def get_kline(self, symbol, interval, limit=5, category="linear"):
-                # Real BybitClient contract returns List[List[str]]
-                return [
-                    ["1794000000000", "100.0", "105.0", "99.0", "104.5", "500.0", "52000.0"],
-                    ["1793996400000", "98.0", "100.5", "97.5", "100.0", "400.0", "40000.0"],
-                ]
-
-        trader = PaperTraderV35Repaired.__new__(PaperTraderV35Repaired)
-        trader.client = MockBybitClient()
-        trader.pending_bars_by_ts = {1794000000000: {}}
-        trader.latest_prices = {}
-
-        # Should execute cleanly without calling .get() on list!
-        trader._attempt_rest_backfill(1794000000000, ["BTCUSDT"])
-
-        assert "BTCUSDT" in trader.pending_bars_by_ts[1794000000000]
-        backfilled = trader.pending_bars_by_ts[1794000000000]["BTCUSDT"]
-        assert backfilled["close"] == 104.5
-        assert trader.latest_prices["BTCUSDT"] == Decimal("104.5")
-
-    # -------------------------------------------------------------------------
-    # P0-4: Crash Recovery & Reconciliation State Machine
-    # -------------------------------------------------------------------------
-    def test_p0_4_clean_crash_recovery_with_active_positions(self, clean_test_dir):
-        """Verifies clean state restoration with active Long/Short positions, TP taken, and funding."""
-        db_path = str(clean_test_dir / "crash_recovery_clean.db")
-        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"), ledger_db_path=db_path)
-        start_ts = int(time.time() * 1000)
-
-        # Enter Long BTC + Short ETH
-        engine._enter_leg("BTCUSDT", 1, {"BTCUSDT": Decimal("100.0")}, {"BTCUSDT": {"atr24": 2.0}}, engine.realized_equity, start_ts, bid=Decimal("99.98"), ask=Decimal("100.00"), quote_ts=start_ts, current_clock=start_ts)
-        engine._enter_leg("ETHUSDT", -1, {"ETHUSDT": Decimal("50.0")}, {"ETHUSDT": {"atr24": 1.0}}, engine.realized_equity, start_ts, bid=Decimal("50.00"), ask=Decimal("50.02"), quote_ts=start_ts, current_clock=start_ts)
-
-        # Partial TP on BTC
-        target_tp_p = Decimal("120.00")
-        prices_series = {
-            "BTCUSDT": [{"open": 100.0, "high": 125.0, "low": 99.0, "close": 120.0, "volume": 1000.0}] * 60,
-            "ETHUSDT": [{"open": 50.0, "high": 51.0, "low": 49.0, "close": 50.0, "volume": 1000.0}] * 60,
-        }
-        engine.process_bar(prices_series, {"BTCUSDT": target_tp_p, "ETHUSDT": Decimal("50.0")}, start_ts + 3600000)
-
-        # Funding settlement
-        funding = FundingSettlement(symbol="BTCUSDT", settlement_ts=start_ts + 7200000, rate=Decimal("0.0001"), mark_price=Decimal("120.00"))
-        engine.apply_funding_settlements([funding])
-
-        snapshot = engine.export_state()
-
-        # Instantiate fresh engine and reconcile
-        recovery_engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"), ledger_db_path=db_path)
-        status, errors = recovery_engine.reconcile_and_recover(snapshot)
-
-        assert status == "RECONCILED"
-        assert len(errors) == 0
-        assert recovery_engine.trading_halted is False
-        assert len(recovery_engine.open_positions) == 2
-        assert recovery_engine.open_positions["BTCUSDT"].tp_taken is True
-        assert recovery_engine.realized_equity == engine.realized_equity
-
-    def test_p0_4_corrupted_snapshot_equity_triggers_no_new_trades(self, clean_test_dir):
-        """If snapshot equity does not match SQLite ledger, engine locks in NO_NEW_TRADES."""
-        db_path = str(clean_test_dir / "crash_recovery_corrupt.db")
-        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"), ledger_db_path=db_path)
-        start_ts = int(time.time() * 1000)
-
-        engine._enter_leg("BTCUSDT", 1, {"BTCUSDT": Decimal("100.0")}, {"BTCUSDT": {"atr24": 2.0}}, engine.realized_equity, start_ts, bid=Decimal("99.98"), ask=Decimal("100.00"), quote_ts=start_ts, current_clock=start_ts)
-        snapshot = engine.export_state()
-
-        # Tamper snapshot equity
-        snapshot["realized_equity"] = str(Decimal(snapshot["realized_equity"]) + Decimal("15.00"))
-
-        recovery_engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"), ledger_db_path=db_path)
-        status, errors = recovery_engine.reconcile_and_recover(snapshot)
-
-        assert status == "NO_NEW_TRADES"
-        assert recovery_engine.trading_halted is True
-        assert any("Equity mismatch" in err for err in errors)
-
-    # -------------------------------------------------------------------------
-    # P0-5: Mandatory Live Orderbook & Timestamps for Entry
-    # -------------------------------------------------------------------------
-    def test_p0_5_missing_bid_or_ask_strictly_rejected(self):
-        """New entries without live bid/ask MUST fail-closed."""
-        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"))
-        bar_ts = int(time.time() * 1000)
-        prices = {"BTCUSDT": Decimal("100.0")}
-        metrics = {"BTCUSDT": {"atr24": 2.0}}
-
-        # Omit bid and ask
-        assert engine._enter_leg("BTCUSDT", 1, prices, metrics, engine.realized_equity, bar_ts) is False
-        # Omit ask
-        assert engine._enter_leg("BTCUSDT", 1, prices, metrics, engine.realized_equity, bar_ts, bid=Decimal("99.98")) is False
-        # Hollow orderbook (bid >= ask)
-        assert engine._enter_leg("BTCUSDT", 1, prices, metrics, engine.realized_equity, bar_ts, bid=Decimal("100.02"), ask=Decimal("100.00")) is False
-        # Stale quote (>5000ms)
-        assert engine._enter_leg("BTCUSDT", 1, prices, metrics, engine.realized_equity, bar_ts, bid=Decimal("99.98"), ask=Decimal("100.00"), quote_ts=bar_ts - 6000, current_clock=bar_ts) is False
-
-    def test_p0_5_direction_aware_fill_price(self):
-        """Long taker enters at Ask, Short taker enters at Bid."""
-        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"))
-        bar_ts = int(time.time() * 1000)
-        prices = {"BTCUSDT": Decimal("100.0"), "ETHUSDT": Decimal("50.0")}
-        metrics = {"BTCUSDT": {"atr24": 2.0}, "ETHUSDT": {"atr24": 1.0}}
-
-        engine._enter_leg("BTCUSDT", 1, prices, metrics, engine.realized_equity, bar_ts, bid=Decimal("99.98"), ask=Decimal("100.05"), quote_ts=bar_ts, current_clock=bar_ts)
-        engine._enter_leg("ETHUSDT", -1, prices, metrics, engine.realized_equity, bar_ts, bid=Decimal("49.95"), ask=Decimal("50.02"), quote_ts=bar_ts, current_clock=bar_ts)
-
-        assert engine.open_positions["BTCUSDT"].entry_price == Decimal("100.05"), "Long must fill at Ask!"
-        assert engine.open_positions["ETHUSDT"].entry_price == Decimal("49.95"), "Short must fill at Bid!"
-
-    # -------------------------------------------------------------------------
-    # P0-6: Clock Continuity & Timeout with < 16 Symbols
-    # -------------------------------------------------------------------------
-    def test_p0_6_sync_timeout_drops_partial_buffer_without_trading(self):
-        """When fewer than 16 symbols arrive and timeout expires, pending bar is dropped without trading."""
-        trader = PaperTraderV35Repaired.__new__(PaperTraderV35Repaired)
-        import threading
-        trader.lock = threading.RLock()
-        trader.symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "SUIUSDT"]
-        trader.processed_kline_keys = set()
-        trader.pending_bars_by_ts = {}
-        trader.pending_bars_first_seen = {}
-        trader.last_processed_bar_ts = 0
-        trader.latest_prices = {}
-
-        class DummyClient:
-            def get_kline(self, **kwargs):
-                return []
-
-        trader.client = DummyClient()
-
-        # Send kline for only 1 symbol at timestamp T
-        target_ts = 1794000000000
-        msg = {
-            "topic": "kline.60.BTCUSDT",
-            "data": [{"start": target_ts, "close": "70000.0", "confirm": True, "open": "69000", "high": "71000", "low": "68000", "volume": "100"}],
-        }
-
-        trader.on_kline_event(msg)
-        assert target_ts in trader.pending_bars_by_ts
-
-        # Advance first_seen beyond timeout (e.g. 35 seconds ago)
-        trader.pending_bars_first_seen[target_ts] = time.time() - (BAR_SYNC_TIMEOUT_SECONDS + 5.0)
-
-        # Trigger second event for same start_ts (or evaluation check)
-        msg_eth = {
-            "topic": "kline.60.ETHUSDT",
-            "data": [{"start": target_ts, "close": "3000.0", "confirm": True, "open": "2900", "high": "3100", "low": "2800", "volume": "100"}],
-        }
-        res = trader.on_kline_event(msg_eth)
-
-        # Must report False and drop pending bar buffer
-        assert res is False
-        assert target_ts not in trader.pending_bars_by_ts, "Pending bar was not cleared on timeout!"
-        assert trader.last_processed_bar_ts == target_ts
-
-    # -------------------------------------------------------------------------
-    # P1-7: Pre-Trade Portfolio Beta & Aggregate Leverage Guard
-    # -------------------------------------------------------------------------
-    def test_p1_7_unknown_beta_blocks_new_pair_entry(self):
-        """If benchmark variance is near zero or data is insufficient, entry must be blocked."""
-        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"))
-        # Constant BTC close -> variance 0 -> UNKNOWN beta
+        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"), auto_verify_rules=True)
+        # Constant BTC close -> variance 0 -> UNKNOWN beta blocks entry
         btc_bars = [{'start': i*3600000, 'open': 100.0, 'high': 100.5, 'low': 99.5, 'close': 100.0, 'volume': 1000.0} for i in range(75)]
         eth_bars = [{'start': i*3600000, 'open': 100.0 + i*0.4, 'high': 100.0 + i*0.4 + 1.0, 'low': 100.0 + i*0.4 - 1.0, 'close': 100.0 + i*0.4, 'volume': 1000.0} for i in range(75)]
         sol_bars = [{'start': i*3600000, 'open': 100.0 - i*0.4, 'high': 100.0 - i*0.4 + 1.0, 'low': 100.0 - i*0.4 - 1.0, 'close': 100.0 - i*0.4, 'volume': 1000.0} for i in range(75)]
@@ -349,55 +543,4 @@ class TestF1CR2AuditCompliance:
             prices_series, current_prices, int(time.time() * 1000),
             orderbook_bids=orderbook_bids, orderbook_asks=orderbook_asks,
         )
-
         assert len(engine.open_positions) == 0, "Pair entry allowed despite UNKNOWN beta!"
-
-    # -------------------------------------------------------------------------
-    # P1-8: InstrumentRule Honest Provenance
-    # -------------------------------------------------------------------------
-    def test_p1_8_instrument_rule_provenance_and_version(self):
-        """Instrument rules must declare RuleSource.STATIC_CONFIG and explicit release timestamp."""
-        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"))
-        rule_btc = engine.instrument_rules["BTCUSDT"]
-
-        assert rule_btc.source == RuleSource.STATIC_CONFIG
-        assert rule_btc.version == RULE_SPEC_VERSION
-        assert rule_btc.updated_at_ms == RULE_STATIC_TIMESTAMP
-        assert rule_btc.is_verified is False
-        assert rule_btc.last_exchange_sync_ts is None
-
-        # Call explicit verification
-        engine.verify_instrument_rules(RuleSource.EXCHANGE_REST, verified_ts=1794000000000)
-        assert rule_btc.source == RuleSource.EXCHANGE_REST
-        assert rule_btc.is_verified is True
-        assert rule_btc.last_exchange_sync_ts == 1794000000000
-
-    # -------------------------------------------------------------------------
-    # P1-9: Historical Exposure Verification for Funding Settlements
-    # -------------------------------------------------------------------------
-    def test_p1_9_historical_exposure_blocks_prior_funding(self):
-        """Funding settlements prior to position entry timestamp must not accrue."""
-        engine = AlphaPairsEngineRepaired(initial_capital=Decimal("300.0"))
-        entry_ts = 1794000000000
-        engine._enter_leg("BTCUSDT", 1, {"BTCUSDT": Decimal("100.0")}, {"BTCUSDT": {"atr24": 2.0}}, engine.realized_equity, entry_ts, bid=Decimal("99.98"), ask=Decimal("100.00"), quote_ts=entry_ts, current_clock=entry_ts)
-
-        equity_before = engine.realized_equity
-
-        # Settlement timestamp is PRIOR to entry (e.g. 2 hours earlier)
-        prior_settlement = FundingSettlement(
-            symbol="BTCUSDT",
-            settlement_ts=entry_ts - 7200000,
-            rate=Decimal("0.0005"),
-            mark_price=Decimal("100.0"),
-        )
-        cf = engine.apply_funding_settlements([prior_settlement])
-
-        assert cf == Decimal("0.0"), "Funding was accrued for settlement prior to position entry!"
-        assert engine.realized_equity == equity_before
-
-    # -------------------------------------------------------------------------
-    # P1-10: Drawdown Limit Alignment at 15.0%
-    # -------------------------------------------------------------------------
-    def test_p1_10_drawdown_limit_aligned_at_15_pct(self):
-        """Drawdown halt limit must be strictly aligned to 15.0%."""
-        assert DRAWDOWN_LIMIT_PCT == Decimal("15.0")

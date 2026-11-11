@@ -22,12 +22,20 @@ from enum import Enum
 from pathlib import Path
 
 class RuleSource(str, Enum):
+    STATIC_UNVERIFIED = "STATIC_UNVERIFIED"
     STATIC_CONFIG = "STATIC_CONFIG"
     EXCHANGE_REST = "EXCHANGE_REST"
+    HISTORICAL_SPEC = "HISTORICAL_SPEC"
     MOCK = "MOCK"
+
+class QuoteSource(str, Enum):
+    EXCHANGE_L1 = "EXCHANGE_L1"
+    HISTORICAL_REPLAY = "HISTORICAL_REPLAY"
+    SYNTHETIC_SCENARIO = "SYNTHETIC_SCENARIO"
 
 RULE_SPEC_VERSION = "bybit_v5_spec_2026_03"
 RULE_STATIC_TIMESTAMP = 1709251200000  # Explicit static release timestamp (2026-03-01 UTC)
+MAX_RULE_AGE_MS = 24 * 3600 * 1000     # 24 hours max staleness for live exchange rules
 
 # Paths
 BASE_DIR = Path(__file__).resolve().parent.parent
