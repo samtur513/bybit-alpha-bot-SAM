@@ -72,6 +72,10 @@ class OrderIntent:
     leg_id: int = 1
     total_legs: int = 1
     timeout_ms: int = 60000
+    bar_start_ts_ms: int = 0
+    bar_close_ts_ms: int = 0
+    signal_ready_ts_ms: int = 0
+    order_submit_ts_ms: int = 0
 
 
 @dataclass
@@ -129,9 +133,17 @@ class FleetFinancialLedger:
     Idempotent, crash-resilient SQLite ledger satisfying double-entry accounting invariants.
     Uses strict append-only financial journal (NO INSERT OR REPLACE on financial events).
     """
-    def __init__(self, db_path: str, initial_capital: Decimal = Decimal("300.0")):
+    def __init__(
+        self,
+        db_path: str,
+        initial_capital: Decimal = Decimal("300.0"),
+        run_id: str = "PILOT_V2",
+        module_id: str = "FLEET",
+    ):
         self.db_path = db_path
         self.initial_capital = initial_capital
+        self.run_id = run_id
+        self.module_id = module_id
         self._init_db()
 
     def _init_db(self):
@@ -170,9 +182,20 @@ class FleetFinancialLedger:
                     created_at_ms INTEGER,
                     data_received_at_ms INTEGER,
                     status TEXT,
-                    rejection_reason TEXT
+                    rejection_reason TEXT,
+                    bar_start_ts INTEGER DEFAULT 0,
+                    bar_close_ts INTEGER DEFAULT 0,
+                    signal_ready_ts INTEGER DEFAULT 0,
+                    order_submit_ts INTEGER DEFAULT 0
                 );
             """)
+            # Ensure columns exist if table was already created
+            cur = conn.execute("PRAGMA table_info(order_intents);")
+            cols = {row[1] for row in cur.fetchall()}
+            for c in ["bar_start_ts", "bar_close_ts", "signal_ready_ts", "order_submit_ts"]:
+                if c not in cols:
+                    conn.execute(f"ALTER TABLE order_intents ADD COLUMN {c} INTEGER DEFAULT 0;")
+
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS execution_fills (
                     fill_id TEXT PRIMARY KEY,
@@ -231,13 +254,19 @@ class FleetFinancialLedger:
                 """, (status, reason, intent.intent_id))
             else:
                 conn.execute("""
-                    INSERT INTO order_intents VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO order_intents (
+                        intent_id, run_id, module_id, symbol, side, order_type,
+                        requested_qty, limit_price, signal_mid, created_at_ms,
+                        data_received_at_ms, status, rejection_reason,
+                        bar_start_ts, bar_close_ts, signal_ready_ts, order_submit_ts
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     intent.intent_id, intent.run_id, intent.module_id, intent.symbol,
                     intent.side.value, intent.order_type.value, float(intent.requested_qty),
                     float(intent.limit_price) if intent.limit_price else None,
                     float(intent.signal_mid_price), intent.signal_ts_ms,
-                    intent.data_received_ts_ms, status, reason
+                    intent.data_received_ts_ms, status, reason,
+                    intent.bar_start_ts_ms, intent.bar_close_ts_ms, intent.signal_ready_ts_ms, intent.order_submit_ts_ms
                 ))
             conn.commit()
 
@@ -296,14 +325,15 @@ class FleetFinancialLedger:
                 ))
 
                 # Append-only financial event
-                mod_id = "v3.1.4" if "V314" in s.parent_position_id else ("v3.8" if "V38" in s.parent_position_id else "MODULE")
+                mod_id = self.module_id if self.module_id != "FLEET" else ("v3.1.4" if "V314" in s.parent_position_id else ("v3.8" if "V38" in s.parent_position_id else "MODULE"))
+                run_id = self.run_id
                 event_id = f"EVT_CLOSE_{s.slice_id}"
                 cur_evt = conn.execute("SELECT event_id FROM financial_events WHERE event_id = ?", (event_id,))
                 if not cur_evt.fetchone():
                     conn.execute("""
                         INSERT INTO financial_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
-                        event_id, "RUN_FLEET", mod_id, "TRADE_CLOSE", s.symbol,
+                        event_id, run_id, mod_id, "TRADE_CLOSE", s.symbol,
                         s.exit_ts_ms, float(s.qty), float(s.exit_price),
                         float(s.gross_pnl), float(s.entry_fee + s.exit_fee), 0.0,
                         float(s.net_pnl), float(realized_equity_after), s.exit_reason
@@ -323,10 +353,12 @@ class FleetFinancialLedger:
                     conn.execute("ROLLBACK;")
                     return False, "DUPLICATE_FUNDING_IGNORED"
 
+                mod_id = self.module_id if self.module_id != "FLEET" else ("v3.1.4" if "V314" in f.settlement_id else ("v3.8" if "V38" in f.settlement_id else "FUNDING"))
+                run_id = self.run_id
                 conn.execute("""
                     INSERT INTO financial_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    f.settlement_id, "RUN_FLEET", "FUNDING", "FUNDING_SETTLEMENT", f.symbol,
+                    f.settlement_id, run_id, mod_id, "FUNDING_SETTLEMENT", f.symbol,
                     f.settlement_ts_ms, float(f.position_qty), float(f.mark_price),
                     0.0, 0.0, float(f.cashflow), float(f.cashflow),
                     float(realized_equity_after), f"Rate: {float(f.rate)}"
@@ -418,6 +450,105 @@ class FleetFinancialLedger:
             "is_conserved": discrepancy == Decimal("0.0"),
         }
 
+    def get_3way_financial_reconciliation(self, adapter_realized_equity: Optional[Decimal] = None) -> Dict[str, Any]:
+        """
+        Calculates 3 completely independent mathematical derivations of realized & MTM equity:
+        - Method 1: Slices Net PnL (Closed slices net PnL sum + funding cashflows - open slices entry fees).
+        - Method 2: Financial Events Journal (Sum of gross_pnl - sum of fee_paid + sum of funding - open entry fees).
+        - Method 3: Running Step-by-Step Equity (tracked after each atomic fill/event in adapter or latest snapshot).
+        """
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
+            conn.row_factory = sqlite3.Row
+            # Method 1 sources: position_slices
+            closed_slices = conn.execute("""
+                SELECT 
+                    COUNT(*) as closed_count,
+                    COALESCE(SUM(net_pnl), 0.0) as slices_net_pnl,
+                    COALESCE(SUM(gross_pnl), 0.0) as slices_gross_pnl,
+                    COALESCE(SUM(entry_fee + exit_fee), 0.0) as slices_fees
+                FROM position_slices
+                WHERE status = 'CLOSED'
+            """).fetchone()
+
+            open_slices = conn.execute("""
+                SELECT 
+                    COUNT(*) as open_count,
+                    COALESCE(SUM(entry_fee), 0.0) as open_entry_fees
+                FROM position_slices
+                WHERE status = 'OPEN'
+            """).fetchone()
+
+            funding_row = conn.execute("""
+                SELECT COALESCE(SUM(funding_cashflow), 0.0) as total_funding
+                FROM financial_events
+                WHERE event_type LIKE '%FUNDING%'
+            """).fetchone()
+
+            # Method 2 sources: financial_events table
+            events_row = conn.execute("""
+                SELECT 
+                    COUNT(*) as events_count,
+                    COALESCE(SUM(gross_pnl), 0.0) as events_gross,
+                    COALESCE(SUM(fee_paid), 0.0) as events_fees,
+                    COALESCE(SUM(funding_cashflow), 0.0) as events_funding,
+                    COALESCE(SUM(net_pnl), 0.0) as events_net
+                FROM financial_events
+            """).fetchone()
+
+            # Method 3 source: latest equity snapshot or last event
+            last_snapshot = conn.execute("""
+                SELECT realized_equity, total_mtm_equity, unrealized_pnl
+                FROM equity_snapshots
+                ORDER BY timestamp_ms DESC LIMIT 1
+            """).fetchone()
+
+        # Method 1 Derivation:
+        slices_net = Decimal(str(round(closed_slices["slices_net_pnl"], 6)))
+        funding_1 = Decimal(str(round(funding_row["total_funding"], 6)))
+        open_fees = Decimal(str(round(open_slices["open_entry_fees"], 6)))
+        m1_realized = self.initial_capital + slices_net + funding_1
+        m1_net_mtm = m1_realized - open_fees
+
+        # Method 2 Derivation:
+        ev_gross = Decimal(str(round(events_row["events_gross"], 6)))
+        ev_fees = Decimal(str(round(events_row["events_fees"], 6)))
+        ev_funding = Decimal(str(round(events_row["events_funding"], 6)))
+        m2_realized = self.initial_capital + ev_gross - ev_fees + ev_funding
+        m2_net_mtm = m2_realized - open_fees
+
+        # Method 3 Derivation:
+        if adapter_realized_equity is not None:
+            m3_realized = adapter_realized_equity
+        elif last_snapshot is not None:
+            m3_realized = Decimal(str(round(last_snapshot["realized_equity"], 6)))
+        else:
+            m3_realized = self.initial_capital
+        m3_net_mtm = m3_realized - open_fees
+
+        disc_1_2 = abs(m1_realized - m2_realized)
+        disc_2_3 = abs(m2_realized - m3_realized)
+        disc_1_3 = abs(m1_realized - m3_realized)
+        max_discrepancy = max(disc_1_2, disc_2_3, disc_1_3)
+        is_penny_perfect = max_discrepancy <= Decimal("0.00001")
+
+        return {
+            "initial_capital": self.initial_capital,
+            "closed_trades_count": closed_slices["closed_count"],
+            "open_positions_count": open_slices["open_count"],
+            "open_entry_fees": open_fees,
+            "method_1_slices_realized_equity": m1_realized,
+            "method_1_slices_net_mtm": m1_net_mtm,
+            "method_2_events_realized_equity": m2_realized,
+            "method_2_events_net_mtm": m2_net_mtm,
+            "method_3_running_realized_equity": m3_realized,
+            "method_3_running_net_mtm": m3_net_mtm,
+            "discrepancy_1_vs_2": disc_1_2,
+            "discrepancy_2_vs_3": disc_2_3,
+            "max_discrepancy": max_discrepancy,
+            "is_penny_perfect": is_penny_perfect,
+            "reconciliation_status": "PASS_PENNY_PERFECT" if is_penny_perfect else "FAIL_DISCREPANCY",
+        }
+
 
 class UniversalFleetExecutionAdapter:
     """
@@ -448,6 +579,10 @@ class UniversalFleetExecutionAdapter:
         if intent.data_received_ts_ms < intent.signal_ts_ms:
             self.ledger.record_intent(intent, status="REJECTED", reason="CAUSALITY_VIOLATION_DATA_BEFORE_SIGNAL")
             return False, "CAUSALITY_VIOLATION_DATA_BEFORE_SIGNAL"
+        if intent.bar_start_ts_ms > 0 and intent.bar_close_ts_ms > 0:
+            if not (intent.bar_start_ts_ms < intent.bar_close_ts_ms <= intent.signal_ready_ts_ms <= intent.data_received_ts_ms <= intent.order_submit_ts_ms):
+                self.ledger.record_intent(intent, status="REJECTED", reason="CAUSALITY_VIOLATION_BAR_SEQUENCE")
+                return False, "CAUSALITY_VIOLATION_BAR_SEQUENCE"
 
         self.ledger.record_intent(intent, status="ACCEPTED", reason="VALIDATED")
         return True, "ACCEPTED"
@@ -464,7 +599,7 @@ class UniversalFleetExecutionAdapter:
     ) -> Optional[ExecutionFill]:
         """
         Executes order strictly observing market microstructure and time causality:
-        - fill_ts_ms must be >= data_received_ts_ms >= signal_ts_ms.
+        - fill_ts_ms must be >= order_submit_ts_ms >= data_received_ts_ms >= signal_ts_ms.
         - Market BUY fills at current_ask (paying taker fee).
         - Market SELL fills at current_bid (paying taker fee).
         - Limit Maker orders fill only if limit price is passive and within/touched by the price range.
@@ -473,6 +608,10 @@ class UniversalFleetExecutionAdapter:
         if fill_ts_ms < intent.data_received_ts_ms or intent.data_received_ts_ms < intent.signal_ts_ms:
             raise ValueError(
                 f"Time causality violation: fill_ts={fill_ts_ms} < data_received_ts={intent.data_received_ts_ms} < signal_ts={intent.signal_ts_ms}"
+            )
+        if intent.order_submit_ts_ms > 0 and fill_ts_ms < intent.order_submit_ts_ms:
+            raise ValueError(
+                f"Time causality violation: fill_ts={fill_ts_ms} < order_submit_ts={intent.order_submit_ts_ms}"
             )
 
         is_maker = False

@@ -1,0 +1,3 @@
+module_id,strategy_name,port,run_id,initial_capital,trades_count,win_rate_pct,gross_pnl,fees_paid,funding_cashflow,net_pnl,profit_factor,ending_realized_equity,max_drawdown_pct,status
+v3.1.4,Champion 4h,8084,V314_FT003_P2,300.0,31,25.8%,-6.1424,3.563,0.129,-9.5763,0.87,290.4237,7.48,PASS_PROVABLE
+v3.8,NewDragon Trend Lab,8091,V38_FT003_P2,300.0,237,48.9%,-56.4116,34.7771,0.1459,-91.0428,0.75,208.9572,31.38,PASS_PROVABLE

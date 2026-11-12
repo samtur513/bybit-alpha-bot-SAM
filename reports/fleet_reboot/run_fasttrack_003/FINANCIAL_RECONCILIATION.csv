@@ -1,0 +1,5 @@
+run_id,module_id,period,initial_capital,closed_trades_count,open_positions_count,open_entry_fees,method_1_slices_realized_equity,method_2_events_realized_equity,method_3_running_realized_equity,method_1_net_mtm,discrepancy_1_vs_2,discrepancy_2_vs_3,max_discrepancy,reconciliation_status
+V314_FT003_P1,v3.1.4,Period_1_Recent_90d,300.0,32,1,0.045509,293.439447,293.439447,293.439446,293.393938,0.0,1e-06,1e-06,PASS_PENNY_PERFECT
+V38_FT003_P1,v3.8,Period_1_Recent_90d,300.0,292,0,0.0,256.071652,256.071652,256.071652,256.071652,0.0,0.0,0.0,PASS_PENNY_PERFECT
+V314_FT003_P2,v3.1.4,Period_2_Prior_90d,300.0,31,0,0.0,290.42365,290.42365,290.42365,290.42365,0.0,0.0,0.0,PASS_PENNY_PERFECT
+V38_FT003_P2,v3.8,Period_2_Prior_90d,300.0,237,3,0.276301,208.957225,208.957225,208.957226,208.680924,0.0,1e-06,1e-06,PASS_PENNY_PERFECT
