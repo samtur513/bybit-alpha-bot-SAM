@@ -684,37 +684,48 @@ class TestSignalParityOriginalVsRepaired:
 
     def test_class_5_final_signal_decision_diff(self):
         """
-        Tests Auditor F2.1 Item 4:
+        Tests Auditor F2.1 Item 4 & Data Gate Patch:
         Runs 100 consecutive historical closed bars through both Original and Repaired engines side-by-side.
         Verifies:
         - 100 sequential closed bar iterations (after 75-bar warm-up).
-        - Uses authentic historical Bybit 1h dataset from data/parquet_2024_2026/ (with synthetic fallback).
+        - Strictly unified UTC timestamp synchronization (no unlisted coin bleeding, zero lookahead).
+        - Authentic historical Bybit 1h dataset from data/parquet_2024_2026/.
         - Full sequential signal and trading decision execution via process_bar().
         - Rank composition, relative strength, and candidate selection parity.
         - SIGNAL_CHANGED count is strictly ZERO.
         - Verifies economic divergence is strictly attributable to FEE_CORRECTED and EXECUTION_CORRECTED.
+        - Fails with DATA_GATE_BLOCKED if real data is missing (NO synthetic fallback allowed).
         """
         import glob
         import os
         import pandas as pd
 
-        parquet_files = glob.glob("data/parquet_2024_2026/*.parquet")
-        use_real_data = len(parquet_files) >= len(REPAIRED_SYMBOLS)
+        parquet_files = sorted(glob.glob("data/parquet_2024_2026/*.parquet"))
+        if len(parquet_files) < len(REPAIRED_SYMBOLS):
+            pytest.fail(
+                f"DATA_GATE_BLOCKED: Expected {len(REPAIRED_SYMBOLS)} parquet files in data/parquet_2024_2026/, "
+                f"found only {len(parquet_files)}. Synthetic fallback is strictly prohibited."
+            )
 
-        if use_real_data:
-            data = {}
-            for f in parquet_files:
-                sym = os.path.basename(f).replace("_1h.parquet", "")
-                if sym in REPAIRED_SYMBOLS:
-                    df = pd.read_parquet(f).head(200)
-                    data[sym] = df.to_dict("records")
-            num_warmup = 75
-            num_eval = 100
-        else:
-            total_bars = 180
-            data = generate_synthetic_kline_series(REPAIRED_SYMBOLS, num_bars=total_bars)
-            num_warmup = 75
-            num_eval = 100
+        dfs = {}
+        for f in parquet_files:
+            sym = os.path.basename(f).replace("_1h.parquet", "")
+            dfs[sym] = pd.read_parquet(f).sort_values("timestamp").reset_index(drop=True)
+
+        # Unified chronological timeline of UTC timestamps across active instruments
+        all_ts = sorted(list(set.union(*[set(df["timestamp"]) for df in dfs.values()])))
+        num_warmup = 75
+        num_eval = 100
+        if len(all_ts) < (num_warmup + num_eval):
+            pytest.fail(f"DATA_GATE_BLOCKED: Insufficient timestamps in dataset ({len(all_ts)} < {num_warmup + num_eval})")
+
+        eval_ts = all_ts[: num_warmup + num_eval]
+
+        # Pre-slice data for each symbol up to eval_ts[-1] to eliminate future bars
+        sliced_data = {}
+        for sym, df in dfs.items():
+            sliced_df = df[df["timestamp"] <= eval_ts[-1]]
+            sliced_data[sym] = sliced_df.to_dict("records")
 
         db_path = get_temp_db("test_decision_diff_f2")
         orig_engine = OriginalAlphaPairsEngine(initial_capital=Decimal("300.0"))
@@ -740,11 +751,18 @@ class TestSignalParityOriginalVsRepaired:
         matched_bars = 0
         matching_entries = 0
 
-        # Step through 100 consecutive closed bars
-        for bar_idx in range(num_warmup, num_warmup + num_eval):
-            sub_series = {s: bars[:bar_idx + 1] for s, bars in data.items()}
-            curr_prices = {s: Decimal(str(bars[bar_idx]["close"])) for s, bars in data.items()}
-            bar_ts = int(data[REPAIRED_SYMBOLS[0]][bar_idx].get("timestamp", data[REPAIRED_SYMBOLS[0]][bar_idx].get("start", bar_idx * 3600000)))
+        # Step through 100 consecutive closed bars using strictly unified UTC timestamps
+        for idx in range(num_warmup, num_warmup + num_eval):
+            current_ts = eval_ts[idx]
+
+            # Strictly causal: bars whose timestamp <= current_ts
+            sub_series = {}
+            curr_prices = {}
+            for s, records in sliced_data.items():
+                avail = [r for r in records if r["timestamp"] <= current_ts]
+                if avail:
+                    sub_series[s] = avail
+                    curr_prices[s] = Decimal(str(avail[-1]["close"]))
 
             # 1. Metric and Ranking Parity Check
             orig_m = orig_engine.compute_metrics(sub_series)
@@ -752,7 +770,8 @@ class TestSignalParityOriginalVsRepaired:
             orig_r = orig_engine.rank_universe(orig_m)
             rep_r = rep_engine.rank_universe(rep_m)
 
-            assert len(orig_r) == len(rep_r) == 17
+            # Ranks are identical between engines
+            assert len(orig_r) == len(rep_r)
             for o_item, r_item in zip(orig_r, rep_r):
                 if o_item["symbol"] != r_item["symbol"] or o_item["rank"] != r_item["rank"]:
                     diff_counts["SIGNAL_CHANGED"] += 1
@@ -765,12 +784,12 @@ class TestSignalParityOriginalVsRepaired:
             bids = {s: p * Decimal("0.9998") for s, p in curr_prices.items()}
             asks = {s: p * Decimal("1.0002") for s, p in curr_prices.items()}
             quotes = {
-                s: OrderbookQuote(symbol=s, bid=bids[s], ask=asks[s], quote_ts=bar_ts, source=QuoteSource.EXCHANGE_L1)
+                s: OrderbookQuote(symbol=s, bid=bids[s], ask=asks[s], quote_ts=current_ts, source=QuoteSource.EXCHANGE_L1)
                 for s in curr_prices
             }
 
             orig_open_before = set(orig_engine.open_positions.keys())
-            orig_engine.process_bar(sub_series, curr_prices, bar_ts)
+            orig_engine.process_bar(sub_series, curr_prices, current_ts)
             orig_open_after = set(orig_engine.open_positions.keys())
             orig_entered = orig_open_after - orig_open_before
             orig_exited = orig_open_before - orig_open_after
@@ -779,7 +798,7 @@ class TestSignalParityOriginalVsRepaired:
             rep_engine.process_bar(
                 sub_series,
                 curr_prices,
-                bar_ts,
+                current_ts,
                 orderbook_bids=bids,
                 orderbook_asks=asks,
                 orderbook_quotes=quotes,
