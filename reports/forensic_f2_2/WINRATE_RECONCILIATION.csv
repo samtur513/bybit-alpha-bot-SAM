@@ -1,0 +1,11 @@
+version,definition_id,trade_definition,sample_size,gross_wins_count,gross_win_rate_pct,gross_pf,net_wins_count,net_win_rate_pct,net_pf,total_gross_pnl,total_fees,total_net_pnl
+PAPER_TRADING_NOV_2026,DEF_PAPER_N4,Paper Trading Snapshot Nov 7-11 2026 (Port 8088),4,3,75.0,6.04,3,75.0,6.04,19.08,0.0,15.93
+REPAIRED,DEF_1_CLOSED_SLICES,Individual closed trade slice (partial TP or exit),93,35,37.63,0.99,34,36.56,0.88,-2.2,16.3,-18.5
+REPAIRED,DEF_2_POSITION_LIFECYCLE,Aggregated single coin position lifecycle (Entry -> Partial TP -> Exit),92,34,36.96,0.99,33,35.87,0.88,-2.2,16.3,-18.5
+REPAIRED,DEF_3_COMPOSITE_PAIR,Composite market-neutral rebalance batch (All legs entered at same 4h bar),71,28,39.44,0.98,27,38.03,0.87,-2.2,16.3,-18.5
+REPAIRED_SHADOW,DEF_1_CLOSED_SLICES,Individual closed trade slice (partial TP or exit),906,246,27.15,1.04,244,26.93,0.95,70.69,172.9,-102.21
+REPAIRED_SHADOW,DEF_2_POSITION_LIFECYCLE,Aggregated single coin position lifecycle (Entry -> Partial TP -> Exit),901,241,26.75,1.04,239,26.53,0.95,70.69,172.9,-102.21
+REPAIRED_SHADOW,DEF_3_COMPOSITE_PAIR,Composite market-neutral rebalance batch (All legs entered at same 4h bar),734,210,28.61,1.04,207,28.2,0.95,70.69,172.9,-102.21
+ORIGINAL,DEF_1_CLOSED_SLICES,Individual closed trade slice (partial TP or exit),1275,459,36.0,1.07,455,35.69,0.96,238.99,377.29,-138.31
+ORIGINAL,DEF_2_POSITION_LIFECYCLE,Aggregated single coin position lifecycle (Entry -> Partial TP -> Exit),1275,459,36.0,1.07,455,35.69,0.96,238.99,377.29,-138.31
+ORIGINAL,DEF_3_COMPOSITE_PAIR,Composite market-neutral rebalance batch (All legs entered at same 4h bar),986,392,39.76,1.09,382,38.74,0.95,238.99,377.29,-138.31

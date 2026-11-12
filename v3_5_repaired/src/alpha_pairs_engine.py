@@ -431,6 +431,7 @@ class AlphaPairsEngineRepaired:
         allow_synthetic_quotes: bool = False,
         require_l1_orderbook: bool = True,
         allow_mock_rules: bool = False,
+        shadow_mode: bool = False,
     ):
         self.initial_capital = Decimal(str(initial_capital))
         self.realized_equity = Decimal(str(initial_capital))
@@ -445,6 +446,8 @@ class AlphaPairsEngineRepaired:
         self.max_tick_spike = Decimal(str(max_tick_spike))
 
         self.trading_halted = False
+        self.shadow_mode = shadow_mode
+        self.risk_breach_events: List[Dict[str, Any]] = []
         self.bar_counter = 0
         self.allow_synthetic_quotes = allow_synthetic_quotes
         self.require_l1_orderbook = require_l1_orderbook
@@ -1358,11 +1361,22 @@ class AlphaPairsEngineRepaired:
             if dd > self.max_drawdown_pct:
                 self.max_drawdown_pct = dd
             if dd >= DRAWDOWN_LIMIT_PCT:
-                self.trading_halted = True
-                logger.warning(
-                    f"[PRE-TRADE RISK HALT] Drawdown {dd:.2f}% breached limit {DRAWDOWN_LIMIT_PCT}%! "
-                    f"Halting trading immediately before candidate entries on bar {self.bar_counter}."
-                )
+                if self.shadow_mode:
+                    self.risk_breach_events.append({
+                        "bar_idx": self.bar_counter,
+                        "timestamp": bar_ts,
+                        "drawdown_pct": float(dd),
+                    })
+                    logger.warning(
+                        f"[SHADOW DIAGNOSTIC] Drawdown {dd:.2f}% breached limit {DRAWDOWN_LIMIT_PCT}%. "
+                        f"Logging diagnostic event, continuing signals in shadow mode."
+                    )
+                else:
+                    self.trading_halted = True
+                    logger.warning(
+                        f"[PRE-TRADE RISK HALT] Drawdown {dd:.2f}% breached limit {DRAWDOWN_LIMIT_PCT}%! "
+                        f"Halting trading immediately before candidate entries on bar {self.bar_counter}."
+                    )
 
         # ---------------------------------------------------------------------
         # 2. Rebalancing & Hysteresis Ranking Check (every 4 hours)
@@ -1472,7 +1486,7 @@ class AlphaPairsEngineRepaired:
             # -----------------------------------------------------------------
             # 3. New Entry Candidate Evaluation (BLOCKED WHEN HALTED OR LOCKOUT)
             # -----------------------------------------------------------------
-            if not self.trading_halted and not macro_lockout:
+            if (not self.trading_halted or self.shadow_mode) and not macro_lockout:
                 entry_long_candidates = [
                     r for r in rankings[:ENTRY_TOP_K]
                     if Decimal(str(r["rs"])) >= MIN_REL_STRENGTH_LONG and Decimal(str(r.get("ker48", 0.0))) >= MIN_KER_THRESHOLD
