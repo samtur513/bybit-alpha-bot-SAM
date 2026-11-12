@@ -1,0 +1,19 @@
+module_id,port,strategy_name,indicator_formula,original_lookback,repaired_lookback,entry_threshold,exit_rules,decision_diff_status,classification_reason
+v3_13_sector_arb,8080,Sector Arbitrage,Price Ratio Z-Score,15m 48 bars,15m 48 bars,|Z| >= 2.0,Z reversion or 20m time stop,ZERO_ALPHA_CHANGE,Alpha formulas and Z-score logic identical; fee rate updated to VIP0
+v3_v4_exp,8082,NewDragon Trend Lab Exp,Donchian 30 + SRIE Alpha,1h 30 bars,1h 30 bars,Breakout + SRIE > 0.60,ATR trailing stop,ZERO_ALPHA_CHANGE,Signal logic preserved 100%
+v3_2,8083,Dual-Regime IRAS,Donchian 30 + Bollinger 20,1h 30 bars,1h 30 bars,Upper breakout / Lower BB,Chop exit / Stop loss,DATA_TIMESTAMP_CORRECTION,Enforced shift(1) closed bar causality; alpha formulas unchanged
+v3_1_4,8084,Champion 4h,Donchian 30 + ADX 18 + EMA50/200,4h 30 bars,4h 30 bars,Donchian 4h high + trend,ATR 2.0x trailing stop,ZERO_ALPHA_CHANGE,CoreV3Engine signal generation unchanged; VWAEP stop fix applied
+meta_dashboard,8085,Meta-Dashboard,N/A (Telemetry Aggregator),N/A,N/A,N/A,N/A,NOT_APPLICABLE,Infrastructure only
+v3_3,8086,Turbo Streak Risk,Donchian 30 + Streak Sizing,1h 30 bars,1h 30 bars,Breakout + Streak Kelly,Stop loss + cooldown,ZERO_ALPHA_CHANGE,Alpha logic unchanged; funding logging added
+v3_4,8087,ZF-8 Quant,Donchian 30 + ZF-8 Gears,1h 30 bars,1h 30 bars,Breakout + Gear Transmission,Gear exit / Stop loss,ZERO_ALPHA_CHANGE,ZF-8 transmission formulas identical
+v3_5,8088,Alpha Pairs,72h Momentum + 48h KER Rank,4h 72h/48h,4h 72h/48h,Long Top 2 / Short Bot 2,Hysteresis exit / Stop,ZERO_ALPHA_CHANGE,F1C Signal Parity confirmed; momentum and KER48 formulas identical
+v3_6,8089,Omega ZF-8,Dual-Regime + ZF-8 Gears,1h 30 bars,1h 30 bars,Dual-Regime triggers,ZF-8 scaled stops,DATA_TIMESTAMP_CORRECTION,Closed bar shift(1) causality enforced
+v3_7,8090,Master Sweeps,Orderbook Sweep + OBI,1m L2 depth,1m L2 depth,Sweep ATR depth + CVD flip,OBI exhaustion,ZERO_ALPHA_CHANGE,Microstructure formulas unchanged; flagged as unviable under taker fees
+v3_8,8091,NewDragon Trend Lab,Donchian 30 + 3-Stage Trail,1h 30 bars,1h 30 bars,Breakout + SRIE,3-Stage Trail (TP at +1.40R),ZERO_ALPHA_CHANGE,Signal rules identical; stage 2 maker assumption verified
+v3_9,8092,NewDragon Scalp Lab,CVD Flip + Lead-Lag,1m Microstructure,1m Microstructure,CVD imbalance,Time stop / Reversal stop,ZERO_ALPHA_CHANGE,Scalp signal logic identical
+v3_7_v4_exp,8093,NewDragon Scalp Exp,Lead-Lag Microstructure,1m/5m L2,1m/5m L2,Spread dislocation,BTC reversal stop,ZERO_ALPHA_CHANGE,Signal logic preserved
+v3_14_basket_dispersion,8094,Basket Dispersion,Alt vs (BTC+ETH) Z-Score,1h 48 bars,1h 48 bars,|Z| >= 2.2,Z reversion / Basket stop,ZERO_ALPHA_CHANGE,Dispersion math unchanged; tri-leg execution gate added
+v3_10_sweep,8095,Data & TCA Hub,N/A (Tick Capture Hub),N/A,N/A,N/A,N/A,NOT_APPLICABLE,Infrastructure only
+v3_12_crossbasis,8096,Cross-Basis Arbitrage,Spot-Perp Basis Spread,1s L1 quotes,1s L1 quotes,Basis > 0.25%,Basis convergence,ZERO_ALPHA_CHANGE,Basis formula unchanged; standard VIP0 fees enforced
+v3_11_funding,8097,Funding Squeeze,Predicted Funding vs Realized,8h Settlement,8h Settlement,Extreme Funding Spike,Clearing eject T-1s,ZERO_ALPHA_CHANGE,Funding capture logic identical; adverse excursion guard added
+v3_10_sweep,8098,Master Sweeps L2,L2 Sweep Reclaim,100ms L2 ticks,100ms L2 ticks,Reclaim of swept level,Quick scalp TP/SL,ZERO_ALPHA_CHANGE,ZMQ stream processing preserved

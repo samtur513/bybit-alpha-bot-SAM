@@ -1,0 +1,3 @@
+module,trade_count,win_rate_pct,ending_realized_equity,net_pnl,max_drawdown_pct,is_conserved,discrepancy,fees_paid
+v3.1.4 Champion 4h,223,45.74,224.7993944479434,-75.20060555205662,51.94,False,1e-06,57.687293
+v3.8 NewDragon Trend Lab,277,32.49,146.8495714112297,-153.1504285887703,77.17,False,2.888698,59.807021
