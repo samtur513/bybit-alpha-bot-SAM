@@ -681,7 +681,11 @@ class AlphaPairsEngineRepaired:
             return BetaResult(status=BetaStatus.UNKNOWN, beta=None, reason="Portfolio equity <= 0")
 
         # Map BTC bars by timestamp for exact time synchronization
-        btc_map = {int(b["start"]): float(b["close"]) for b in btc_bars if "start" in b and "close" in b}
+        btc_map = {
+            int(b.get("start", b.get("timestamp"))): float(b["close"])
+            for b in btc_bars
+            if ("start" in b or "timestamp" in b) and "close" in b
+        }
         if len(btc_map) < 25:
             return BetaResult(status=BetaStatus.INSUFFICIENT_DATA, beta=None, reason="Insufficient timestamped BTC bars")
 
@@ -691,7 +695,11 @@ class AlphaPairsEngineRepaired:
             if s not in prices_series:
                 return BetaResult(status=BetaStatus.UNKNOWN, beta=None, reason=f"Missing bar series for {s}")
             s_bars = prices_series[s]
-            s_map = {int(b["start"]): float(b["close"]) for b in s_bars if "start" in b and "close" in b}
+            s_map = {
+                int(b.get("start", b.get("timestamp"))): float(b["close"])
+                for b in s_bars
+                if ("start" in b or "timestamp" in b) and "close" in b
+            }
 
             # Common timestamps
             common_ts = sorted(set(btc_map.keys()) & set(s_map.keys()))
