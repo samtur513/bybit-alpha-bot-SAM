@@ -1,0 +1,4 @@
+strategy_id,role,evaluation_method,candidate_evaluations,observed_max_metric,signals_detected_stream,positive_control_status,negative_control_status,verdict_stream,reject_reasons_summary
+v3.10,Master Sweeps L2 (8098),Native LiquiditySweepEngine8098 Direct Replay,4414,Max swing breach: 0.0000 ATR,0,PASS (Long + Short Intents Verified),PASS (5/5 Rejections Verified),NO_NATIVE_SIGNALS_CONFIRMED,NO_SWING_BREACH: 4414; BTC_EXCLUDED: 2274
+v3.11,Funding Squeeze (8097),Native Rule Evaluation (|FR| >= 3 bps & settle <= 1800s),3,Max |FR|: 1.25 bps; Min settle: 18017s,0,PASS (Injected 3.5 bps rate & 900s settle triggered),PASS (Rejected low rate & calm window),NO_NATIVE_SIGNALS_CONFIRMED,RATE_BELOW_THRESHOLD: 3; SETTLE_INACTIVE: 0
+v3.12,Cross-Basis (8096),Native Spot-Perp BBO Arbitrage (|basis| >= 25 bps),1793,Max basis: 8.70 bps,0,PASS (Injected 28.5 bps dislocation triggered),PASS (Normal basis rejected),NO_NATIVE_SIGNALS_CONFIRMED,NORMAL_BOUNDS: 1793

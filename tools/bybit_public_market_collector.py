@@ -341,6 +341,7 @@ class BybitPublicMarketCollector:
         self.is_running = False
         self.records_collected: int = 0
         self.dropped_messages: int = 0
+        self.reconnect_count: int = 0
         self.bytes_received: int = 0
         self.bytes_written: int = 0
         self.records_by_topic: Dict[str, int] = defaultdict(int)
@@ -462,6 +463,7 @@ class BybitPublicMarketCollector:
                 "queue_depth": self.write_queue.qsize(),
                 "records_collected": self.records_collected,
                 "dropped_messages": self.dropped_messages,
+                "reconnects": self.reconnect_count,
                 "l2_gaps_detected": gaps,
                 "active_connections": 2 if self.collect_spot_bbo else 1,
             }
@@ -620,6 +622,7 @@ class BybitPublicMarketCollector:
                     ping_task.cancel()
                     break
             except Exception as e:
+                self.reconnect_count += 1
                 logger.warning(f"Linear WS connection error: {e}. Reconnecting in {backoff:.1f}s...")
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2.0, 30.0)
@@ -665,6 +668,7 @@ class BybitPublicMarketCollector:
                     ping_task.cancel()
                     break
             except Exception as e:
+                self.reconnect_count += 1
                 logger.warning(f"Spot WS connection error: {e}. Reconnecting in {backoff:.1f}s...")
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2.0, 30.0)
