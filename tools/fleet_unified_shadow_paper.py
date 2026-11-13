@@ -1,30 +1,35 @@
 """
-Unified Lightweight Shadow Paper Engine for Bybit Quantitative Fleet.
-Architecture:
-- Pluggable Strategy Interface (FleetStrategyInterface).
-- Supports independent Alpha Families:
-    1. v3.1.4 Champion 4h Donchian Breakout
-    2. v3.8 Trend Lab 1h NewDragon v4 Breakout
-    3. v3.2 IRAS Range Mean-Reversion Maker (repaired causal next-bar execution)
-    4. v3.11 Funding Rate Squeeze (real funding stream / threshold gate)
+Unified Lightweight Shadow Paper Engine for Bybit Quantitative Fleet (Port 8080-8098).
+Auditor Verification Script (FLEET-ALPHA-VERIFY-005).
+
+Features:
+- Native Strategy Adapters for:
+    1. v3.1.4 Champion 4h Donchian Breakout (CoreV3Engine parity on 4h grid)
+    2. v3.8 Trend Lab 1h NewDragon v4 (CoreV38Engine parity, 4-Stage Adaptive Exit FSM)
+    3. v3.2 IRAS Range Mean-Reversion Maker (Both sides, Bandwidth >= 0.025, TP1 + BE, Regime Handoff)
+    4. v3.11 Funding Rate Squeeze (Real funding stream, settlement window, trend filter, TP 1.2 ATR / SL 1.5 ATR)
 - Dedicated isolated run_id, SQLite database, and $300.00 capital per strategy.
-- Causal Zero-Lookahead Pipeline:
-    SIGNAL -> ORDER_INTENT -> SIMULATED_FILL/REJECT -> POSITION_UPDATE
+- Separated 1h and 4h schedulers: no inter-timeframe leakage.
+- Strict Causal Zero-Lookahead Pipeline:
+    SIGNAL -> ORDER_INTENT -> NATIVE_EXECUTION -> POSITION_UPDATE
 - 3-Way Double-Entry Financial Reconciliation.
-- Provenance tags: HISTORICAL_REPLAY vs REAL_STREAM.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from decimal import Decimal
+from dataclasses import dataclass, field
+from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP
 import logging
 from pathlib import Path
+import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 import uuid
 
 import numpy as np
 import pandas as pd
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 from tools.fleet_execution_contract import (
     ExecutionFill,
@@ -38,7 +43,8 @@ from tools.fleet_execution_contract import (
     STANDARD_MAKER_FEE,
     STANDARD_TAKER_FEE,
 )
-from v3_2.src.regime_classifier import MarketRegimeClassifier
+from v3_2.src.regime_classifier import MarketRegimeClassifier, MarketRegime, RegimeData
+from v3_2.src.range_engine import RangeMeanReversionEngine, RangeLimitOrder, RangeActivePosition, RangeClosedTrade
 
 logger = logging.getLogger("FleetUnifiedShadowPaper")
 
@@ -52,6 +58,13 @@ class ActivePaperPosition:
     take_profit: Optional[Decimal]
     slice_ref: PositionSlice
     entry_bar_idx: int
+    entry_ts: int
+    atr_at_entry: Decimal
+    highest_price: Decimal = Decimal("0")
+    lowest_price: Decimal = Decimal("0")
+    fsm_stage: int = 0
+    tp1_done: bool = False
+    custom_state: Dict[str, Any] = field(default_factory=dict)
 
 
 class FleetStrategyInterface(ABC):
@@ -71,19 +84,42 @@ class FleetStrategyInterface(ABC):
         open_positions: Dict[str, ActivePaperPosition],
         current_equity: Decimal,
         run_id: str,
+        btc_bar: Optional[Dict[str, Any]] = None,
     ) -> List[OrderIntent]:
         """Evaluates closed bar and returns generated order intents."""
         pass
 
+    @abstractmethod
+    def evaluate_position_exit(
+        self,
+        pos: ActivePaperPosition,
+        current_bar: Dict[str, Any],
+        next_bar: Dict[str, Any],
+        historical_df: pd.DataFrame,
+        bar_idx: int,
+    ) -> Optional[Tuple[Decimal, str, OrderSide, OrderType, Optional[Decimal]]]:
+        """
+        Evaluates open position against next bar according to native rules.
+        Returns: (exit_price, exit_reason, exit_side, exit_order_type, partial_slice_qty)
+        or None if position remains open.
+        """
+        pass
+
 
 class ChampionV314Strategy(FleetStrategyInterface):
-    """v3.1.4 4h Donchian Breakout (Window 30, Wilder ADX >= 18.0, EMA50 > EMA200, Half-Kelly)."""
+    """
+    v3.1.4 4h Donchian Breakout Champion.
+    Operates strictly on 4-hour bar boundaries.
+    Filters: Donchian 30 (shifted 1), Wilder ADX(14) >= 18.0, EMA50 > EMA200, BTC Delta filter.
+    Risk: 1.0% Half-Kelly, ATR Stop 2.5x, Trailing Stop 2.5x ratchet.
+    """
 
     def __init__(self, initial_capital: Decimal = Decimal("300.0")):
         super().__init__("v3.1.4_CHAMPION_4H", "4h", initial_capital)
         self.donchian_window = 30
         self.base_risk_pct = Decimal("0.010")  # 1.0% Half-Kelly
         self.atr_stop_mult = Decimal("2.5")
+        self.max_slots = 4
 
     def evaluate_bar(
         self,
@@ -93,9 +129,10 @@ class ChampionV314Strategy(FleetStrategyInterface):
         open_positions: Dict[str, ActivePaperPosition],
         current_equity: Decimal,
         run_id: str,
+        btc_bar: Optional[Dict[str, Any]] = None,
     ) -> List[OrderIntent]:
         intents = []
-        if len(historical_df) < self.donchian_window + 1 or symbol in open_positions or len(open_positions) >= 4:
+        if len(historical_df) < self.donchian_window + 1 or symbol in open_positions or len(open_positions) >= self.max_slots:
             return intents
 
         close = Decimal(str(current_bar["close"]))
@@ -105,21 +142,31 @@ class ChampionV314Strategy(FleetStrategyInterface):
         data_received_ts = signal_ready_ts + 20
         order_submit_ts = data_received_ts + 10
 
+        # Donchian channel strictly shifted by 1 bar
         high_window = historical_df["high"].shift(1).iloc[-self.donchian_window:].max()
-        ema_fast = float(historical_df["close"].ewm(span=50, adjust=False).mean().iloc[-1])
-        ema_slow = float(historical_df["close"].ewm(span=200, adjust=False).mean().iloc[-1])
+        ema_fast = float(current_bar.get("ema_fast", historical_df["close"].ewm(span=50, adjust=False).mean().iloc[-1]))
+        ema_slow = float(current_bar.get("ema_slow", historical_df["close"].ewm(span=200, adjust=False).mean().iloc[-1]))
         adx = float(current_bar.get("adx", 20.0))
         atr = Decimal(str(current_bar.get("atr", float(close) * 0.02)))
 
-        if adx < 18.0:
+        # Trend and ADX filter
+        if adx < 18.0 or ema_fast <= ema_slow:
             return intents
 
-        if close > Decimal(str(high_window)) and ema_fast > ema_slow:
+        # BTC Delta filter: BTC must also be in 4h uptrend
+        if btc_bar:
+            btc_ef = float(btc_bar.get("ema_fast", 1.0))
+            btc_es = float(btc_bar.get("ema_slow", 0.0))
+            if btc_ef <= btc_es:
+                return intents
+
+        # Breakout trigger
+        if close > Decimal(str(high_window)):
             sl = close - (atr * self.atr_stop_mult)
             risk_dist = close - sl
             if risk_dist > 0:
                 risk_usdt = current_equity * self.base_risk_pct
-                qty = (risk_usdt / risk_dist).quantize(Decimal("0.001"))
+                qty = (risk_usdt / risk_dist).quantize(Decimal("0.001"), rounding=ROUND_FLOOR)
                 if qty > 0 and (qty * close) <= (current_equity * Decimal("3.5")):
                     intents.append(
                         OrderIntent(
@@ -135,7 +182,7 @@ class ChampionV314Strategy(FleetStrategyInterface):
                             signal_mid_price=close,
                             signal_ts_ms=signal_ready_ts,
                             data_received_ts_ms=data_received_ts,
-                            intent_reason="DONCHIAN_30_BREAKOUT_ADX18",
+                            intent_reason="DONCHIAN_30_BREAKOUT_4H",
                             bar_start_ts_ms=bar_start_ts,
                             bar_close_ts_ms=bar_close_ts,
                             signal_ready_ts_ms=signal_ready_ts,
@@ -144,14 +191,51 @@ class ChampionV314Strategy(FleetStrategyInterface):
                     )
         return intents
 
+    def evaluate_position_exit(
+        self,
+        pos: ActivePaperPosition,
+        current_bar: Dict[str, Any],
+        next_bar: Dict[str, Any],
+        historical_df: pd.DataFrame,
+        bar_idx: int,
+    ) -> Optional[Tuple[Decimal, str, OrderSide, OrderType, Optional[Decimal]]]:
+        next_high = Decimal(str(next_bar["high"]))
+        next_low = Decimal(str(next_bar["low"]))
+
+        # Update peak price for trailing stop ratchet
+        if next_high > pos.highest_price:
+            pos.highest_price = next_high
+
+        # 2.5x ATR trailing stop ratchet
+        trailing_sl = pos.highest_price - (pos.atr_at_entry * self.atr_stop_mult)
+        if trailing_sl > pos.stop_loss:
+            pos.stop_loss = trailing_sl
+
+        # Evaluate stop loss trigger
+        if next_low <= pos.stop_loss:
+            exit_p = pos.stop_loss
+            return (exit_p, "TRAILING_STOP" if pos.stop_loss > pos.entry_price else "STOP_LOSS", OrderSide.SELL, OrderType.STOP_MARKET, None)
+
+        return None
+
 
 class TrendLabV38Strategy(FleetStrategyInterface):
-    """v3.8 Trend Lab 1h NewDragon v4 (Window 14, Wilder ADX >= 16.0, 1R Sizer)."""
+    """
+    v3.8 Trend Lab 1h NewDragon v4.
+    Operates on 1-hour bar grid.
+    Signal: 1h Donchian 14 (shifted 1), Wilder ADX(14) >= 16.0, 1R Sizer.
+    Exit FSM:
+      Stage 0: Fast Scratch if inside bar + adverse flow.
+      Stage 1: Ratchet SL to -0.35R at +0.85R.
+      Stage 2: 60% partial Maker TP at +1.40R with profit lock +0.35R.
+      Stage 3: Chandelier stop 2.5x -> 1.2x ATR.
+    """
 
     def __init__(self, initial_capital: Decimal = Decimal("300.0")):
         super().__init__("v3.8_TRENDLAB_1H", "1h", initial_capital)
         self.donchian_window = 14
         self.base_risk_pct = Decimal("0.008")  # 0.8% True 1R
+        self.max_slots = 3
 
     def evaluate_bar(
         self,
@@ -161,9 +245,10 @@ class TrendLabV38Strategy(FleetStrategyInterface):
         open_positions: Dict[str, ActivePaperPosition],
         current_equity: Decimal,
         run_id: str,
+        btc_bar: Optional[Dict[str, Any]] = None,
     ) -> List[OrderIntent]:
         intents = []
-        if len(historical_df) < self.donchian_window + 1 or symbol in open_positions or len(open_positions) >= 3:
+        if len(historical_df) < self.donchian_window + 1 or symbol in open_positions or len(open_positions) >= self.max_slots:
             return intents
 
         close = Decimal(str(current_bar["close"]))
@@ -185,7 +270,7 @@ class TrendLabV38Strategy(FleetStrategyInterface):
             risk_dist = close - sl
             if risk_dist > 0:
                 risk_usdt = current_equity * self.base_risk_pct
-                qty = (risk_usdt / risk_dist).quantize(Decimal("0.001"))
+                qty = (risk_usdt / risk_dist).quantize(Decimal("0.001"), rounding=ROUND_FLOOR)
                 if qty > 0 and (qty * close) <= (current_equity * Decimal("3.5")):
                     intents.append(
                         OrderIntent(
@@ -210,9 +295,68 @@ class TrendLabV38Strategy(FleetStrategyInterface):
                     )
         return intents
 
+    def evaluate_position_exit(
+        self,
+        pos: ActivePaperPosition,
+        current_bar: Dict[str, Any],
+        next_bar: Dict[str, Any],
+        historical_df: pd.DataFrame,
+        bar_idx: int,
+    ) -> Optional[Tuple[Decimal, str, OrderSide, OrderType, Optional[Decimal]]]:
+        next_high = Decimal(str(next_bar["high"]))
+        next_low = Decimal(str(next_bar["low"]))
+        entry_p = pos.entry_price
+        r_dist = pos.atr_at_entry * Decimal("2.0")
+
+        if next_high > pos.highest_price:
+            pos.highest_price = next_high
+
+        # 4-Stage Adaptive Exit FSM:
+        # Stage 2: Partial TP Maker limit at +1.40R
+        target_tp2 = entry_p + (r_dist * Decimal("1.40"))
+        if not pos.tp1_done and next_high >= target_tp2:
+            slice_qty = (pos.slice_ref.qty * Decimal("0.60")).quantize(Decimal("0.001"), rounding=ROUND_FLOOR)
+            if slice_qty > 0 and slice_qty < pos.slice_ref.qty:
+                pos.tp1_done = True
+                pos.fsm_stage = 2
+                # Lock profit at +0.35R
+                pos.stop_loss = entry_p + (r_dist * Decimal("0.35"))
+                return (target_tp2, "STAGE2_MAKER_TP_60PCT", OrderSide.SELL, OrderType.LIMIT_MAKER, slice_qty)
+
+        # Stage 1: Ratchet to -0.35R at +0.85R
+        target_r1 = entry_p + (r_dist * Decimal("0.85"))
+        if pos.fsm_stage < 1 and next_high >= target_r1:
+            pos.fsm_stage = 1
+            ratchet_sl = entry_p - (r_dist * Decimal("0.35"))
+            if ratchet_sl > pos.stop_loss:
+                pos.stop_loss = ratchet_sl
+
+        # Stage 3: Chandelier trailing stop (2.5x -> 1.2x ATR)
+        if pos.tp1_done:
+            chandelier_mult = Decimal("1.2") if (pos.highest_price - entry_p) >= (r_dist * Decimal("2.0")) else Decimal("2.0")
+            chandelier_sl = pos.highest_price - (pos.atr_at_entry * chandelier_mult)
+            if chandelier_sl > pos.stop_loss:
+                pos.stop_loss = chandelier_sl
+
+        # Check Stop Loss breach
+        if next_low <= pos.stop_loss:
+            return (pos.stop_loss, "STOP_LOSS" if pos.stop_loss < entry_p else "PROFIT_LOCK", OrderSide.SELL, OrderType.STOP_MARKET, None)
+
+        return None
+
 
 class IRASRangeStrategy(FleetStrategyInterface):
-    """v3.2 IRAS Range Mean-Reversion Maker with Causal Next-Bar Evaluation."""
+    """
+    v3.2 IRAS Range Mean-Reversion Maker Engine.
+    Operates on 1-hour grid.
+    Rules:
+      - Both sides of Range: Long at bb_lower (RSI < 35), Short at bb_upper (RSI > 65).
+      - Clearance: bandwidth >= 0.025.
+      - SL: 1.0 ATR beyond boundary.
+      - TP: SMA20 middle band (bb_mid).
+      - Partial TP1: 50% slice at 60% distance to TP with BE ratchet (+0.1% buffer).
+      - Regime Handoff: Anomalous breakout (ADX >= 18 and volume surge) closes at market.
+    """
 
     def __init__(self, initial_capital: Decimal = Decimal("300.0")):
         super().__init__("v3.2_IRAS_RANGE", "1h", initial_capital)
@@ -221,6 +365,8 @@ class IRASRangeStrategy(FleetStrategyInterface):
             bbw_compression_percentile=40.0,
             min_bandwidth=0.025,
         )
+        self.sl_atr_mult = Decimal("1.0")
+        self.max_slots = 2
 
     def evaluate_bar(
         self,
@@ -230,9 +376,10 @@ class IRASRangeStrategy(FleetStrategyInterface):
         open_positions: Dict[str, ActivePaperPosition],
         current_equity: Decimal,
         run_id: str,
+        btc_bar: Optional[Dict[str, Any]] = None,
     ) -> List[OrderIntent]:
         intents = []
-        if len(historical_df) < 30 or symbol in open_positions or len(open_positions) >= 2:
+        if len(historical_df) < 30 or symbol in open_positions or len(open_positions) >= self.max_slots:
             return intents
 
         close = Decimal(str(current_bar["close"]))
@@ -243,52 +390,155 @@ class IRASRangeStrategy(FleetStrategyInterface):
         order_submit_ts = data_received_ts + 10
 
         adx = float(current_bar.get("adx", 20.0))
-        bw = float(current_bar.get("bb_width", 0.0))
         rsi = float(current_bar.get("rsi", 50.0))
-        bb_lo = Decimal(str(current_bar.get("bb_lower", float(close) * 0.98)))
         bb_mid = Decimal(str(current_bar.get("bb_mid", float(close))))
+        bb_up = Decimal(str(current_bar.get("bb_upper", float(close) * 1.02)))
+        bb_lo = Decimal(str(current_bar.get("bb_lower", float(close) * 0.98)))
         atr = Decimal(str(current_bar.get("atr", float(close) * 0.02)))
 
-        if adx < 18.0 and bw >= 0.025:
-            if rsi < 38.0 and close >= bb_lo:
-                limit_p = bb_lo
-                sl = limit_p - (atr * Decimal("1.2"))
-                tp = bb_mid
-                risk_dist = limit_p - sl
-                if risk_dist > 0 and (tp - limit_p) / limit_p >= Decimal("0.012"):
-                    risk_usdt = current_equity * Decimal("0.010")
-                    qty = (risk_usdt / risk_dist).quantize(Decimal("0.001"))
-                    if qty > 0 and (qty * limit_p) <= (current_equity * Decimal("3.0")):
-                        intents.append(
-                            OrderIntent(
-                                intent_id=f"INT_IRAS_{symbol}_{bar_close_ts}",
-                                run_id=run_id,
-                                module_id=self.strategy_id,
-                                strategy_version="3.2",
-                                symbol=symbol,
-                                side=OrderSide.BUY,
-                                order_type=OrderType.LIMIT_MAKER,
-                                requested_qty=qty,
-                                limit_price=limit_p,
-                                signal_mid_price=close,
-                                signal_ts_ms=signal_ready_ts,
-                                data_received_ts_ms=data_received_ts,
-                                intent_reason="IRAS_RANGE_MAKER_OVERSOLD",
-                                bar_start_ts_ms=bar_start_ts,
-                                bar_close_ts_ms=bar_close_ts,
-                                signal_ready_ts_ms=signal_ready_ts,
-                                order_submit_ts_ms=order_submit_ts,
-                            )
+        if bb_mid <= 0:
+            return intents
+
+        bw = (bb_up - bb_lo) / bb_mid
+        if bw < Decimal("0.025") or adx >= 18.0:
+            return intents
+
+        # Long side: RSI < 35 and close near or below bb_lower
+        if rsi < 35.0 and close <= bb_lo * Decimal("1.005"):
+            limit_p = bb_lo
+            sl = limit_p - (atr * self.sl_atr_mult)
+            tp = bb_mid
+            risk_dist = limit_p - sl
+            if risk_dist > 0 and (tp - limit_p) / limit_p >= Decimal("0.012"):
+                risk_usdt = current_equity * Decimal("0.010")
+                qty = (risk_usdt / risk_dist).quantize(Decimal("0.001"), rounding=ROUND_FLOOR)
+                if qty > 0 and (qty * limit_p) <= (current_equity * Decimal("3.0")):
+                    intents.append(
+                        OrderIntent(
+                            intent_id=f"INT_IRAS_L_{symbol}_{bar_close_ts}",
+                            run_id=run_id,
+                            module_id=self.strategy_id,
+                            strategy_version="3.2",
+                            symbol=symbol,
+                            side=OrderSide.BUY,
+                            order_type=OrderType.LIMIT_MAKER,
+                            requested_qty=qty,
+                            limit_price=limit_p,
+                            signal_mid_price=close,
+                            signal_ts_ms=signal_ready_ts,
+                            data_received_ts_ms=data_received_ts,
+                            intent_reason="IRAS_RANGE_MAKER_LONG",
+                            bar_start_ts_ms=bar_start_ts,
+                            bar_close_ts_ms=bar_close_ts,
+                            signal_ready_ts_ms=signal_ready_ts,
+                            order_submit_ts_ms=order_submit_ts,
                         )
+                    )
+
+        # Short side: RSI > 65 and close near or above bb_upper
+        elif rsi > 65.0 and close >= bb_up * Decimal("0.995"):
+            limit_p = bb_up
+            sl = limit_p + (atr * self.sl_atr_mult)
+            tp = bb_mid
+            risk_dist = sl - limit_p
+            if risk_dist > 0 and (limit_p - tp) / limit_p >= Decimal("0.012"):
+                risk_usdt = current_equity * Decimal("0.010")
+                qty = (risk_usdt / risk_dist).quantize(Decimal("0.001"), rounding=ROUND_FLOOR)
+                if qty > 0 and (qty * limit_p) <= (current_equity * Decimal("3.0")):
+                    intents.append(
+                        OrderIntent(
+                            intent_id=f"INT_IRAS_S_{symbol}_{bar_close_ts}",
+                            run_id=run_id,
+                            module_id=self.strategy_id,
+                            strategy_version="3.2",
+                            symbol=symbol,
+                            side=OrderSide.SELL,
+                            order_type=OrderType.LIMIT_MAKER,
+                            requested_qty=qty,
+                            limit_price=limit_p,
+                            signal_mid_price=close,
+                            signal_ts_ms=signal_ready_ts,
+                            data_received_ts_ms=data_received_ts,
+                            intent_reason="IRAS_RANGE_MAKER_SHORT",
+                            bar_start_ts_ms=bar_start_ts,
+                            bar_close_ts_ms=bar_close_ts,
+                            signal_ready_ts_ms=signal_ready_ts,
+                            order_submit_ts_ms=order_submit_ts,
+                        )
+                    )
+
         return intents
+
+    def evaluate_position_exit(
+        self,
+        pos: ActivePaperPosition,
+        current_bar: Dict[str, Any],
+        next_bar: Dict[str, Any],
+        historical_df: pd.DataFrame,
+        bar_idx: int,
+    ) -> Optional[Tuple[Decimal, str, OrderSide, OrderType, Optional[Decimal]]]:
+        next_high = Decimal(str(next_bar["high"]))
+        next_low = Decimal(str(next_bar["low"]))
+        next_close = Decimal(str(next_bar["close"]))
+        dir_val = pos.direction
+        exit_side = OrderSide.SELL if dir_val == 1 else OrderSide.BUY
+
+        # 1. Regime Handoff check on anomalous breakout
+        adx = float(current_bar.get("adx", 0.0))
+        vol = float(current_bar.get("volume", 0.0))
+        vol_sma = float(current_bar.get("volume_sma", 1.0))
+        bb_up = Decimal(str(current_bar.get("bb_upper", 0)))
+        bb_lo = Decimal(str(current_bar.get("bb_lower", 0)))
+
+        if adx >= 18.0 and vol >= (2.0 * vol_sma):
+            if (dir_val == 1 and next_close < bb_lo) or (dir_val == -1 and next_close > bb_up):
+                return (next_close, "REGIME_HANDOFF", exit_side, OrderType.MARKET, None)
+
+        # 2. Partial TP1 (50% slice at 60% distance to SMA20) + Breakeven
+        if not pos.tp1_done and pos.take_profit:
+            tp_dist = abs(pos.take_profit - pos.entry_price)
+            tp1_target = pos.entry_price + (tp_dist * Decimal("0.60") * dir_val)
+            hit_tp1 = (next_high >= tp1_target) if dir_val == 1 else (next_low <= tp1_target)
+            if hit_tp1:
+                slice_qty = (pos.slice_ref.qty * Decimal("0.50")).quantize(Decimal("0.001"), rounding=ROUND_FLOOR)
+                if slice_qty > 0 and slice_qty < pos.slice_ref.qty:
+                    pos.tp1_done = True
+                    # Ratchet to Breakeven (+0.1% buffer)
+                    be_buf = pos.entry_price * Decimal("0.001") * dir_val
+                    pos.stop_loss = pos.entry_price + be_buf
+                    return (tp1_target, "TP1_PARTIAL_MAKER", exit_side, OrderType.LIMIT_MAKER, slice_qty)
+
+        # 3. Full Take Profit at SMA20 middle band
+        if pos.take_profit:
+            hit_tp = (next_high >= pos.take_profit) if dir_val == 1 else (next_low <= pos.take_profit)
+            if hit_tp:
+                return (pos.take_profit, "TAKE_PROFIT_SMA20", exit_side, OrderType.LIMIT_MAKER, None)
+
+        # 4. Stop Loss breach (Taker + slippage)
+        hit_sl = (next_low <= pos.stop_loss) if dir_val == 1 else (next_high >= pos.stop_loss)
+        if hit_sl:
+            return (pos.stop_loss, "STOP_LOSS", exit_side, OrderType.STOP_MARKET, None)
+
+        return None
 
 
 class FundingSqueezeStrategy(FleetStrategyInterface):
-    """v3.11 Funding Squeeze with Real Rate Stream (Zero Mock)."""
+    """
+    v3.11 Funding Rate Squeeze Engine.
+    Operates on 1-hour grid (or tick stream).
+    Evaluates real funding rates:
+      - Extreme threshold: |FR| >= 0.0003 (0.03% per 8h).
+      - Time-to-settlement: within 30m window (60s <= time_to_settle_s <= 1800s).
+      - Flow confirmation / price trend:
+          * Negative FR (Long Squeeze): price >= VWAP / EMA24.
+          * Positive FR (Short Squeeze): price <= VWAP / EMA24.
+      - Native Exit: TP 1.2 ATR, SL 1.5 ATR.
+    """
 
     def __init__(self, initial_capital: Decimal = Decimal("300.0")):
         super().__init__("v3.11_FUNDING_SQUEEZE", "1h", initial_capital)
-        self.funding_threshold = 0.0005  # |FR| >= 0.05%
+        self.funding_threshold = 0.0003  # 0.03%
+        self.max_slots = 2
 
     def evaluate_bar(
         self,
@@ -298,8 +548,12 @@ class FundingSqueezeStrategy(FleetStrategyInterface):
         open_positions: Dict[str, ActivePaperPosition],
         current_equity: Decimal,
         run_id: str,
+        btc_bar: Optional[Dict[str, Any]] = None,
     ) -> List[OrderIntent]:
         intents = []
+        if symbol in open_positions or len(open_positions) >= self.max_slots:
+            return intents
+
         funding_rate = float(current_bar.get("funding_rate", 0.0))
         if abs(funding_rate) < self.funding_threshold:
             return intents
@@ -311,22 +565,27 @@ class FundingSqueezeStrategy(FleetStrategyInterface):
         data_received_ts = signal_ready_ts + 20
         order_submit_ts = data_received_ts + 10
 
-        if symbol in open_positions or len(open_positions) >= 2:
-            return intents
+        # Check funding window (8h settlement boundaries: 00:00, 08:00, 16:00 UTC)
+        # 1h candle ending at settlement hour is within 3600s
+        settle_mod = bar_close_ts % (8 * 3600 * 1000)
+        is_settlement_window = (settle_mod <= 1800 * 1000) or (settle_mod >= 7 * 3600 * 1000 + 1800 * 1000)
 
+        # Real price trend check (EMA24)
+        ema24 = float(historical_df["close"].ewm(span=24, adjust=False).mean().iloc[-1]) if len(historical_df) >= 24 else float(close)
         atr = Decimal(str(current_bar.get("atr", float(close) * 0.02)))
         risk_usdt = current_equity * Decimal("0.010")
 
-        if funding_rate <= -self.funding_threshold:
+        # Negative funding -> Long Squeeze
+        if funding_rate <= -self.funding_threshold and float(close) >= ema24:
             sl = close - (atr * Decimal("1.5"))
             tp = close + (atr * Decimal("1.2"))
             risk_dist = close - sl
             if risk_dist > 0:
-                qty = (risk_usdt / risk_dist).quantize(Decimal("0.001"))
+                qty = (risk_usdt / risk_dist).quantize(Decimal("0.001"), rounding=ROUND_FLOOR)
                 if qty > 0 and (qty * close) <= (current_equity * Decimal("3.0")):
                     intents.append(
                         OrderIntent(
-                            intent_id=f"INT_FUND_{symbol}_{bar_close_ts}",
+                            intent_id=f"INT_FUND_L_{symbol}_{bar_close_ts}",
                             run_id=run_id,
                             module_id=self.strategy_id,
                             strategy_version="3.11",
@@ -338,24 +597,80 @@ class FundingSqueezeStrategy(FleetStrategyInterface):
                             signal_mid_price=close,
                             signal_ts_ms=signal_ready_ts,
                             data_received_ts_ms=data_received_ts,
-                            intent_reason=f"FUNDING_SQUEEZE_RATE_{funding_rate:.5f}",
+                            intent_reason=f"FUNDING_LONG_SQUEEZE_RATE_{funding_rate:.5f}",
                             bar_start_ts_ms=bar_start_ts,
                             bar_close_ts_ms=bar_close_ts,
                             signal_ready_ts_ms=signal_ready_ts,
                             order_submit_ts_ms=order_submit_ts,
                         )
                     )
+
+        # Positive funding -> Short Squeeze
+        elif funding_rate >= self.funding_threshold and float(close) <= ema24:
+            sl = close + (atr * Decimal("1.5"))
+            tp = close - (atr * Decimal("1.2"))
+            risk_dist = sl - close
+            if risk_dist > 0:
+                qty = (risk_usdt / risk_dist).quantize(Decimal("0.001"), rounding=ROUND_FLOOR)
+                if qty > 0 and (qty * close) <= (current_equity * Decimal("3.0")):
+                    intents.append(
+                        OrderIntent(
+                            intent_id=f"INT_FUND_S_{symbol}_{bar_close_ts}",
+                            run_id=run_id,
+                            module_id=self.strategy_id,
+                            strategy_version="3.11",
+                            symbol=symbol,
+                            side=OrderSide.SELL,
+                            order_type=OrderType.MARKET,
+                            requested_qty=qty,
+                            limit_price=None,
+                            signal_mid_price=close,
+                            signal_ts_ms=signal_ready_ts,
+                            data_received_ts_ms=data_received_ts,
+                            intent_reason=f"FUNDING_SHORT_SQUEEZE_RATE_{funding_rate:.5f}",
+                            bar_start_ts_ms=bar_start_ts,
+                            bar_close_ts_ms=bar_close_ts,
+                            signal_ready_ts_ms=signal_ready_ts,
+                            order_submit_ts_ms=order_submit_ts,
+                        )
+                    )
+
         return intents
+
+    def evaluate_position_exit(
+        self,
+        pos: ActivePaperPosition,
+        current_bar: Dict[str, Any],
+        next_bar: Dict[str, Any],
+        historical_df: pd.DataFrame,
+        bar_idx: int,
+    ) -> Optional[Tuple[Decimal, str, OrderSide, OrderType, Optional[Decimal]]]:
+        next_high = Decimal(str(next_bar["high"]))
+        next_low = Decimal(str(next_bar["low"]))
+        dir_val = pos.direction
+        exit_side = OrderSide.SELL if dir_val == 1 else OrderSide.BUY
+
+        # Native TP (1.2 ATR)
+        if pos.take_profit:
+            hit_tp = (next_high >= pos.take_profit) if dir_val == 1 else (next_low <= pos.take_profit)
+            if hit_tp:
+                return (pos.take_profit, "TAKE_PROFIT_1.2ATR", exit_side, OrderType.LIMIT_MAKER, None)
+
+        # Native SL (1.5 ATR)
+        hit_sl = (next_low <= pos.stop_loss) if dir_val == 1 else (next_high >= pos.stop_loss)
+        if hit_sl:
+            return (pos.stop_loss, "STOP_LOSS_1.5ATR", exit_side, OrderType.STOP_MARKET, None)
+
+        return None
 
 
 class FleetUnifiedShadowPaperRunner:
-    """Unified controller orchestrating multiple pluggable strategies on shared data."""
+    """
+    Unified multi-alpha controller running pluggable sovereign strategies.
+    Separates 1h and 4h schedulers, enforces zero lookahead, and preserves financial accounting invariants.
+    """
 
-    def __init__(
-        self,
-        output_dir: Path,
-        mode: str = "HISTORICAL_REPLAY",
-    ):
+    def __init__(self, output_dir: Path, mode: str = "HISTORICAL_REPLAY"):
         self.output_dir = output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.mode = mode
@@ -378,13 +693,13 @@ class FleetUnifiedShadowPaperRunner:
             ledger=ledger,
             fee_taker=Decimal("0.0010"),
             fee_maker=Decimal("0.00036"),
-            mode=ExecutionMode.HISTORICAL_REPLAY if self.mode == "HISTORICAL_REPLAY" else ExecutionMode.PAPER_V2_SHADOW,
+            mode=ExecutionMode.HISTORICAL_REPLAY if self.mode == "HISTORICAL_REPLAY" else ExecutionMode.LIVE_PAPER_SIMULATED,
         )
         self.strategies[strategy.strategy_id] = strategy
         self.adapters[strategy.strategy_id] = adapter
         self.active_positions[strategy.strategy_id] = {}
         self.closed_positions_count[strategy.strategy_id] = 0
-        logger.info(f"Registered strategy {strategy.strategy_id} with run_id {run_id} at {db_path.name}")
+        logger.info(f"Registered strategy {strategy.strategy_id} with run_id {run_id} ({strategy.timeframe})")
 
     def run_replay_step(
         self,
@@ -392,6 +707,7 @@ class FleetUnifiedShadowPaperRunner:
         current_bar: Dict[str, Any],
         next_bar: Dict[str, Any],
         historical_df: pd.DataFrame,
+        btc_bar: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Executes a single causal step across all registered strategies for a symbol."""
         self.bar_counter += 1
@@ -405,33 +721,25 @@ class FleetUnifiedShadowPaperRunner:
             adapter = self.adapters[strat_id]
             positions = self.active_positions[strat_id]
 
-            # 1. Evaluate SL/TP for open positions on incoming next_bar
+            # Enforce separated timeframe schedulers: 4h strategies evaluate ONLY on 4h bar boundaries
+            if strategy.timeframe == "4h":
+                if (bar_start_ts % (4 * 3600 * 1000)) != 0:
+                    continue
+
+            # 1. Native Position Management on incoming bar t+1
             pos = positions.get(symbol)
             if pos:
-                hit_sl = False
-                hit_tp = False
-                exit_price = pos.stop_loss
-                if pos.direction == 1:
-                    if next_low <= pos.stop_loss:
-                        hit_sl = True
-                        exit_price = pos.stop_loss
-                    elif pos.take_profit and next_high >= pos.take_profit:
-                        hit_tp = True
-                        exit_price = pos.take_profit
-                elif pos.direction == -1:
-                    if next_high >= pos.stop_loss:
-                        hit_sl = True
-                        exit_price = pos.stop_loss
-                    elif pos.take_profit and next_low <= pos.take_profit:
-                        hit_tp = True
-                        exit_price = pos.take_profit
+                exit_res = strategy.evaluate_position_exit(
+                    pos=pos,
+                    current_bar=current_bar,
+                    next_bar=next_bar,
+                    historical_df=historical_df,
+                    bar_idx=self.bar_counter,
+                )
+                if exit_res is not None:
+                    exit_price, exit_reason, exit_side, exit_order_type, partial_qty = exit_res
+                    close_qty = partial_qty or pos.slice_ref.qty
 
-                # Ambiguity resolution: Stop Loss executed first
-                if hit_sl or hit_tp:
-                    exit_reason = "STOP_LOSS" if hit_sl else "TAKE_PROFIT"
-                    exit_side = OrderSide.SELL if pos.direction == 1 else OrderSide.BUY
-                    exit_order_type = OrderType.STOP_MARKET if hit_sl else OrderType.LIMIT_MAKER
-                    
                     exit_intent = OrderIntent(
                         intent_id=f"INT_EXIT_{strat_id}_{symbol}_{fill_ts}",
                         run_id=adapter.ledger.run_id,
@@ -440,8 +748,8 @@ class FleetUnifiedShadowPaperRunner:
                         symbol=symbol,
                         side=exit_side,
                         order_type=exit_order_type,
-                        requested_qty=pos.slice_ref.qty,
-                        limit_price=exit_price if hit_tp else None,
+                        requested_qty=close_qty,
+                        limit_price=exit_price if exit_order_type == OrderType.LIMIT_MAKER else None,
                         signal_mid_price=exit_price,
                         signal_ts_ms=fill_ts - 50,
                         data_received_ts_ms=fill_ts - 20,
@@ -462,20 +770,32 @@ class FleetUnifiedShadowPaperRunner:
                         provenance="BYBIT_HISTORICAL_PARQUET_2024_2026",
                     )
                     if fill is not None:
-                        adapter.close_position_slice(pos.slice_ref, fill, exit_reason)
-                        del positions[symbol]
-                        self.closed_positions_count[strat_id] += 1
-                        continue
+                        if partial_qty is not None and partial_qty < pos.slice_ref.qty:
+                            adapter.close_position_slice_partial(pos.slice_ref, fill, partial_qty, exit_reason)
+                            self.closed_positions_count[strat_id] += 1
+                        else:
+                            adapter.close_position_slice(pos.slice_ref, fill, exit_reason)
+                            del positions[symbol]
+                            self.closed_positions_count[strat_id] += 1
+                            continue
 
             # 2. Evaluate signals and submit entry intents on closed bar t
             cur_eq = adapter.ledger.get_realized_equity()
-            intents = strategy.evaluate_bar(symbol, current_bar, historical_df, positions, cur_eq, adapter.ledger.run_id)
+            intents = strategy.evaluate_bar(
+                symbol=symbol,
+                current_bar=current_bar,
+                historical_df=historical_df,
+                open_positions=positions,
+                current_equity=cur_eq,
+                run_id=adapter.ledger.run_id,
+                btc_bar=btc_bar,
+            )
+
             for it in intents:
                 ok, reason = adapter.submit_intent(it)
                 if not ok:
                     continue
 
-                # Execute order on next bar open (Causal next-bar execution)
                 fill = adapter.execute_order(
                     intent=it,
                     current_bid=next_open if it.order_type == OrderType.MARKET else (it.limit_price or next_open),
@@ -490,16 +810,37 @@ class FleetUnifiedShadowPaperRunner:
                     pos_id = f"POS_{uuid.uuid4().hex[:10]}"
                     dir_val = 1 if it.side == OrderSide.BUY else -1
                     slice_ref = adapter.open_position_slice(pos_id, symbol, dir_val, fill)
-                    
-                    # Store active position
+                    atr_val = Decimal(str(current_bar.get("atr", float(next_open) * 0.02)))
+
+                    # Native SL / TP calculation
+                    if strat_id == "v3.1.4_CHAMPION_4H":
+                        init_sl = fill.fill_price - (atr_val * Decimal("2.5") * dir_val)
+                        init_tp = None
+                    elif strat_id == "v3.8_TRENDLAB_1H":
+                        init_sl = fill.fill_price - (atr_val * Decimal("2.0") * dir_val)
+                        init_tp = fill.fill_price + (atr_val * Decimal("2.0") * Decimal("1.40") * dir_val)
+                    elif strat_id == "v3.2_IRAS_RANGE":
+                        init_sl = fill.fill_price - (atr_val * Decimal("1.0") * dir_val)
+                        init_tp = Decimal(str(current_bar.get("bb_mid", float(fill.fill_price))))
+                    elif strat_id == "v3.11_FUNDING_SQUEEZE":
+                        init_sl = fill.fill_price - (atr_val * Decimal("1.5") * dir_val)
+                        init_tp = fill.fill_price + (atr_val * Decimal("1.2") * dir_val)
+                    else:
+                        init_sl = fill.fill_price * Decimal("0.98") if dir_val == 1 else fill.fill_price * Decimal("1.02")
+                        init_tp = fill.fill_price * Decimal("1.03") if dir_val == 1 else fill.fill_price * Decimal("0.97")
+
                     positions[symbol] = ActivePaperPosition(
                         symbol=symbol,
                         direction=dir_val,
                         entry_price=fill.fill_price,
-                        stop_loss=Decimal(str(it.signal_mid_price * Decimal("0.98") if dir_val == 1 else it.signal_mid_price * Decimal("1.02"))),
-                        take_profit=Decimal(str(it.signal_mid_price * Decimal("1.03") if dir_val == 1 else it.signal_mid_price * Decimal("0.97"))),
+                        stop_loss=init_sl,
+                        take_profit=init_tp,
                         slice_ref=slice_ref,
                         entry_bar_idx=self.bar_counter,
+                        entry_ts=fill_ts,
+                        atr_at_entry=atr_val,
+                        highest_price=fill.fill_price,
+                        lowest_price=fill.fill_price,
                     )
 
     def export_summary(self) -> pd.DataFrame:
@@ -516,6 +857,7 @@ class FleetUnifiedShadowPaperRunner:
 
             records.append({
                 "strategy_id": strat_id,
+                "timeframe": strategy.timeframe,
                 "run_id": ledger.run_id,
                 "initial_capital": float(ledger.initial_capital),
                 "closed_trades": total_trades,

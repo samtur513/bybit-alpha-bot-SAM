@@ -1,0 +1,17 @@
+strategy_id,port,family,role,status,timeframe,evidence_basis,data_dependency,shadow_paper_ready
+v3.1.4,8084,TREND_BREAKOUT,Champion 4h Donchian Breakout,READY_FOR_SHADOW,4h,VERIFIED_FACT,Parquet 2024-2026 4h candles,YES
+v3.8,8091,TREND_BREAKOUT,NewDragon Trend Lab 1h,READY_FOR_SHADOW,1h,VERIFIED_FACT,Parquet 2024-2026 1h candles,YES
+v3.2,8083,RANGE_MEAN_REVERSION,IRAS Range Maker,READY_FOR_SHADOW,1h,VERIFIED_FACT,Parquet 2024-2026 1h + live WS,YES
+v3.11,8097,FUNDING_ARBITRAGE,Funding Rate Squeeze,READY_FOR_SHADOW,1h,VERIFIED_FACT,Bybit tickers WebSocket + 1h candles,YES
+v3.12,8096,CROSS_BASIS,Spot-Perp Basis Arbitrage,DATA_REQUIRED,Tick,HYPOTHESIS,Synchronized Spot BBO + Perp L1 stream,PENDING_COLLECTOR
+v3.7,8090,LIQUIDITY_SWEEP,Master Sweeps Liquidity,DATA_REQUIRED,Tick,HYPOTHESIS,L2 orderbook.50 + publicTrade feed,PENDING_COLLECTOR
+v3.9,8092,INTRADAY_SCALPING,NewDragon Scalp Lab,DATA_REQUIRED,15m/5m,HYPOTHESIS,Sub-hourly 15m/5m kline history,PENDING_RESAMPLING
+v3.14,8094,DISPERSION,Basket Dispersion Arbitrage,DATA_REQUIRED,Tick/1h,HYPOTHESIS,Synchronized 10+ altcoin basket prices,PENDING_COLLECTOR
+v3.13,8080,STAT_ARB,Sector Momentum Arbitrage,DATA_REQUIRED,1h,HYPOTHESIS,Synchronized sector basket returns,PENDING_DATA
+v3.4,8087,STAT_ARB,ZF-8 Quant Mean-Reversion,NATIVE_SIGNAL_READY,1h,HYPOTHESIS,1h kline stream + z-score engine,PENDING_REPLAY
+v3.5,8088,STAT_ARB,Alpha Pairs Cointegration,EXECUTION_BLOCKED,1h,VERIFIED_FACT,1h kline stream (Negative edge under taker fee),NO
+v3.6,8089,STAT_ARB,Omega ZF-8 Engine,NATIVE_SIGNAL_READY,1h,HYPOTHESIS,1h kline stream + volatility filter,PENDING_REPLAY
+v3.3,8086,TREND_BREAKOUT,Turbo Streak Risk Engine,NATIVE_SIGNAL_READY,1h,HYPOTHESIS,1h kline stream + dynamic screener,PENDING_REPLAY
+v3.7-v4,8093,INTRADAY_SCALPING,NewDragon Scalp Lab v4,DATA_REQUIRED,Tick/1m,HYPOTHESIS,Sub-minute tick and OFI stream,PENDING_COLLECTOR
+v3-v4,8082,TREND_BREAKOUT,NewDragon Trend Lab Exp,NATIVE_SIGNAL_READY,1h,HYPOTHESIS,1h kline stream + trend gearbox,PENDING_REPLAY
+v3.10-8098,8098,LIQUIDITY_SWEEP,Master Sweeps L2 Engine,DATA_REQUIRED,Tick,HYPOTHESIS,Continuous orderbook.50 depth stream,PENDING_COLLECTOR

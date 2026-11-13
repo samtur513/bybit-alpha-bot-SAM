@@ -328,9 +328,12 @@ class RangeMeanReversionEngine:
                         exec_price = pos.tp1_price
                         slice_fee = slice_qty * exec_price * self.maker_fee
                         slice_gross = slice_qty * (exec_price - pos.entry_price) * direction
-                        slice_net = slice_gross - slice_fee
-                        self.realized_equity += slice_net
+                        alloc_init = pos.initial_qty if pos.initial_qty > 0 else (pos.current_qty + slice_qty)
+                        slice_entry_fee = pos.entry_fees * (slice_qty / alloc_init)
+                        slice_net = slice_gross - slice_fee - slice_entry_fee
+                        self.realized_equity += (slice_gross - slice_fee)
                         pos.current_qty -= slice_qty
+                        pos.entry_fees -= slice_entry_fee
                         pos.tp1_done = True
                         pos.be_activated = True
                         # Ratchet Stop Loss to Breakeven (+0.1% buffer in profit direction)
@@ -338,6 +341,23 @@ class RangeMeanReversionEngine:
                         pos.stop_loss = pos.entry_price + be_buf
                         sl = pos.stop_loss
                         hit_sl = (bar_low <= sl) if direction == 1 else (bar_high >= sl)
+                        
+                        tp1_trade = RangeClosedTrade(
+                            symbol=sym,
+                            direction=direction,
+                            entry_time=pos.entry_time,
+                            exit_time=timestamp,
+                            entry_price=pos.entry_price,
+                            exit_price=exec_price,
+                            qty=slice_qty,
+                            net_pnl=slice_net,
+                            exit_reason="TP1",
+                            hold_hours=(timestamp - pos.entry_time) / 3600000.0,
+                            fees_paid=slice_entry_fee + slice_fee,
+                            funding_pnl=Decimal("0"),
+                        )
+                        self.closed_trades.append(tp1_trade)
+                        closed_this_bar.append(tp1_trade)
                         self.events.append(dict(kind="RANGE_TP1_PARTIAL", symbol=sym, pnl=str(round(slice_net, 2)), new_sl=str(round(sl, 4))))
 
             # 2. Two-stage Regime Handoff check: anomalous breakout and ADX >= 18
@@ -363,8 +383,8 @@ class RangeMeanReversionEngine:
                 exec_price = bar_close * (Decimal("1") - self.slippage * direction)
                 exit_fee = pos.current_qty * exec_price * self.taker_fee
                 gross_pnl = pos.current_qty * (exec_price - pos.entry_price) * direction
-                net_pnl = gross_pnl - exit_fee + pos.funding_pnl
-                self.realized_equity += net_pnl
+                net_pnl = gross_pnl - exit_fee - pos.entry_fees + pos.funding_pnl
+                self.realized_equity += (gross_pnl - exit_fee + pos.funding_pnl)
 
                 closed = RangeClosedTrade(
                     symbol=sym,
@@ -396,8 +416,8 @@ class RangeMeanReversionEngine:
                 exec_price = fill_p * (Decimal("1") - self.slippage * direction)
                 exit_fee = pos.current_qty * exec_price * self.taker_fee
                 gross_pnl = pos.current_qty * (exec_price - pos.entry_price) * direction
-                net_pnl = gross_pnl - exit_fee + pos.funding_pnl
-                self.realized_equity += (pos.current_qty * (exec_price - pos.entry_price) * direction - exit_fee)
+                net_pnl = gross_pnl - exit_fee - pos.entry_fees + pos.funding_pnl
+                self.realized_equity += (gross_pnl - exit_fee + pos.funding_pnl)
 
                 closed = RangeClosedTrade(
                     symbol=sym,
@@ -424,8 +444,8 @@ class RangeMeanReversionEngine:
                 exec_price = tp
                 exit_fee = pos.current_qty * exec_price * self.maker_fee
                 gross_pnl = pos.current_qty * (exec_price - pos.entry_price) * direction
-                net_pnl = gross_pnl - exit_fee + pos.funding_pnl
-                self.realized_equity += (pos.current_qty * (exec_price - pos.entry_price) * direction - exit_fee)
+                net_pnl = gross_pnl - exit_fee - pos.entry_fees + pos.funding_pnl
+                self.realized_equity += (gross_pnl - exit_fee + pos.funding_pnl)
 
                 closed = RangeClosedTrade(
                     symbol=sym,

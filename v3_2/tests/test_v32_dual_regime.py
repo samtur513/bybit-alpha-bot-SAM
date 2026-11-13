@@ -200,9 +200,9 @@ def test_range_maker_order_fill_and_tp():
     }
 
     closed = engine.manage_positions_on_bar(1700003600000, bars_tp, regimes)
-    assert len(closed) == 1
-    assert closed[0].exit_reason == "TP"
-    assert closed[0].net_pnl > 0
+    assert len(closed) >= 1
+    assert any(c.exit_reason in ("TP", "TP1") for c in closed)
+    assert all(c.net_pnl > 0 for c in closed)
     assert "ETHUSDT" not in engine.open_positions
 
 
