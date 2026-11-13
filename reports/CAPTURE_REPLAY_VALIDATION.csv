@@ -1,0 +1,6 @@
+test_id,metric_name,run_1_value,run_2_value,bit_exact_match,status
+VAL_01_BIT_EXACT_STATE_HASH,Reconstructed State SHA-256,9456bf72408bbbca44881ee385eed76172b947658fd99d86ec57d9ecd20314ac,9456bf72408bbbca44881ee385eed76172b947658fd99d86ec57d9ecd20314ac,True,PASS
+VAL_02_TOTAL_EVENT_COUNT,Processed Market Events Count,10842,10842,True,PASS
+VAL_03_TOP_OF_BOOK_INTEGRITY,Negative Spreads Detected (bid >= ask),0,0,True,PASS
+VAL_04_SEQUENCE_GAP_INTEGRITY,Total L2 Orderbook Sequence Gaps,0,0,True,PASS
+VAL_05_SPOT_PERP_TIME_SYNC,Avg / Max Spot-Perp Latency Diff (ms),"Avg: 41.6ms, Max: 553ms","Avg: 41.6ms, Max: 553ms",True,PASS

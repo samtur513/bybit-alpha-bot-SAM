@@ -1,0 +1,4 @@
+strategy_id,role,stream_topic,activation_condition,max_observed_metric,signals_count,status
+v3.10,Master Sweeps L2,publicTrade.* + orderbook.50.*,Volume burst > $1.0M / 50 trades + liquidity level snapback reclaim,"Max 50-trade burst: $1,083,722.55",13,REAL_SIGNALS_DETECTED
+v3.11,Funding Squeeze,"tickers.* (fundingRate, nextFundingTime)",|FR| >= 0.03% (30 bps) & 60s <= time_to_settle <= 1800s,Max |FR|: 0.0125%,0,NO_SIGNALS_OBSERVED
+v3.12,Cross-Basis Arbitrage,orderbook.50 (Perp) vs orderbook.1 (Spot),Spot/Perp mid-price basis dislocation |basis| >= 25.0 bps,Max |basis|: 7.84 bps,0,NO_SIGNALS_OBSERVED

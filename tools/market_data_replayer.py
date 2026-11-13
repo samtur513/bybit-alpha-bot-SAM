@@ -13,6 +13,7 @@ Features:
 
 from dataclasses import dataclass, field
 from decimal import Decimal
+import gzip
 import json
 import logging
 from pathlib import Path
@@ -66,7 +67,10 @@ class MarketDataReplayer:
         Iterates over the JSONL file, updates internal state, and yields normalized MarketEvents.
         All checks use virtual_clock_ms.
         """
-        with open(self.capture_path, "r", encoding="utf-8") as f:
+        is_gz = str(self.capture_path).endswith(".gz")
+        open_fn = gzip.open if is_gz else open
+        mode = "rt" if is_gz else "r"
+        with open_fn(self.capture_path, mode, encoding="utf-8") as f:
             for line_no, line in enumerate(f, 1):
                 line = line.strip()
                 if not line:
