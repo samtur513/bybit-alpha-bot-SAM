@@ -347,7 +347,9 @@ class TrendLabV38Strategy(FleetStrategyInterface):
         # Stage 2: Partial TP Maker limit at +1.40R (60% scale-out)
         target_tp2 = entry_p + (r_dist * Decimal("1.40"))
         if not pos.tp1_done and next_high >= target_tp2:
-            slice_qty = (pos.slice_ref.qty * Decimal("0.60")).quantize(Decimal("0.001"), rounding=ROUND_FLOOR)
+            step = Decimal("0.01") if pos.symbol in ("SOLUSDT", "ETHUSDT") else (Decimal("1.0") if pos.symbol in ("DOGEUSDT", "ADAUSDT", "XRPUSDT") else Decimal("0.001"))
+            raw_close_qty = pos.slice_ref.qty * Decimal("0.60")
+            slice_qty = (raw_close_qty / step).to_integral_value(rounding=ROUND_FLOOR) * step
             if slice_qty > 0 and slice_qty < pos.slice_ref.qty:
                 # Do NOT mutate FSM stage or stop_loss here; only recommended action is returned.
                 # State transition occurs ONLY upon simulated fill confirmation in runner.
@@ -568,6 +570,9 @@ class FundingSqueezeStrategy(FleetStrategyInterface):
         super().__init__("v3.11_FUNDING_SQUEEZE", "1h", initial_capital)
         self.funding_threshold = 0.0003  # 0.03%
         self.max_slots = 2
+        self.risk_pct = Decimal("0.0035")
+        self.fee_maker = Decimal("0.000324")
+        self.fee_taker = Decimal("0.00090")
 
     def evaluate_bar(
         self,
@@ -770,7 +775,6 @@ class FundingSqueezeStrategy(FleetStrategyInterface):
 
         vwap = Decimal(str(event.get("vwap", mid)))
         atr = Decimal(str(event.get("atr_15m") or event.get("atr", float(mid) * 0.01)))
-        risk_usdt = current_equity * Decimal("0.010")
 
         # Causal timestamps: event_ts <= signal_ready_ts <= data_received_ts <= order_submit_ts
         signal_ready_ts = event_ts + 2
@@ -779,12 +783,15 @@ class FundingSqueezeStrategy(FleetStrategyInterface):
 
         # Negative funding -> Long Squeeze (crowded shorts paying longs)
         if funding_rate <= -self.funding_threshold and mid >= vwap:
-            sl = mid - (atr * Decimal("1.5"))
-            tp = mid + (atr * Decimal("1.2"))
-            risk_dist = mid - sl
-            if risk_dist > 0:
-                qty = (risk_usdt / risk_dist).quantize(Decimal("0.001"), rounding=ROUND_FLOOR)
-                if qty > 0 and (qty * mid) <= (current_equity * Decimal("3.0")):
+            limit_p = Decimal(str(event.get("bid1Price") or event.get("bid") or mid))
+            sl = limit_p - (atr * Decimal("1.5"))
+            tp = limit_p + (atr * Decimal("1.2"))
+            risk_dist_pct = (limit_p - sl) / limit_p
+            if Decimal("0.0015") <= risk_dist_pct <= Decimal("0.0200"):
+                total_risk_pct = risk_dist_pct + self.fee_maker + self.fee_taker
+                notional = min((current_equity * self.risk_pct) / total_risk_pct, current_equity * Decimal("2.0"))
+                qty = (notional / limit_p).quantize(Decimal("0.001"), rounding=ROUND_FLOOR)
+                if qty >= Decimal("0.001"):
                     intents.append(
                         OrderIntent(
                             intent_id=f"INT_EVENT_FUND_L_{symbol}_{event_ts}",
@@ -793,9 +800,9 @@ class FundingSqueezeStrategy(FleetStrategyInterface):
                             strategy_version="3.11",
                             symbol=symbol,
                             side=OrderSide.BUY,
-                            order_type=OrderType.MARKET,
+                            order_type=OrderType.LIMIT_MAKER,
                             requested_qty=qty,
-                            limit_price=None,
+                            limit_price=limit_p,
                             signal_mid_price=mid,
                             signal_ts_ms=signal_ready_ts,
                             data_received_ts_ms=data_received_ts,
@@ -809,12 +816,15 @@ class FundingSqueezeStrategy(FleetStrategyInterface):
 
         # Positive funding -> Short Squeeze (crowded longs paying shorts)
         elif funding_rate >= self.funding_threshold and mid <= vwap:
-            sl = mid + (atr * Decimal("1.5"))
-            tp = mid - (atr * Decimal("1.2"))
-            risk_dist = sl - mid
-            if risk_dist > 0:
-                qty = (risk_usdt / risk_dist).quantize(Decimal("0.001"), rounding=ROUND_FLOOR)
-                if qty > 0 and (qty * mid) <= (current_equity * Decimal("3.0")):
+            limit_p = Decimal(str(event.get("ask1Price") or event.get("ask") or mid))
+            sl = limit_p + (atr * Decimal("1.5"))
+            tp = limit_p - (atr * Decimal("1.2"))
+            risk_dist_pct = (sl - limit_p) / limit_p
+            if Decimal("0.0015") <= risk_dist_pct <= Decimal("0.0200"):
+                total_risk_pct = risk_dist_pct + self.fee_maker + self.fee_taker
+                notional = min((current_equity * self.risk_pct) / total_risk_pct, current_equity * Decimal("2.0"))
+                qty = (notional / limit_p).quantize(Decimal("0.001"), rounding=ROUND_FLOOR)
+                if qty >= Decimal("0.001"):
                     intents.append(
                         OrderIntent(
                             intent_id=f"INT_EVENT_FUND_S_{symbol}_{event_ts}",
@@ -823,9 +833,9 @@ class FundingSqueezeStrategy(FleetStrategyInterface):
                             strategy_version="3.11",
                             symbol=symbol,
                             side=OrderSide.SELL,
-                            order_type=OrderType.MARKET,
+                            order_type=OrderType.LIMIT_MAKER,
                             requested_qty=qty,
-                            limit_price=None,
+                            limit_price=limit_p,
                             signal_mid_price=mid,
                             signal_ts_ms=signal_ready_ts,
                             data_received_ts_ms=data_received_ts,

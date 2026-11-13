@@ -22,7 +22,7 @@ The **Enterprise Bybit Public Market Collector** (`tools/bybit_public_market_col
 
 Measurements from the empirical 75-second load test across **BTCUSDT, ETHUSDT, SOLUSDT** (10,842 records, 4.46 MB raw JSON, 0.56 MB compressed GZ):
 
-| Metric | 3 Symbols (Measured Empirical Fact) | 10 Symbols (Recommended Core Fleet) | 30 Symbols (Full Universe Screener Max) |
+| Metric | 3 Symbols (MEASURED EMPIRICAL FACT) | 10 Symbols (LINEAR PROJECTION) | 30 Symbols (LINEAR PROJECTION) |
 | :--- | :--- | :--- | :--- |
 | **Inbound Network Speed** | `38.4 KB/s` (~138 MB / hr) | `128.0 KB/s` (~460 MB / hr) | `384.0 KB/s` (~1.38 GB / hr) |
 | **Raw Data Ingestion Rate** | `63.1 KB/s` (~227 MB / hr) | `210.0 KB/s` (~756 MB / hr) | `630.0 KB/s` (~2.27 GB / hr) |
@@ -51,16 +51,18 @@ To prevent disk saturation on the VPS 30 GB SSD:
 - **High Watermark Alarm**: If free disk space < 1.5 GB, an emergency purge deletes files older than 24 hours. If free disk space < 1.0 GB, writing halts.
 
 ### Automated Cloud Sync & Prune Pipeline (Optional)
-If historical archiving is desired:
+If historical archiving is desired, use safe non-destructive copying (never `rclone sync` which can accidentally purge existing archives):
 ```bash
-# Example rclone sync command (runs every 6 hours via systemd timer or cron)
-rclone sync /opt/bybit-data/segments remote-s3:bybit-quantum-fleet-data/segments/ \
+# Non-destructive copy to remote object storage (runs every 6 hours via systemd timer or cron)
+# --no-traverse avoids listing entire remote buckets; copy adds new files without deleting existing ones
+rclone copy /opt/bybit-data/segments remote-s3:bybit-quantum-fleet-data/segments/ \
+    --no-traverse \
     --include "*.jsonl.gz" \
     --transfers 4 \
     --checkers 8 \
-    --log-file /var/log/bybit-data-sync.log
+    --log-file /var/log/bybit-data-copy.log
 
-# Prune local segments older than 3 days
+# Prune local segments older than 3 days strictly AFTER successful copy
 find /opt/bybit-data/segments -type f -name "*.jsonl.gz" -mtime +3 -delete
 ```
 
@@ -78,11 +80,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
+User=bybit-data
+Group=bybit-data
 WorkingDirectory=/opt/bybit-bot
 Environment="PYTHONPATH=/opt/bybit-bot"
 Environment="PYTHONUNBUFFERED=1"
-EnvironmentFile=-/opt/bybit-bot/.env
+# Note: Zero exchange API keys or .env credentials required. Public WebSocket stream is completely unauthenticated.
 
 # Non-intrusive invocation: 10 symbols, 1-hour segments, 1.0 GB disk safety watermark
 ExecStart=/usr/bin/python3 /opt/bybit-bot/tools/bybit_public_market_collector.py \
