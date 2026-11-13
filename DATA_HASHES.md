@@ -1,5 +1,9 @@
 # FLEET-ALPHA-VERIFY-005 Cryptographic Verification Hashes
 
+**Git Commit SHA**: `975a205f529bf559c870bde85d0146d757d9f953`  
+**Git Branch**: `test/f1a-regression-suite`  
+**Repository**: `samtur513/bybit-alpha-bot-SAM`  
+
 | File Path | SHA-256 Checksum | File Size |
 | :--- | :--- | :--- |
 | reports/ALPHA_VERIFY_005_REPORT.md | e7c3c913ea0ac218e9506afff8801cf73d015262130eaac0b5e5ad7bc89f8714 | 21,771 bytes |
