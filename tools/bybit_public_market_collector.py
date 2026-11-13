@@ -131,12 +131,12 @@ class L2Orderbook:
         self.is_synchronized = True
         return True
 
-    def is_valid_for_execution(self, max_stale_ms: int = 5000) -> bool:
+    def is_valid_for_execution(self, max_stale_ms: int = 5000, current_ts_ms: Optional[int] = None) -> bool:
         """
         Enforces L2 Orderbook execution gate:
         - Must be synchronized (snapshot applied and consecutive deltas).
         - Must have valid non-crossed bids and asks (best_bid < best_ask).
-        - Must not be stale (> max_stale_ms silence).
+        - Must not be stale (> max_stale_ms silence relative to virtual replay_clock or wall clock).
         """
         if not self.is_synchronized:
             return False
@@ -145,7 +145,7 @@ class L2Orderbook:
         best_bid, best_ask = self.get_bbo()
         if best_bid is None or best_ask is None or best_bid >= best_ask:
             return False
-        now_ms = int(time.time() * 1000)
+        now_ms = current_ts_ms if current_ts_ms is not None else int(time.time() * 1000)
         if (now_ms - self.last_update_ts) > max_stale_ms:
             return False
         return True

@@ -121,6 +121,9 @@ def simulate_single_run(
         cooldown_bars=RANGE_COOLDOWN_BARS,
     )
 
+    p_tag = "P1_RECENT" if "Period 1" in period_name else ("P2_PRIOR" if "Period 2" in period_name else "H24_HIST")
+    run_id = f"IRAS_{p_tag}_{mode}_{random_seed}"
+
     btc_df = indicators["BTCUSDT"]
     period_btc = btc_df[(btc_df["timestamp"] >= start_ts) & (btc_df["timestamp"] < end_ts)]
     timestamps = period_btc["timestamp"].tolist()
@@ -206,7 +209,9 @@ def simulate_single_run(
         # Record granular trade records
         if all_trade_records is not None:
             for ct in closed_this_bar:
+                is_partial = (ct.exit_reason == "TP1")
                 all_trade_records.append({
+                    "run_id": run_id,
                     "period": period_name,
                     "mode": mode,
                     "seed": random_seed,
@@ -217,6 +222,7 @@ def simulate_single_run(
                     "entry_price": float(ct.entry_price),
                     "exit_price": float(ct.exit_price),
                     "qty": float(ct.qty),
+                    "is_partial_close": is_partial,
                     "gross_pnl": float(ct.qty * (ct.exit_price - ct.entry_price) * ct.direction),
                     "fees_paid": float(ct.fees_paid),
                     "funding_pnl": float(ct.funding_pnl),
@@ -236,6 +242,7 @@ def simulate_single_run(
 
         if all_equity_records is not None:
             all_equity_records.append({
+                "run_id": run_id,
                 "period": period_name,
                 "mode": mode,
                 "seed": random_seed,
@@ -310,15 +317,26 @@ def simulate_single_run(
     # Penny-perfect conservation: Ending Equity == Initial Capital + Net PnL == Realized Equity
     ending_equity = float(engine.initial_capital + net_pnl)
 
-    # Count exit types
+    # Count exit types and partials
+    partial_tp_trades = sum(1 for t in closed_trades if t.exit_reason == "TP1")
+    full_trades = sum(1 for t in closed_trades if t.exit_reason != "TP1")
     sl_exits = sum(1 for t in closed_trades if t.exit_reason == "SL")
     tp_exits = sum(1 for t in closed_trades if t.exit_reason in ("TP", "TP1"))
     handoff_exits = sum(1 for t in closed_trades if t.exit_reason == "REGIME_HANDOFF")
 
+    # Accounting check
+    expected_net = gross_pnl - total_fees + total_funding
+    accounting_ok = (abs(net_pnl - expected_net) < Decimal("1e-6")) and (abs(Decimal(str(ending_equity)) - (engine.initial_capital + net_pnl)) < Decimal("1e-6"))
+
     return {
+        "run_id": run_id,
         "period": period_name,
         "mode": mode,
         "seed": random_seed,
+        "initial_equity": 300.0,
+        "full_trades": full_trades,
+        "partial_tp_trades": partial_tp_trades,
+        "total_closures": total_trades,
         "trades": total_trades,
         "maker_fills": maker_fills,
         "missing_fills": missing_fills,
@@ -334,6 +352,7 @@ def simulate_single_run(
         "sl_exits": sl_exits,
         "tp_exits": tp_exits,
         "handoff_exits": handoff_exits,
+        "accounting_check": "VERIFIED_EXACT" if accounting_ok else "MISMATCH",
     }
 
 
@@ -374,6 +393,7 @@ def run_all_iras_replays():
     all_trade_records = []
     all_equity_records = []
     summary_results = []
+    all_individual_runs = []
 
     for p_name, s_ts, e_ts in periods:
         print(f"\n--- Running Replay for {p_name} ---")
@@ -386,6 +406,7 @@ def run_all_iras_replays():
             all_equity_records=all_equity_records,
         )
         summary_results.append(res_strict)
+        all_individual_runs.append(res_strict)
 
         # 2. IRAS Author KER (Default author KER = 0.10)
         res_author = simulate_single_run(
@@ -395,6 +416,7 @@ def run_all_iras_replays():
             all_equity_records=all_equity_records,
         )
         summary_results.append(res_author)
+        all_individual_runs.append(res_author)
 
         # 3. Fixed Baseline without IRAS gates
         res_base = simulate_single_run(
@@ -404,6 +426,7 @@ def run_all_iras_replays():
             all_equity_records=all_equity_records,
         )
         summary_results.append(res_base)
+        all_individual_runs.append(res_base)
 
         # 4. Fair Random Control across 3 fixed seeds: 42, 101, 2024
         rand_runs = []
@@ -416,6 +439,7 @@ def run_all_iras_replays():
                 all_equity_records=all_equity_records,
             )
             rand_runs.append(r_res)
+            all_individual_runs.append(r_res)
 
         # Compute mean +- std for Random Baseline
         mean_net = float(np.mean([r["net_pnl"] for r in rand_runs]))
@@ -456,6 +480,12 @@ def run_all_iras_replays():
     df_summary.to_csv(summary_path, index=False)
     print(f"\nSaved reconciled summary to {summary_path}")
     print(df_summary.to_string())
+
+    # Save detailed individual run registry
+    df_registry = pd.DataFrame(all_individual_runs)
+    registry_path = REPORTS_DIR / "IRAS_RUN_REGISTRY.csv"
+    df_registry.to_csv(registry_path, index=False)
+    print(f"Saved {len(df_registry)} independent run records to {registry_path}")
 
     # Save trades and fills
     df_trades = pd.DataFrame(all_trade_records)

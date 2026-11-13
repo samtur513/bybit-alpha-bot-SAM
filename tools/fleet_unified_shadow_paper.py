@@ -268,10 +268,20 @@ class TrendLabV38Strategy(FleetStrategyInterface):
         adx = float(current_bar.get("adx", 0.0))
         atr = Decimal(str(current_bar.get("atr", float(close) * 0.02)))
 
+        # Scanner trend & volume filter (MultiCoinScanner parity)
+        ema_fast = float(current_bar.get("ema_fast") or (historical_df["close"].ewm(span=50, adjust=False).mean().iloc[-1] if len(historical_df) >= 50 else close))
+        ema_slow = float(current_bar.get("ema_slow") or (historical_df["close"].ewm(span=200, adjust=False).mean().iloc[-1] if len(historical_df) >= 200 else close))
+        vol = float(current_bar.get("volume", 0.0))
+        vol_sma = float(current_bar.get("volume_sma", 1.0))
+
         if adx < 16.0:
             return intents
+        if vol_sma > 0 and vol < (1.05 * vol_sma):
+            return intents
 
-        if close > Decimal(str(high_window)):
+        q_step = 0.01 if symbol in ("SOLUSDT", "ETHUSDT") else (1.0 if symbol in ("DOGEUSDT", "ADAUSDT", "XRPUSDT") else 0.001)
+
+        if close > Decimal(str(high_window)) and ema_fast > ema_slow:
             sl = close - (atr * Decimal("2.0"))
             risk_dist = close - sl
             if risk_dist > 0:
@@ -284,8 +294,8 @@ class TrendLabV38Strategy(FleetStrategyInterface):
                     available_margin_usdt=float(current_equity),
                     current_drawdown_pct=0.0,
                     market_regime="bull",
-                    qty_step=0.001,
-                    min_order_qty=0.001,
+                    qty_step=q_step,
+                    min_order_qty=q_step,
                     min_notional=5.0,
                     max_leverage=3.5,
                     atr_1h=float(atr),
@@ -423,15 +433,16 @@ class IRASRangeStrategy(FleetStrategyInterface):
         if bw < Decimal("0.025") or adx >= 18.0:
             return intents
 
-        # Long side: RSI < 35 and close near or below bb_lower
-        if rsi < 35.0 and close <= bb_lo * Decimal("1.005"):
+        # Long side: RSI < 35 and close inside range (close >= bb_lower)
+        if rsi < 35.0 and close >= bb_lo:
             limit_p = bb_lo
             sl = limit_p - (atr * self.sl_atr_mult)
             tp = bb_mid
             risk_dist = limit_p - sl
-            if risk_dist > 0 and (tp - limit_p) / limit_p >= Decimal("0.012"):
+            unit_risk = risk_dist + limit_p * Decimal("0.00036") + sl * Decimal("0.0012")
+            if unit_risk > 0 and (tp - limit_p) / limit_p >= Decimal("0.012"):
                 risk_usdt = current_equity * Decimal("0.010")
-                qty = (risk_usdt / risk_dist).quantize(Decimal("0.001"), rounding=ROUND_FLOOR)
+                qty = (risk_usdt / unit_risk).quantize(Decimal("0.001"), rounding=ROUND_FLOOR)
                 if qty > 0 and (qty * limit_p) <= (current_equity * Decimal("3.0")):
                     intents.append(
                         OrderIntent(
@@ -455,15 +466,16 @@ class IRASRangeStrategy(FleetStrategyInterface):
                         )
                     )
 
-        # Short side: RSI > 65 and close near or above bb_upper
-        elif rsi > 65.0 and close >= bb_up * Decimal("0.995"):
+        # Short side: RSI > 65 and close inside range (close <= bb_upper)
+        elif rsi > 65.0 and close <= bb_up:
             limit_p = bb_up
             sl = limit_p + (atr * self.sl_atr_mult)
             tp = bb_mid
             risk_dist = sl - limit_p
-            if risk_dist > 0 and (limit_p - tp) / limit_p >= Decimal("0.012"):
+            unit_risk = risk_dist + limit_p * Decimal("0.00036") + sl * Decimal("0.0012")
+            if unit_risk > 0 and (limit_p - tp) / limit_p >= Decimal("0.012"):
                 risk_usdt = current_equity * Decimal("0.010")
-                qty = (risk_usdt / risk_dist).quantize(Decimal("0.001"), rounding=ROUND_FLOOR)
+                qty = (risk_usdt / unit_risk).quantize(Decimal("0.001"), rounding=ROUND_FLOOR)
                 if qty > 0 and (qty * limit_p) <= (current_equity * Decimal("3.0")):
                     intents.append(
                         OrderIntent(
@@ -705,6 +717,173 @@ class FundingSqueezeStrategy(FleetStrategyInterface):
 
         # 4. Native SL (1.5 ATR)
         hit_sl = (next_low <= pos.stop_loss) if dir_val == 1 else (next_high >= pos.stop_loss)
+        if hit_sl:
+            return (pos.stop_loss, "STOP_LOSS_1.5ATR", exit_side, OrderType.STOP_MARKET, None)
+
+        return None
+
+    def evaluate_market_event(
+        self,
+        event: Dict[str, Any],
+        open_positions: Dict[str, ActivePaperPosition],
+        current_equity: Decimal,
+        run_id: str,
+        current_replay_ts_ms: Optional[int] = None,
+    ) -> List[OrderIntent]:
+        """
+        Event-driven evaluation of real-time or historical Bybit ticker events:
+        - Uses actual nextFundingTime from Bybit ticker payload.
+        - Requires event timestamp to not be stale relative to current_replay_ts_ms (max 5000 ms).
+        - Enforces strict settlement window: 60s <= time_to_settle_s <= 1800s.
+        - Enforces funding threshold |FR| >= 0.0003 (0.03%).
+        - Trend/flow filter (VWAP / mid comparison).
+        - Generates causal OrderIntent with zero peeking.
+        """
+        intents = []
+        symbol = event.get("symbol", "")
+        if not symbol or symbol in open_positions or len(open_positions) >= self.max_slots:
+            return intents
+
+        event_ts = int(event.get("timestamp") or event.get("ts") or 0)
+        now_ts = current_replay_ts_ms if current_replay_ts_ms is not None else event_ts
+        if abs(now_ts - event_ts) > 5000:
+            # Stale quote rejected!
+            return intents
+
+        funding_rate = float(event.get("funding_rate") or event.get("fundingRate") or 0.0)
+        if abs(funding_rate) < self.funding_threshold:
+            return intents
+
+        next_funding_time_ms = int(event.get("next_funding_time_ms") or event.get("nextFundingTime") or 0)
+        if next_funding_time_ms <= 0:
+            # Reject assumed settlement time: must be explicitly provided from exchange
+            return intents
+
+        time_to_settle_s = (next_funding_time_ms - event_ts) / 1000.0
+        if time_to_settle_s < 60.0 or time_to_settle_s > 1800.0:
+            # Strictly within [60s : 1800s] window before settlement
+            return intents
+
+        mid = Decimal(str(event.get("mid") or event.get("lastPrice") or event.get("mark_price") or 0))
+        if mid <= 0:
+            return intents
+
+        vwap = Decimal(str(event.get("vwap", mid)))
+        atr = Decimal(str(event.get("atr_15m") or event.get("atr", float(mid) * 0.01)))
+        risk_usdt = current_equity * Decimal("0.010")
+
+        # Causal timestamps: event_ts <= signal_ready_ts <= data_received_ts <= order_submit_ts
+        signal_ready_ts = event_ts + 2
+        data_received_ts = event_ts + 4
+        order_submit_ts = event_ts + 6
+
+        # Negative funding -> Long Squeeze (crowded shorts paying longs)
+        if funding_rate <= -self.funding_threshold and mid >= vwap:
+            sl = mid - (atr * Decimal("1.5"))
+            tp = mid + (atr * Decimal("1.2"))
+            risk_dist = mid - sl
+            if risk_dist > 0:
+                qty = (risk_usdt / risk_dist).quantize(Decimal("0.001"), rounding=ROUND_FLOOR)
+                if qty > 0 and (qty * mid) <= (current_equity * Decimal("3.0")):
+                    intents.append(
+                        OrderIntent(
+                            intent_id=f"INT_EVENT_FUND_L_{symbol}_{event_ts}",
+                            run_id=run_id,
+                            module_id=self.strategy_id,
+                            strategy_version="3.11",
+                            symbol=symbol,
+                            side=OrderSide.BUY,
+                            order_type=OrderType.MARKET,
+                            requested_qty=qty,
+                            limit_price=None,
+                            signal_mid_price=mid,
+                            signal_ts_ms=signal_ready_ts,
+                            data_received_ts_ms=data_received_ts,
+                            intent_reason=f"EVENT_FUNDING_LONG_SQUEEZE_RATE_{funding_rate:.5f}",
+                            bar_start_ts_ms=event_ts,
+                            bar_close_ts_ms=event_ts,
+                            signal_ready_ts_ms=signal_ready_ts,
+                            order_submit_ts_ms=order_submit_ts,
+                        )
+                    )
+
+        # Positive funding -> Short Squeeze (crowded longs paying shorts)
+        elif funding_rate >= self.funding_threshold and mid <= vwap:
+            sl = mid + (atr * Decimal("1.5"))
+            tp = mid - (atr * Decimal("1.2"))
+            risk_dist = sl - mid
+            if risk_dist > 0:
+                qty = (risk_usdt / risk_dist).quantize(Decimal("0.001"), rounding=ROUND_FLOOR)
+                if qty > 0 and (qty * mid) <= (current_equity * Decimal("3.0")):
+                    intents.append(
+                        OrderIntent(
+                            intent_id=f"INT_EVENT_FUND_S_{symbol}_{event_ts}",
+                            run_id=run_id,
+                            module_id=self.strategy_id,
+                            strategy_version="3.11",
+                            symbol=symbol,
+                            side=OrderSide.SELL,
+                            order_type=OrderType.MARKET,
+                            requested_qty=qty,
+                            limit_price=None,
+                            signal_mid_price=mid,
+                            signal_ts_ms=signal_ready_ts,
+                            data_received_ts_ms=data_received_ts,
+                            intent_reason=f"EVENT_FUNDING_SHORT_SQUEEZE_RATE_{funding_rate:.5f}",
+                            bar_start_ts_ms=event_ts,
+                            bar_close_ts_ms=event_ts,
+                            signal_ready_ts_ms=signal_ready_ts,
+                            order_submit_ts_ms=order_submit_ts,
+                        )
+                    )
+
+        return intents
+
+    def evaluate_event_position_exit(
+        self,
+        pos: ActivePaperPosition,
+        event: Dict[str, Any],
+    ) -> Optional[Tuple[Decimal, str, OrderSide, OrderType, Optional[Decimal]]]:
+        """
+        Event-driven position monitoring:
+        1. Mandatory Clearing Eject at T - 1.5s (1500 ms) before next_funding_time_ms.
+        2. Dynamic Breakeven Ratchet at +0.6 ATR to entry +- 0.15%.
+        3. Native TP (1.2 ATR) and SL (1.5 ATR).
+        """
+        event_ts = int(event.get("timestamp") or event.get("ts") or 0)
+        current_mid = Decimal(str(event.get("mid") or event.get("lastPrice") or event.get("mark_price") or 0))
+        if current_mid <= 0:
+            return None
+
+        dir_val = pos.direction
+        exit_side = OrderSide.SELL if dir_val == 1 else OrderSide.BUY
+
+        # 1. Mandatory Clearing Eject at settlement T - 1.5s
+        next_funding_time_ms = int(event.get("next_funding_time_ms") or event.get("nextFundingTime") or 0)
+        if next_funding_time_ms > 0:
+            ms_until_settle = next_funding_time_ms - event_ts
+            if ms_until_settle <= 1500:
+                return (current_mid, "CLEARING_EJECT_T_MINUS_1S", exit_side, OrderType.MARKET, None)
+
+        # 2. Dynamic Breakeven Ratchet: if gain >= +0.6 ATR, protect entry + 0.15% (fees covered)
+        atr_val = pos.atr_at_entry
+        if dir_val == 1 and (current_mid - pos.entry_price) >= (Decimal("0.6") * atr_val):
+            be_p = pos.entry_price * Decimal("1.0015")
+            if be_p > pos.stop_loss:
+                pos.stop_loss = be_p
+        elif dir_val == -1 and (pos.entry_price - current_mid) >= (Decimal("0.6") * atr_val):
+            be_p = pos.entry_price * Decimal("0.9985")
+            if be_p < pos.stop_loss:
+                pos.stop_loss = be_p
+
+        # 3. TP check
+        if pos.take_profit:
+            hit_tp = (current_mid >= pos.take_profit) if dir_val == 1 else (current_mid <= pos.take_profit)
+            if hit_tp:
+                return (pos.take_profit, "TAKE_PROFIT_1.2ATR", exit_side, OrderType.LIMIT_MAKER, None)
+
+        # 4. SL check
+        hit_sl = (current_mid <= pos.stop_loss) if dir_val == 1 else (current_mid >= pos.stop_loss)
         if hit_sl:
             return (pos.stop_loss, "STOP_LOSS_1.5ATR", exit_side, OrderType.STOP_MARKET, None)
 

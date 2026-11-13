@@ -182,7 +182,7 @@ def main():
         for sym in ("BTCUSDT", "ETHUSDT"):
             if sym in linear_obs and sym in spot_bbo:
                 ob = linear_obs[sym]
-                if ob.is_valid_for_execution():
+                if ob.is_valid_for_execution(current_ts_ms=exchange_ts):
                     p_bid, p_ask = ob.get_bbo()
                     if p_bid and p_ask:
                         perp_mid = 0.5 * (p_bid + p_ask)
@@ -247,8 +247,8 @@ def main():
 | Стратегия / Роль | Анализируемый поток | Порог активации сигнала | Фактическое состояние на потоке | Результат аудита |
 | :--- | :--- | :--- | :--- | :--- |
 | **v3.10 Sweep L2** | `publicTrade.*` + `orderbook.50.*` | Всплеск агрессивного объема (> 500 BTC / 50 трейдов) + снос локального уровня | Максимальный импульс: 48.2 BTC, сноса ликвидности не обнаружено | **`NO_SIGNALS_OBSERVED`** |
-| **v3.11 Funding Squeeze** | `tickers.*` (fundingRate, nextFundingTime) | $|FR| \ge 0.03\%$ строго внутри окна за 30м до settlement ($60s \le t \le 1800s$) | $FR_{{BTC}}=+0.010\%$, $FR_{{ETH}}=+0.008\%$, время до расчетного часа > 5 часов | **`NO_SIGNALS_OBSERVED`** |
-| **v3.12 Cross-Basis Arb** | Spot BBO (`orderbook.1`) vs Perp BBO (`orderbook.50`) | Дивергенция базиса $|Basis| \ge 0.25\%$ (25 bps) | Фактический спред Spot-Perp: $0.008\% - 0.015\%$ (нормальное состояние рынка) | **`NO_SIGNALS_OBSERVED`** |
+| **v3.11 Funding Squeeze** | `tickers.*` (fundingRate, nextFundingTime) | $|FR| >= 0.03% | FR_BTC=+0.010%, FR_ETH=+0.008%, время до расчетного часа > 5 часов | **`NO_SIGNALS_OBSERVED`** |
+| **v3.12 Cross-Basis Arb** | Spot BBO (`orderbook.1`) vs Perp BBO (`orderbook.50`) | Дивергенция базиса $|Basis| >= 0.25% (25 bps) | Фактический спред Spot-Perp: 0.008% - 0.015% (нормальное состояние рынка) | **`NO_SIGNALS_OBSERVED`** |
 
 **Заключение аудитора:**  
 В рамках 20-секундного проверочного фрагмента экстремальных рыночных аномалий (аномального фандинга в предрасчетное окно, мгновенного сноса L2-стакана или разрыва спот-перп базиса) **зафиксировано не было**. В соответствии со стандартами честного аудита статус зафиксирован как **`NO_SIGNALS_OBSERVED`**. Создание искусственных сигналов запрещено.

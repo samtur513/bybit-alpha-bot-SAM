@@ -96,3 +96,31 @@ def test_l2_orderbook_stale_watchdog():
     assert ob.is_synchronized is True
     # Stale watchdog check with threshold 5000 ms
     assert ob.is_valid_for_execution(max_stale_ms=5000) is False
+
+
+def test_l2_orderbook_virtual_replay_clock():
+    """
+    Verifies that when replaying historical market data, stale-guard operates
+    strictly on the virtual replay clock (current_ts_ms), decoupled from host wall clock:
+    1. Historical event at t=1720000000000 is NOT flagged stale when replay clock is at 1720000002000 (delta=2s <= 5s).
+    2. Historical event at t=1720000000000 IS flagged stale when replay clock advances to 1720000007000 (delta=7s > 5s).
+    """
+    ob = L2Orderbook(symbol="BTCUSDT")
+    hist_update_ts = 1720000000000  # Historical timestamp from 2024
+
+    ob.apply_snapshot({
+        "s": "BTCUSDT",
+        "b": [["60000.0", "1.0"]],
+        "a": [["60010.0", "1.0"]],
+        "u": 5000,
+        "seq": 800,
+    }, hist_update_ts)
+    assert ob.is_synchronized is True
+
+    # 1. Replay clock 2000 ms later: Valid!
+    replay_ts_valid = hist_update_ts + 2000
+    assert ob.is_valid_for_execution(max_stale_ms=5000, current_ts_ms=replay_ts_valid) is True
+
+    # 2. Replay clock 7000 ms later: Blocked as stale!
+    replay_ts_stale = hist_update_ts + 7000
+    assert ob.is_valid_for_execution(max_stale_ms=5000, current_ts_ms=replay_ts_stale) is False
