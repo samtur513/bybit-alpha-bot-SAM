@@ -76,14 +76,35 @@ class L2Orderbook:
         self.is_synchronized = True
 
     def apply_delta(self, data: dict, ts: int) -> bool:
-        """Applies delta update. Returns True if applied cleanly, False if gap detected."""
+        """
+        Applies delta update according to Bybit V5 WebSocket protocol:
+        - Requires book to be currently synchronized (snapshot already received).
+        - Update ID 'u' must equal last_u + 1. If u != last_u + 1, packet loss / gap detected.
+        - Cross-sequence 'seq' must be strictly monotonic (seq > last_seq).
+        - Returns True if applied cleanly; False if sequence break detected (invalidates book).
+        """
         u = int(data.get("u", 0))
-        prev_u = int(data.get("prev_u", 0))
+        seq = int(data.get("seq", 0))
 
-        # Check sequence integrity
-        if self.is_synchronized and prev_u > 0 and prev_u != self.last_u:
+        if not self.is_synchronized:
+            return False
+
+        # Sequence gap check on Bybit V5 update id 'u'
+        if self.last_u > 0 and u != (self.last_u + 1):
             self.gaps_detected += 1
             self.is_synchronized = False
+            logger.warning(
+                f"[L2 GAP DETECTED] {self.symbol}: expected u={self.last_u + 1}, got u={u}. Book invalidated until next snapshot."
+            )
+            return False
+
+        # Sequence monotonicity check on Bybit V5 'seq'
+        if self.last_seq > 0 and seq <= self.last_seq:
+            self.gaps_detected += 1
+            self.is_synchronized = False
+            logger.warning(
+                f"[L2 MONOTONICITY VIOLATION] {self.symbol}: last_seq={self.last_seq}, incoming seq={seq}. Book invalidated."
+            )
             return False
 
         # Apply bid updates (size == 0 means level deleted)
@@ -105,9 +126,28 @@ class L2Orderbook:
                 self.asks[p] = s
 
         self.last_u = u
-        self.last_seq = int(data.get("seq", 0))
+        self.last_seq = seq
         self.last_update_ts = ts
         self.is_synchronized = True
+        return True
+
+    def is_valid_for_execution(self, max_stale_ms: int = 5000) -> bool:
+        """
+        Enforces L2 Orderbook execution gate:
+        - Must be synchronized (snapshot applied and consecutive deltas).
+        - Must have valid non-crossed bids and asks (best_bid < best_ask).
+        - Must not be stale (> max_stale_ms silence).
+        """
+        if not self.is_synchronized:
+            return False
+        if not self.bids or not self.asks:
+            return False
+        best_bid, best_ask = self.get_bbo()
+        if best_bid is None or best_ask is None or best_bid >= best_ask:
+            return False
+        now_ms = int(time.time() * 1000)
+        if (now_ms - self.last_update_ts) > max_stale_ms:
+            return False
         return True
 
     def get_bbo(self) -> Tuple[Optional[float], Optional[float]]:

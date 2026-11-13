@@ -30,6 +30,11 @@ import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
+VENDOR_ND4 = REPO_ROOT / "vendor" / "newdragon_v4" / "NewDragon_v4_Universal"
+if str(VENDOR_ND4) not in sys.path:
+    sys.path.insert(0, str(VENDOR_ND4))
+
+from adapters.torg_bot_3_bridge import UniversalRiskBridge
 
 from tools.fleet_execution_contract import (
     ExecutionFill,
@@ -236,6 +241,7 @@ class TrendLabV38Strategy(FleetStrategyInterface):
         self.donchian_window = 14
         self.base_risk_pct = Decimal("0.008")  # 0.8% True 1R
         self.max_slots = 3
+        self.risk_bridge = UniversalRiskBridge()
 
     def evaluate_bar(
         self,
@@ -269,30 +275,46 @@ class TrendLabV38Strategy(FleetStrategyInterface):
             sl = close - (atr * Decimal("2.0"))
             risk_dist = close - sl
             if risk_dist > 0:
-                risk_usdt = current_equity * self.base_risk_pct
-                qty = (risk_usdt / risk_dist).quantize(Decimal("0.001"), rounding=ROUND_FLOOR)
-                if qty > 0 and (qty * close) <= (current_equity * Decimal("3.5")):
-                    intents.append(
-                        OrderIntent(
-                            intent_id=f"INT_38_{symbol}_{bar_close_ts}",
-                            run_id=run_id,
-                            module_id=self.strategy_id,
-                            strategy_version="3.8",
-                            symbol=symbol,
-                            side=OrderSide.BUY,
-                            order_type=OrderType.MARKET,
-                            requested_qty=qty,
-                            limit_price=None,
-                            signal_mid_price=close,
-                            signal_ts_ms=signal_ready_ts,
-                            data_received_ts_ms=data_received_ts,
-                            intent_reason="NEWDRAGON_DONCHIAN14_ADX16",
-                            bar_start_ts_ms=bar_start_ts,
-                            bar_close_ts_ms=bar_close_ts,
-                            signal_ready_ts_ms=signal_ready_ts,
-                            order_submit_ts_ms=order_submit_ts,
+                qty_float, rejection = self.risk_bridge.size_position_for_torg_bot(
+                    symbol=symbol,
+                    side="LONG",
+                    entry_price=float(close),
+                    stop_price=float(sl),
+                    capital_usdt=float(current_equity),
+                    available_margin_usdt=float(current_equity),
+                    current_drawdown_pct=0.0,
+                    market_regime="bull",
+                    qty_step=0.001,
+                    min_order_qty=0.001,
+                    min_notional=5.0,
+                    max_leverage=3.5,
+                    atr_1h=float(atr),
+                    composite_score=1.0,
+                )
+                if qty_float > 0.0 and rejection is None:
+                    qty = Decimal(str(qty_float))
+                    if (qty * close) <= (current_equity * Decimal("3.5")):
+                        intents.append(
+                            OrderIntent(
+                                intent_id=f"INT_38_{symbol}_{bar_close_ts}",
+                                run_id=run_id,
+                                module_id=self.strategy_id,
+                                strategy_version="3.8",
+                                symbol=symbol,
+                                side=OrderSide.BUY,
+                                order_type=OrderType.MARKET,
+                                requested_qty=qty,
+                                limit_price=None,
+                                signal_mid_price=close,
+                                signal_ts_ms=signal_ready_ts,
+                                data_received_ts_ms=data_received_ts,
+                                intent_reason="NEWDRAGON_DONCHIAN14_ADX16",
+                                bar_start_ts_ms=bar_start_ts,
+                                bar_close_ts_ms=bar_close_ts,
+                                signal_ready_ts_ms=signal_ready_ts,
+                                order_submit_ts_ms=order_submit_ts,
+                            )
                         )
-                    )
         return intents
 
     def evaluate_position_exit(
@@ -312,15 +334,13 @@ class TrendLabV38Strategy(FleetStrategyInterface):
             pos.highest_price = next_high
 
         # 4-Stage Adaptive Exit FSM:
-        # Stage 2: Partial TP Maker limit at +1.40R
+        # Stage 2: Partial TP Maker limit at +1.40R (60% scale-out)
         target_tp2 = entry_p + (r_dist * Decimal("1.40"))
         if not pos.tp1_done and next_high >= target_tp2:
             slice_qty = (pos.slice_ref.qty * Decimal("0.60")).quantize(Decimal("0.001"), rounding=ROUND_FLOOR)
             if slice_qty > 0 and slice_qty < pos.slice_ref.qty:
-                pos.tp1_done = True
-                pos.fsm_stage = 2
-                # Lock profit at +0.35R
-                pos.stop_loss = entry_p + (r_dist * Decimal("0.35"))
+                # Do NOT mutate FSM stage or stop_loss here; only recommended action is returned.
+                # State transition occurs ONLY upon simulated fill confirmation in runner.
                 return (target_tp2, "STAGE2_MAKER_TP_60PCT", OrderSide.SELL, OrderType.LIMIT_MAKER, slice_qty)
 
         # Stage 1: Ratchet to -0.35R at +0.85R
@@ -502,10 +522,7 @@ class IRASRangeStrategy(FleetStrategyInterface):
             if hit_tp1:
                 slice_qty = (pos.slice_ref.qty * Decimal("0.50")).quantize(Decimal("0.001"), rounding=ROUND_FLOOR)
                 if slice_qty > 0 and slice_qty < pos.slice_ref.qty:
-                    pos.tp1_done = True
-                    # Ratchet to Breakeven (+0.1% buffer)
-                    be_buf = pos.entry_price * Decimal("0.001") * dir_val
-                    pos.stop_loss = pos.entry_price + be_buf
+                    # Do NOT mutate state here; runner mutates state only upon confirmed fill
                     return (tp1_target, "TP1_PARTIAL_MAKER", exit_side, OrderType.LIMIT_MAKER, slice_qty)
 
         # 3. Full Take Profit at SMA20 middle band
@@ -565,10 +582,17 @@ class FundingSqueezeStrategy(FleetStrategyInterface):
         data_received_ts = signal_ready_ts + 20
         order_submit_ts = data_received_ts + 10
 
-        # Check funding window (8h settlement boundaries: 00:00, 08:00, 16:00 UTC)
-        # 1h candle ending at settlement hour is within 3600s
-        settle_mod = bar_close_ts % (8 * 3600 * 1000)
-        is_settlement_window = (settle_mod <= 1800 * 1000) or (settle_mod >= 7 * 3600 * 1000 + 1800 * 1000)
+        # Check funding window (60s <= time_to_settle_s <= 1800s before 8h settlement)
+        next_funding_time_ms = int(current_bar.get("next_funding_time_ms", 0))
+        if next_funding_time_ms > 0:
+            time_to_settle_s = (next_funding_time_ms - bar_close_ts) / 1000.0
+        else:
+            settle_mod = bar_close_ts % (8 * 3600 * 1000)
+            time_to_settle_s = ((8 * 3600 * 1000 - settle_mod) % (8 * 3600 * 1000)) / 1000.0
+
+        is_settlement_window = (60.0 <= time_to_settle_s <= 1800.0)
+        if not is_settlement_window:
+            return intents
 
         # Real price trend check (EMA24)
         ema24 = float(historical_df["close"].ewm(span=24, adjust=False).mean().iloc[-1]) if len(historical_df) >= 24 else float(close)
@@ -650,13 +674,36 @@ class FundingSqueezeStrategy(FleetStrategyInterface):
         dir_val = pos.direction
         exit_side = OrderSide.SELL if dir_val == 1 else OrderSide.BUY
 
-        # Native TP (1.2 ATR)
+        # 1. Mandatory Clearing Eject at settlement T - 1.5s (1500 ms)
+        next_bar_ts = int(next_bar.get("timestamp", 0))
+        next_funding_time_ms = int(next_bar.get("next_funding_time_ms", 0))
+        if next_funding_time_ms > 0:
+            ms_until_settle = next_funding_time_ms - next_bar_ts
+        else:
+            settle_mod = next_bar_ts % (8 * 3600 * 1000)
+            ms_until_settle = (8 * 3600 * 1000 - settle_mod) % (8 * 3600 * 1000)
+
+        if ms_until_settle <= 1500:
+            return (Decimal(str(next_bar["close"])), "CLEARING_EJECT_T_MINUS_1S", exit_side, OrderType.MARKET, None)
+
+        # 2. Dynamic Breakeven Ratchet: if gain >= +0.6 ATR, protect entry + 0.15% (fees covered)
+        atr_val = pos.atr_at_entry
+        if dir_val == 1 and (next_high - pos.entry_price) >= (Decimal("0.6") * atr_val):
+            be_p = pos.entry_price * Decimal("1.0015")
+            if be_p > pos.stop_loss:
+                pos.stop_loss = be_p
+        elif dir_val == -1 and (pos.entry_price - next_low) >= (Decimal("0.6") * atr_val):
+            be_p = pos.entry_price * Decimal("0.9985")
+            if be_p < pos.stop_loss:
+                pos.stop_loss = be_p
+
+        # 3. Native TP (1.2 ATR)
         if pos.take_profit:
             hit_tp = (next_high >= pos.take_profit) if dir_val == 1 else (next_low <= pos.take_profit)
             if hit_tp:
                 return (pos.take_profit, "TAKE_PROFIT_1.2ATR", exit_side, OrderType.LIMIT_MAKER, None)
 
-        # Native SL (1.5 ATR)
+        # 4. Native SL (1.5 ATR)
         hit_sl = (next_low <= pos.stop_loss) if dir_val == 1 else (next_high >= pos.stop_loss)
         if hit_sl:
             return (pos.stop_loss, "STOP_LOSS_1.5ATR", exit_side, OrderType.STOP_MARKET, None)
@@ -760,19 +807,29 @@ class FleetUnifiedShadowPaperRunner:
                         order_submit_ts_ms=fill_ts - 10,
                     )
                     adapter.submit_intent(exit_intent)
+                    is_exit_mkt = (exit_order_type in (OrderType.MARKET, OrderType.STOP_MARKET))
                     fill = adapter.execute_order(
                         exit_intent,
                         current_bid=exit_price,
                         current_ask=exit_price,
                         fill_ts_ms=fill_ts,
-                        current_low=next_low,
-                        current_high=next_high,
-                        provenance="BYBIT_HISTORICAL_PARQUET_2024_2026",
+                        current_low=exit_price if is_exit_mkt else next_low,
+                        current_high=exit_price if is_exit_mkt else next_high,
+                        provenance="BYBIT_HISTORICAL_PARQUET_2024_2026" if is_exit_mkt else "SCENARIO_ONLY",
                     )
                     if fill is not None:
                         if partial_qty is not None and partial_qty < pos.slice_ref.qty:
                             adapter.close_position_slice_partial(pos.slice_ref, fill, partial_qty, exit_reason)
                             self.closed_positions_count[strat_id] += 1
+                            # Update FSM state ONLY upon confirmed simulated fill
+                            if strat_id == "v3.8_TRENDLAB_1H" and exit_reason == "STAGE2_MAKER_TP_60PCT":
+                                pos.tp1_done = True
+                                pos.fsm_stage = 2
+                                pos.stop_loss = pos.entry_price + (pos.atr_at_entry * Decimal("2.0") * Decimal("0.35"))
+                            elif strat_id == "v3.2_IRAS_RANGE" and exit_reason == "TP1_PARTIAL_MAKER":
+                                pos.tp1_done = True
+                                be_buf = pos.entry_price * Decimal("0.001") * pos.direction
+                                pos.stop_loss = pos.entry_price + be_buf
                         else:
                             adapter.close_position_slice(pos.slice_ref, fill, exit_reason)
                             del positions[symbol]
@@ -796,14 +853,15 @@ class FleetUnifiedShadowPaperRunner:
                 if not ok:
                     continue
 
+                is_entry_mkt = (it.order_type == OrderType.MARKET)
                 fill = adapter.execute_order(
                     intent=it,
-                    current_bid=next_open if it.order_type == OrderType.MARKET else (it.limit_price or next_open),
-                    current_ask=next_open if it.order_type == OrderType.MARKET else (it.limit_price or next_open),
+                    current_bid=next_open if is_entry_mkt else (it.limit_price or next_open),
+                    current_ask=next_open if is_entry_mkt else (it.limit_price or next_open),
                     fill_ts_ms=fill_ts,
-                    current_low=next_low,
-                    current_high=next_high,
-                    provenance="BYBIT_HISTORICAL_PARQUET_2024_2026",
+                    current_low=next_open if is_entry_mkt else next_low,
+                    current_high=next_open if is_entry_mkt else next_high,
+                    provenance="BYBIT_HISTORICAL_PARQUET_2024_2026" if is_entry_mkt else "SCENARIO_ONLY",
                 )
 
                 if fill is not None:

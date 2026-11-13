@@ -1,0 +1,17 @@
+strategy_id,port,family,readiness_status,data_gate,signal_gate,execution_gate,notes
+v3.1.4_CHAMPION_4H,8084,Trend Breakout,READY_FOR_SHADOW,PASS,PASS,PASS,100% Parity verified on 4h grid. Separate scheduler.
+v3.8_TRENDLAB_1H,8091,Trend NewDragon,READY_FOR_SHADOW,PASS,PASS,PASS,NewDragon 1R Sizer + 4-Stage Adaptive Exit FSM integrated. 100% Parity.
+v3.2_IRAS_RANGE,8083,Range Mean-Reversion,READY_FOR_SHADOW,PASS,PASS,PASS,Zero double counting verified. VIP0 0.036%/0.100% fees applied. 100% Parity.
+v3.11_FUNDING_SQUEEZE,8097,Funding Squeeze,READY_FOR_SHADOW,PASS,PASS,PASS,Settlement window (60-1800s) enforced. Clearing eject at T-1.5s active. 100% Parity.
+v3.10_SWEEP_L2,8098,Liquidity Sweep L2,SIGNAL_BLOCKED,PASS,NO_SIGNALS_OBSERVED,PASS,L2 orderbook and trades active. No liquidity sweeps observed during capture window.
+v3.12_CROSSBASIS,8096,Spot-Perp Cross-Basis,SIGNAL_BLOCKED,PASS,NO_SIGNALS_OBSERVED,PASS,Spot & Perp BBO feeds active. Basis within normal bounds (<25 bps).
+v3.13_SECTOR_ARB,8080,Sector Arbitrage,DATA_BLOCKED,PENDING_FEED,PENDING,PENDING,Requires multi-coin basket correlation matrix feed.
+v3.14_BASKET_DISPERSION,8094,Basket Dispersion,DATA_BLOCKED,PENDING_FEED,PENDING,PENDING,Requires cross-sectional dispersion calculator stream.
+v3.7_MASTER_SWEEPS,8090,Liquidity Sweep 1h,SIGNAL_BLOCKED,PASS,NO_SIGNALS_OBSERVED,PENDING,Requires 1h local extreme levels breach.
+v3.4_ZF8_QUANT,8087,Statistical Volatility,DATA_BLOCKED,PENDING_FEED,PENDING,PENDING,Requires volatility surface estimation pipeline.
+v3.5_ALPHA_PAIRS,8088,Pair Trading,DATA_BLOCKED,PENDING_FEED,PENDING,PENDING,Requires coin pair cointegration tracker.
+v3.6_OMEGA_ZF8,8089,Dual-Regime Volatility,DATA_BLOCKED,PENDING_FEED,PENDING,PENDING,Requires regime transition matrix.
+v3.3_TURBO_STREAK,8086,Streak Risk Drift,SIGNAL_BLOCKED,PASS,NO_SIGNALS_OBSERVED,PENDING,Requires consecutive bar streak trigger.
+v3.9_SCALP_LAB,8092,Scalp Microstructure,EXECUTION_BLOCKED,PASS,PENDING,UNVERIFIED_MAKER_FILL,Sub-minute order fill cannot be verified in backtest without live quote queue.
+v3.7_V4_SCALP_EXP,8093,Scalp Lab Exp,EXECUTION_BLOCKED,PASS,PENDING,UNVERIFIED_MAKER_FILL,High frequency fill queue priority unverified in offline replay.
+v3_V4_TREND_EXP,8082,Trend Multi-Timeframe,SIGNAL_BLOCKED,PASS,NO_SIGNALS_OBSERVED,PENDING,Multi-timeframe cascade waiting for confirmed 4h/1h alignment.

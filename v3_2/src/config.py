@@ -79,8 +79,12 @@ FAST_SCRATCH_BARS = 6
 # Range Mean-Reversion Maker Submodule
 RANGE_RISK_PER_TRADE_PCT = Decimal("0.01")  # 1.0% fixed fractional risk
 MAX_CONCURRENT_RANGE_POSITIONS = 2          # Max 2 concurrent range positions
-BASE_MAKER_FEE = Decimal("0.000324")        # 0.0324% Non-VIP Bybit + 10% MNT
-BASE_TAKER_FEE = Decimal("0.0009")          # 0.09% Taker fee
+# Standard Bybit VIP0 Baseline Fees (FLEET-PAPER-GATE-006 standard)
+BASE_MAKER_FEE = Decimal("0.00036")         # 0.036% Standard Bybit VIP0 Maker fee
+BASE_TAKER_FEE = Decimal("0.00100")         # 0.100% Standard Bybit VIP0 Taker fee
+# Sensitivity Analysis Scenario Fees (MNT VIP Discount)
+SENSITIVITY_MNT_MAKER_FEE = Decimal("0.000324")  # 0.0324% With 10% MNT discount
+SENSITIVITY_MNT_TAKER_FEE = Decimal("0.00090")   # 0.090% With 10% MNT discount
 BASE_SLIPPAGE = Decimal("0.0002")           # 0.02% slippage on stops
 RANGE_SL_ATR_MULT = Decimal("1.0")          # 1.0 ATR stop beyond boundary
 MIN_BANDWIDTH_CLEARANCE = Decimal("0.025")  # Minimum 2.5% bandwidth clearance (Calibrated IRAS standard)

@@ -122,6 +122,7 @@ class RangeMeanReversionEngine:
         self.open_positions: Dict[str, RangeActivePosition] = {}
         self.pending_orders: Dict[str, RangeLimitOrder] = {}
         self.closed_trades: List[RangeClosedTrade] = []
+        self.funding_cashflows: List[Dict[str, Any]] = []
         self.cooldown_tracker: Dict[Tuple[str, int], int] = {}
         self.bar_counter: int = 0
         self.events: List[Dict[str, Any]] = []
@@ -199,13 +200,26 @@ class RangeMeanReversionEngine:
         return qty
 
     def process_funding(self, timestamp: int, funding_rate: Decimal, prices: Dict[str, Decimal]) -> None:
-        """Deducts funding every 8 hours."""
+        """Deducts/credits funding at 8h settlement boundary. Exactly one cashflow entry per position."""
         for sym, pos in self.open_positions.items():
             mark = prices.get(sym, pos.entry_price)
             # Long pays funding when rate > 0; Short receives
             fpnl = -1 * pos.direction * pos.current_qty * mark * funding_rate
             self.realized_equity += fpnl
             pos.funding_pnl += fpnl
+            cf = {
+                "cashflow_id": f"CF_FUND_{sym}_{timestamp}",
+                "symbol": sym,
+                "settlement_ts": timestamp,
+                "funding_rate": str(funding_rate),
+                "mark_price": str(mark),
+                "position_qty": str(pos.current_qty),
+                "direction": pos.direction,
+                "cashflow_amount": str(fpnl),
+                "realized_equity_after": str(self.realized_equity),
+            }
+            self.funding_cashflows.append(cf)
+            self.events.append(dict(kind="FUNDING_SETTLEMENT", symbol=sym, fpnl=str(fpnl), equity=str(self.realized_equity)))
 
     def evaluate_pending_fills(
         self,
@@ -330,10 +344,13 @@ class RangeMeanReversionEngine:
                         slice_gross = slice_qty * (exec_price - pos.entry_price) * direction
                         alloc_init = pos.initial_qty if pos.initial_qty > 0 else (pos.current_qty + slice_qty)
                         slice_entry_fee = pos.entry_fees * (slice_qty / alloc_init)
-                        slice_net = slice_gross - slice_fee - slice_entry_fee
+                        slice_funding = pos.funding_pnl * (slice_qty / pos.current_qty) if pos.current_qty > 0 else Decimal("0")
+                        slice_net = slice_gross - slice_fee - slice_entry_fee + slice_funding
+                        # Single cashflow entry: funding was already credited to realized_equity at settlement
                         self.realized_equity += (slice_gross - slice_fee)
                         pos.current_qty -= slice_qty
                         pos.entry_fees -= slice_entry_fee
+                        pos.funding_pnl -= slice_funding
                         pos.tp1_done = True
                         pos.be_activated = True
                         # Ratchet Stop Loss to Breakeven (+0.1% buffer in profit direction)
@@ -354,7 +371,7 @@ class RangeMeanReversionEngine:
                             exit_reason="TP1",
                             hold_hours=(timestamp - pos.entry_time) / 3600000.0,
                             fees_paid=slice_entry_fee + slice_fee,
-                            funding_pnl=Decimal("0"),
+                            funding_pnl=slice_funding,
                         )
                         self.closed_trades.append(tp1_trade)
                         closed_this_bar.append(tp1_trade)
@@ -384,7 +401,8 @@ class RangeMeanReversionEngine:
                 exit_fee = pos.current_qty * exec_price * self.taker_fee
                 gross_pnl = pos.current_qty * (exec_price - pos.entry_price) * direction
                 net_pnl = gross_pnl - exit_fee - pos.entry_fees + pos.funding_pnl
-                self.realized_equity += (gross_pnl - exit_fee + pos.funding_pnl)
+                # Funding cashflow was already applied at settlement time; do not double count
+                self.realized_equity += (gross_pnl - exit_fee)
 
                 closed = RangeClosedTrade(
                     symbol=sym,
@@ -417,7 +435,8 @@ class RangeMeanReversionEngine:
                 exit_fee = pos.current_qty * exec_price * self.taker_fee
                 gross_pnl = pos.current_qty * (exec_price - pos.entry_price) * direction
                 net_pnl = gross_pnl - exit_fee - pos.entry_fees + pos.funding_pnl
-                self.realized_equity += (gross_pnl - exit_fee + pos.funding_pnl)
+                # Funding cashflow was already applied at settlement time; do not double count
+                self.realized_equity += (gross_pnl - exit_fee)
 
                 closed = RangeClosedTrade(
                     symbol=sym,
@@ -445,7 +464,8 @@ class RangeMeanReversionEngine:
                 exit_fee = pos.current_qty * exec_price * self.maker_fee
                 gross_pnl = pos.current_qty * (exec_price - pos.entry_price) * direction
                 net_pnl = gross_pnl - exit_fee - pos.entry_fees + pos.funding_pnl
-                self.realized_equity += (gross_pnl - exit_fee + pos.funding_pnl)
+                # Funding cashflow was already applied at settlement time; do not double count
+                self.realized_equity += (gross_pnl - exit_fee)
 
                 closed = RangeClosedTrade(
                     symbol=sym,

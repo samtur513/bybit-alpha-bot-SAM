@@ -330,3 +330,139 @@ def test_v32_news_defense_integration():
     assert status["news_defense_active"] is True
     assert status["news_shield"] is True
     assert "open_positions" in status
+
+
+def test_range_funding_accounting_and_partial_tp_conservation():
+    """
+    FLEET-PAPER-GATE-006 Step 1.C:
+    Verifies that funding is never double-counted:
+    - Exactly one cashflow entry per settlement.
+    - Positive and negative funding cashflows are tracked in funding_cashflow_ledger.
+    - Partial TP1 allocates proportional entry fee and settled funding.
+    - Subsequent full exit preserves penny-perfect conservation:
+      Delta Realized Equity == Sum(closed_trades.net_pnl) == Sum(Gross) - Sum(Fees) + Sum(FundingCashflows).
+    """
+    init_cap = Decimal("300.0")
+    engine = RangeMeanReversionEngine(initial_capital=init_cap)
+
+    # 1. Open Long position
+    pos_qty = Decimal("10.0")
+    entry_p = Decimal("100.0")
+    entry_notional = pos_qty * entry_p
+    entry_fee = entry_notional * engine.maker_fee
+    engine.realized_equity -= entry_fee
+
+    tp_price = Decimal("105.0")
+    sl_price = Decimal("95.0")
+    tp_dist = tp_price - entry_p
+    tp1_price = entry_p + (tp_dist * Decimal("0.60"))  # 103.0
+
+    engine.open_positions["ETHUSDT"] = RangeActivePosition(
+        symbol="ETHUSDT",
+        direction=1,
+        entry_price=entry_p,
+        current_qty=pos_qty,
+        stop_loss=sl_price,
+        take_profit=tp_price,
+        initial_atr=Decimal("2.0"),
+        entry_time=1700000000000,
+        entry_bar_idx=0,
+        entry_fees=entry_fee,
+        tp1_done=False,
+        tp1_price=tp1_price,
+        initial_qty=pos_qty,
+        be_activated=False,
+    )
+    engine.bar_counter = 1
+
+    equity_after_entry = engine.realized_equity
+    assert equity_after_entry == init_cap - entry_fee
+
+    # 2. Settlement 1: Positive funding rate (+0.05% -> Long pays)
+    pos_funding_rate = Decimal("0.0005")
+    mark_1 = Decimal("101.0")
+    engine.process_funding(1700028800000, pos_funding_rate, {"ETHUSDT": mark_1})
+    expected_cf1 = -1 * Decimal("1") * pos_qty * mark_1 * pos_funding_rate
+    assert engine.open_positions["ETHUSDT"].funding_pnl == expected_cf1
+    assert engine.realized_equity == equity_after_entry + expected_cf1
+    assert len(engine.funding_cashflows) == 1
+
+    equity_after_fund1 = engine.realized_equity
+
+    # 3. Bar reaches TP1 (High >= 103.0, but < 105.0)
+    bars_tp1 = {
+        "ETHUSDT": {
+            "open": 102.0,
+            "high": 103.5,
+            "low": 101.5,
+            "close": 102.5,
+            "volume": 1000.0,
+            "volume_sma": 1000.0,
+        }
+    }
+    regimes_tp1 = {
+        "ETHUSDT": RegimeData(
+            symbol="ETHUSDT", regime=MarketRegime.RANGE, adx=14.0, bb_mid=105.0,
+            bb_upper=108.0, bb_lower=98.0, bb_width=0.08, bb_width_pctl=0.30,
+            kc_upper=106.0, kc_lower=99.0, rsi=52.0, atr=2.0,
+            volume=1000.0, volume_sma=1000.0, is_volatility_compressed=True,
+            is_chop=True, is_trend=False,
+        )
+    }
+    closed_tp1 = engine.manage_positions_on_bar(1700032400000, bars_tp1, regimes_tp1)
+    assert len(closed_tp1) == 1
+    tp1 = closed_tp1[0]
+    assert tp1.exit_reason == "TP1"
+    assert tp1.qty == Decimal("5.0")
+    assert engine.open_positions["ETHUSDT"].current_qty == Decimal("5.0")
+    assert engine.open_positions["ETHUSDT"].tp1_done is True
+
+    # 4. Settlement 2: Negative funding rate (-0.04% -> Long receives) on remaining 5.0 qty
+    neg_funding_rate = Decimal("-0.0004")
+    mark_2 = Decimal("103.0")
+    engine.process_funding(1700057600000, neg_funding_rate, {"ETHUSDT": mark_2})
+    expected_cf2 = -1 * Decimal("1") * Decimal("5.0") * mark_2 * neg_funding_rate
+    assert len(engine.funding_cashflows) == 2
+
+    # 5. Bar reaches Full Take Profit (High >= 105.0)
+    bars_tp2 = {
+        "ETHUSDT": {
+            "open": 104.0,
+            "high": 105.5,
+            "low": 103.5,
+            "close": 105.0,
+            "volume": 1000.0,
+            "volume_sma": 1000.0,
+        }
+    }
+    closed_tp2 = engine.manage_positions_on_bar(1700061200000, bars_tp2, regimes_tp1)
+    assert len(closed_tp2) == 1
+    tp2 = closed_tp2[0]
+    assert tp2.exit_reason == "TP"
+    assert "ETHUSDT" not in engine.open_positions
+
+    # 6. PENNY-PERFECT INVARIANT VALIDATION
+    total_closed = engine.closed_trades
+    assert len(total_closed) == 2
+
+    sum_net_pnl = sum(t.net_pnl for t in total_closed)
+    sum_gross_pnl = sum(t.qty * (t.exit_price - t.entry_price) for t in total_closed)
+    sum_fees = entry_fee + sum(t.qty * t.exit_price * engine.maker_fee for t in total_closed)
+    sum_funding_cf = sum(Decimal(cf["cashflow_amount"]) for cf in engine.funding_cashflows)
+
+    delta_realized_equity = engine.realized_equity - init_cap
+
+    # Invariant 1: Delta Equity == Sum Net PnL
+    assert abs(delta_realized_equity - sum_net_pnl) < Decimal("0.0000001"), (
+        f"Mismatch: delta_eq={delta_realized_equity} vs sum_net={sum_net_pnl}"
+    )
+
+    # Invariant 2: Sum Net PnL == Sum Gross - Sum Fees + Sum Funding
+    expected_net = sum_gross_pnl - sum_fees + sum_funding_cf
+    assert abs(sum_net_pnl - expected_net) < Decimal("0.0000001"), (
+        f"Mismatch: sum_net={sum_net_pnl} vs expected_net={expected_net}"
+    )
+
+    # Invariant 3: Ending Equity == Initial Capital + Sum Net PnL
+    assert abs(engine.realized_equity - (init_cap + sum_net_pnl)) < Decimal("0.0000001")
+
