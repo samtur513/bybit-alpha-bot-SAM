@@ -1,6 +1,6 @@
 # FLEET-PAPER-GATE-006 Cryptographic Verification Hashes
 
-**Task Ref**: `FLEET-PAPER-GATE-006`  
+**Git Commit SHA**: `d22367f4ce77c90c71b5bc791216ce1fae98a2bb`  
 **Git Branch**: `test/f1a-regression-suite`  
 **Repository**: `samtur513/bybit-alpha-bot-SAM`  
 
