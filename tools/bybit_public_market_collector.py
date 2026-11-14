@@ -114,9 +114,13 @@ class L2Orderbook:
         self.bids.clear()
         self.asks.clear()
         for p, s in data.get("b", []):
-            self.bids[float(p)] = float(s)
+            size = float(s)
+            if size > 0:
+                self.bids[float(p)] = size
         for p, s in data.get("a", []):
-            self.asks[float(p)] = float(s)
+            size = float(s)
+            if size > 0:
+                self.asks[float(p)] = size
         self.last_u = int(data.get("u", 0))
         self.last_seq = int(data.get("seq", 0))
         self.last_update_ts = ts
@@ -195,6 +199,22 @@ class L2Orderbook:
         best_bid = max(self.bids.keys()) if self.bids else None
         best_ask = min(self.asks.keys()) if self.asks else None
         return best_bid, best_ask
+
+    def get_spread(self) -> Tuple[Optional[float], Optional[float]]:
+        """Returns (spread_usd, spread_bps). Spread is strictly positive when valid."""
+        best_bid, best_ask = self.get_bbo()
+        if best_bid is None or best_ask is None or best_bid <= 0:
+            return None, None
+        spread_usd = best_ask - best_bid
+        spread_bps = (spread_usd / best_bid) * 10000.0
+        return spread_usd, spread_bps
+
+    def is_crossed(self) -> bool:
+        """Returns True if book is crossed or locked (best_bid >= best_ask)."""
+        best_bid, best_ask = self.get_bbo()
+        if best_bid is None or best_ask is None:
+            return False
+        return best_bid >= best_ask
 
 
 class RotatingSegmentWriter:
