@@ -1,0 +1,11 @@
+Gate_ID,Component_Name,Required_Standard,Current_Status,Evidence_File,Blocking_Reason
+G-01,Live VPS Atomic Snapshot,SQLite Online Backup API with PRAGMA integrity_check,BLOCKED,reports/v32_shadow_integrity_002/BACKUP_AND_RECOVERY_SAFETY.md,Requires operator execution on live VPS 150.241.98.70 (SSH credentials restricted locally)
+G-02,Bybit Exchange Order Verification,Authoritative API key position and order query,BLOCKED,reports/v32_blocker_repair_001/REAL_ORDER_VERIFICATION.md,Private Bybit API credentials unavailable locally; exchange position check blocked
+G-03,Safe Service Decommissioning,Non-destructive fleet stop after verified snapshot,BLOCKED,reports/v32_shadow_integrity_002/BACKUP_AND_RECOVERY_SAFETY.md,Strictly blocked until G-01 and G-02 are completed by operator
+G-04,Original v3.2 State Preservation,Port 8083 state preserved without resets,BLOCKED,reports/v32_shadow_integrity_002/BACKUP_AND_RECOVERY_SAFETY.md,Service 8083 remains 100% active and untouched on VPS; no resets performed
+G-05,Original v3.2 Component Mapping,Complete 12-subsystem call graph and PIT invariants,TESTED,reports/v32_blocker_repair_001/ORIGINAL_V32_COMPONENT_MAP.md,12-subsystem architecture verified against v3_2 and v3 codebases
+G-06,News Core & АКПП Invariant Audit,Macro embargo lockout and 3-stage gearbox mechanics,TESTED,reports/v32_blocker_repair_001/NEWS_CORE_AND_AKPP_AUDIT.md,Resolved G1/61 frontend artifact and verified 45m/30m macro embargo rules
+G-07,v3.2 Legacy Shadow Engine,Exact Donchian 1h 120-bar cycle with dual execution,TESTED,v3_2/src/shadow/paper_trader_v32_shadow.py,Complete dual-portfolio engine verified by 43 unit and accounting tests
+G-08,Legacy Shadow Web Dashboard,Port 8084 read-only HTTP dashboard with live SQLite feed,TESTED,v3_2/src/shadow/web_dashboard_shadow.py,Port 8084 dashboard serving dual equity curves; truthful offline status
+G-09,Shadow Equivalence Test Suite,100% pass on parity replay restart and accounting,TESTED,tests/test_v32_shadow_integrity.py,43 passing pytest cases covering parity separation funding and recovery
+G-10,Dual Forward Test Synchronization,Simultaneous T0 start at $300.00 capital,BLOCKED,reports/v32_shadow_integrity_002/SHADOW_PARITY_REPORT.md,Pending authorized deployment and atomic snapshot confirmation
