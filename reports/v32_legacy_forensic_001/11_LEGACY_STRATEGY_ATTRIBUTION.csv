@@ -1,0 +1,4 @@
+sub_strategy,trades_count,profitable_trades,losing_trades,win_rate_pct,gross_profit_usd,gross_loss_usd,net_pnl_usd,realized_partials_usd,total_realized_pnl_usd,profit_factor,max_drawdown_pct,operational_status
+1h Donchian Breakout (Trend Engine),28,16,12,57.14,30.22,12.22,17.99,4.01,21.88,2.47,2.85,100% OPERATIONAL (SOLE PROFIT GENERATOR)
+IRAS Mean-Reversion Maker (Range Engine),0,0,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,PARALYZED BY SYNTHETIC OHLC BUG (0 TRADES)
+Combined v3.2 Dual-Regime Total,28,16,12,57.14,30.22,12.22,17.99,4.01,21.88,2.47,2.85,PROFITABLE VIA TREND ALPHA

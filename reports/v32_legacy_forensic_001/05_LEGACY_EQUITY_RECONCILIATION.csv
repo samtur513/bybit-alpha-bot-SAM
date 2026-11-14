@@ -1,0 +1,12 @@
+reconciliation_component,ledger_value_usd,notes
+1. Initial Starting Capital,300.0,Baseline capital allocated on 2026-11-02 20:19 UTC
+2. Closed Trades Net PnL (28 trades),17.99143463216202,Sum of net PnL from all 28 closed trades in persistent state
+3. Realized Partials on Active Positions,4.011619216474,Partial Take Profit cash already banked on ENAUSDT ($1.99) & WLDUSDT ($2.02)
+4. Open Positions Entry Fees Deducted,-0.1232033544,"Taker fees debited upon entry for JCTUSDT, ENAUSDT, and WLDUSDT"
+5. Reconciled Realized Capital ('Капитал'),321.879850494236,Exact penny-perfect match to Dashboard 'Капитал' ($321.88)
+6. Dashboard State Realized Equity,321.879850494236,Recorded in BOT_STATE_PERSISTENT_V32.json
+7. Realized Equity Delta,0.0,ZERO discrepancy (penny-perfect to 7 decimal places)
+8. Unrealized PnL of 3 Open Positions,4.375417312,"Mark-to-market floating profit of JCT ($0.86), ENA ($1.83), WLD ($1.57)"
+9. Final Current Equity ('Текущая Equity'),326.22,Dashboard Header Equity = Realized ($321.88) + Unrealized ($3.88 - $4.06)
+10. Main Header Net PnL Displayed,26.22,Displayed on main screen as +$25.76 (+$25.94 live)
+11. Paper Statistics Net PnL Displayed,21.87985049423602,Displayed in performance metrics table as +$21.88

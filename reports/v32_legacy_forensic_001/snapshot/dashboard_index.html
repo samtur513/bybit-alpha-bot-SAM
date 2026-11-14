@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bybit Multi-Alpha v3.2 (Dual-Regime) | Port 8083</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-base: #0b0e14;
+            --bg-card: #151922;
+            --bg-card-hover: #1c2230;
+            --border: #262c3b;
+            --text-main: #e2e8f0;
+            --text-muted: #8b9bb4;
+            --accent: #38bdf8;
+            --accent-glow: rgba(56, 189, 248, 0.15);
+            --green: #10b981;
+            --green-glow: rgba(16, 185, 129, 0.15);
+            --red: #f43f5e;
+            --red-glow: rgba(244, 63, 94, 0.15);
+            --gold: #f59e0b;
+            --gold-glow: rgba(245, 158, 11, 0.15);
+            --purple: #a855f7;
+            --purple-glow: rgba(168, 85, 247, 0.15);
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            padding: 24px;
+            line-height: 1.5;
+        }
+        .container { max-width: 1440px; margin: 0 auto; }
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid var(--border);
+        }
+        .brand { display: flex; align-items: center; gap: 12px; }
+        .brand h1 { font-size: 24px; font-weight: 800; }
+        .tag {
+            background: rgba(168, 85, 247, 0.15);
+            color: var(--purple);
+            border: 1px solid rgba(168, 85, 247, 0.3);
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 700;
+        }
+        .sub-header { color: var(--text-muted); font-size: 13px; margin-top: 4px; }
+        .badges { display: flex; gap: 8px; align-items: center; }
+        .badge {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+        }
+        .badge.active { background: var(--green-glow); color: var(--green); border-color: rgba(16,185,129,0.3); }
+        .badge.dual { background: var(--purple-glow); color: var(--purple); border-color: rgba(168,85,247,0.3); }
+        .badge.pure { background: var(--gold-glow); color: var(--gold); border-color: rgba(245,158,11,0.3); }
+        .pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; animation: pulse 2s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.85); } }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .metric-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 18px 20px;
+        }
+        .metric-title { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; margin-bottom: 8px; }
+        .metric-val { font-size: 26px; font-weight: 800; font-family: 'JetBrains Mono', monospace; }
+        .metric-sub { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+        .positive { color: var(--green); }
+        .negative { color: var(--red); }
+
+        .panel {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            margin-bottom: 24px;
+            overflow: hidden;
+        }
+        .panel-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .panel-title { font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+        
+        table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }
+        th {
+            background: rgba(0,0,0,0.2);
+            color: var(--text-muted);
+            font-weight: 600;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: 0.5px;
+        }
+        td { padding: 12px 16px; border-bottom: 1px solid rgba(38,44,59,0.5); font-family: 'JetBrains Mono', monospace; }
+        tr:hover { background: var(--bg-card-hover); }
+
+        .tag-regime {
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 700;
+            display: inline-block;
+        }
+        .regime-trend { background: var(--accent-glow); color: var(--accent); border: 1px solid rgba(56,189,248,0.3); }
+        .regime-range { background: var(--purple-glow); color: var(--purple); border: 1px solid rgba(168,85,247,0.3); }
+        .regime-neutral { background: rgba(255,255,255,0.05); color: var(--text-muted); border: 1px solid var(--border); }
+
+        .log-box {
+            background: #07090e;
+            padding: 14px 18px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: #94a3b8;
+            max-height: 240px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="brand">
+                <div>
+                    <h1>Bybit Multi-Alpha v3.2 <span class="tag">Dual-Regime (Port 8083)</span></h1>
+                    <div class="sub-header">Synergistic Alpha: 1h Donchian Breakout (Trend) + Mean-Reversion Maker Engine (Chop) | Dynamic 400+ Universe</div>
+                </div>
+            </div>
+            <div class="badges">
+                <div class="badge dual">
+                    <span class="pulse-dot"></span>
+                    <span>DUAL-REGIME HYBRID</span>
+                </div>
+                <div class="badge active" id="badge-stream">
+                    <span class="pulse-dot"></span>
+                    <span>WEBSOCKET LIVE</span>
+                </div>
+                <div class="badge active" id="badge-news">
+                    <span class="pulse-dot"></span>
+                    <span>NEWS SHIELD: v1.2 ACTIVE</span>
+                </div>
+            </div>
+        </header>
+
+        <div class="metrics-grid">
+            <div class="metric-card">
+                <div class="metric-title">Общий капитал / Эквити</div>
+                <div class="metric-val" id="metric-equity">$300.00</div>
+                <div class="metric-sub" id="metric-capital-sub">Базовый депозит: $300.00</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-title">Чистый PnL (Net PnL)</div>
+                <div class="metric-val positive" id="metric-pnl">+$0.00 (0.00%)</div>
+                <div class="metric-sub">Trend + Range Maker сделки</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-title">Винрейт (Win Rate)</div>
+                <div class="metric-val" id="metric-wr">0.0%</div>
+                <div class="metric-sub" id="metric-trades-sub">Всего закрыто: 0 сделок</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-title">Макс. просадка (Drawdown)</div>
+                <div class="metric-val" id="metric-dd">0.00%</div>
+                <div class="metric-sub" id="metric-peak-sub">Пик депозита: $300.00</div>
+            </div>
+        </div>
+
+        
+        
+        <!-- 📊 Итоги и накопленная статистика Paper-теста -->
+        <div style="background: var(--bg-card, #0f172a); border: 1px solid var(--border, #1e293b); border-radius: 12px; padding: 18px; margin-bottom: 24px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 8px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <h3 style="margin: 0; font-size: 13px; font-weight: 700; text-transform: uppercase; color: var(--text-muted, #94a3b8); letter-spacing: 0.5px;">📊 Итоги и накопленная статистика Paper-теста (v3.2 Dual-Regime Hybrid (Port 8083))</h3>
+                    <span style="font-size: 10px; font-weight: 700; background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); padding: 2px 8px; border-radius: 4px;">LIVE PAPER TEST</span>
+                </div>
+                <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-muted, #94a3b8);">
+                    Старт: <strong id="paper-start-time" style="color: #38bdf8;">--.--.---- --:-- UTC</strong> | Сейчас: <strong id="paper-current-time" style="color: #f8fafc;">--.--.---- --:-- UTC</strong> | Время работы: <strong id="paper-duration" style="color: #00f2fe;">--</strong>
+                </div>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 12px;">
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border, #1e293b); border-radius: 8px; padding: 10px; text-align: center;">
+                    <div id="paper-roi" style="font-size: 18px; font-weight: 800; color: #10b981; font-family: 'JetBrains Mono', monospace;">+0.00% ($0.00)</div>
+                    <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted, #94a3b8); margin-top: 2px;">Чистая доходность</div>
+                </div>
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border, #1e293b); border-radius: 8px; padding: 10px; text-align: center;">
+                    <div id="paper-wr" style="font-size: 18px; font-weight: 800; color: #38bdf8; font-family: 'JetBrains Mono', monospace;">0.0% (0)</div>
+                    <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted, #94a3b8); margin-top: 2px;">Винрейт (WR)</div>
+                </div>
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border, #1e293b); border-radius: 8px; padding: 10px; text-align: center;">
+                    <div id="paper-pf" style="font-size: 18px; font-weight: 800; color: #f59e0b; font-family: 'JetBrains Mono', monospace;">1.00</div>
+                    <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted, #94a3b8); margin-top: 2px;">Профит-фактор (PF)</div>
+                </div>
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border, #1e293b); border-radius: 8px; padding: 10px; text-align: center;">
+                    <div id="paper-dd" style="font-size: 18px; font-weight: 800; color: #ef4444; font-family: 'JetBrains Mono', monospace;">0.0%</div>
+                    <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted, #94a3b8); margin-top: 2px;">Макс. просадка (DD)</div>
+                </div>
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border, #1e293b); border-radius: 8px; padding: 10px; text-align: center;">
+                    <div id="paper-sharpe" style="font-size: 18px; font-weight: 800; color: #a855f7; font-family: 'JetBrains Mono', monospace;">--</div>
+                    <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted, #94a3b8); margin-top: 2px;">Коэф. отдачи</div>
+                </div>
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border, #1e293b); border-radius: 8px; padding: 10px; text-align: center;">
+                    <div id="paper-trades" style="font-size: 18px; font-weight: 800; color: #00f2fe; font-family: 'JetBrains Mono', monospace;">0</div>
+                    <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted, #94a3b8); margin-top: 2px;">Всего сделок в тесте</div>
+                </div>
+            </div>
+            <div style="font-size: 11px; color: var(--text-muted, #94a3b8); font-family: 'JetBrains Mono', monospace; line-height: 1.5; border-top: 1px solid var(--border, #1e293b); padding-top: 8px;">
+                ⚙️ <strong style="color: #f8fafc;">Спецификация стратегии:</strong> Двойной режим: 4h Donchian Breakout в тренде (ADX >= 18.0, EMA50 > EMA200) + калиброванный канальный мейкер IRAS в боковиках (KER <= 0.30), защита News Core v1.2.
+            </div>
+        </div>
+    
+
+        <!-- Performance Equity & PnL Curve Chart -->
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-title">
+                    <span>📈 Динамика депозита и результатов сделок (Live PnL Curve)</span>
+                    <span class="tag" style="background: rgba(56, 189, 248, 0.15); color: var(--accent);">LIVE REAL-TIME</span>
+                </div>
+                <div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-muted);">
+                    Старт: <strong style="color: var(--text);">$300.00</strong> | Текущее эквити: <strong id="chart-curr-equity" style="color: var(--accent);">$300.00</strong>
+                </div>
+            </div>
+            <div style="height: 180px; position: relative;">
+                <canvas id="equityChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Subsystems Health & Telemetry Monitor -->
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-title">
+                    <span>🩺 Мониторинг подсистем и телеметрия ядра v3.2 Dual-Regime</span>
+                    <span class="tag" style="background: rgba(16, 185, 129, 0.15); color: var(--green);">HEALTH: NOMINAL</span>
+                </div>
+                <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-muted);">
+                    Задержка Bybit API: <strong id="sub-ping-val" style="color: var(--accent);">2.4 ms</strong>
+                </div>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px;">
+                <!-- 1. Market Stream -->
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">1. Поток Bybit WS</span>
+                        <span id="sub-ws-tag" style="font-size: 10px; font-weight: 700; color: var(--green); padding: 2px 6px; background: rgba(16, 185, 129, 0.15); border-radius: 4px;">ONLINE</span>
+                    </div>
+                    <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--text);" id="sub-ws-info">
+                        Подписка: <strong>...</strong> | V5 Linear
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">Потоковые 1h свечи и стаканы</div>
+                </div>
+
+                <!-- 2. Dual-Regime Core -->
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">2. Dual-Regime Alpha</span>
+                        <span id="sub-alpha-tag" style="font-size: 10px; font-weight: 700; color: var(--accent); padding: 2px 6px; background: rgba(56, 189, 248, 0.15); border-radius: 4px;">ACTIVE</span>
+                    </div>
+                    <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--text);" id="sub-alpha-info">
+                        Donchian Trend + IRAS Range Maker
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">Адаптивное переключение Trend vs Chop</div>
+                </div>
+
+                <!-- 3. Risk & Sizing -->
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">3. Риск-менеджер & АКПП</span>
+                        <span id="sub-gear-tag" style="font-size: 10px; font-weight: 700; color: var(--yellow); padding: 2px 6px; background: rgba(245, 158, 11, 0.15); border-radius: 4px;">PROTECTED</span>
+                    </div>
+                    <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--text);" id="sub-gear-info">
+                        Риск: <strong>...</strong> | Half-Kelly
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">Penny-Perfect средняя цена и безубыток</div>
+                </div>
+
+                <!-- 4. Defense Shield -->
+                <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">4. Щит News Core v1.2</span>
+                        <span id="sub-news-tag" style="font-size: 10px; font-weight: 700; color: var(--green); padding: 2px 6px; background: rgba(16, 185, 129, 0.15); border-radius: 4px;">ACTIVE</span>
+                    </div>
+                    <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--text);" id="sub-news-info">
+                        Макро-эмбарго: <strong>НЕТ (Торговля активна)</strong>
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">Emergency Eject & Regime Guard</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Open Positions Panel -->
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-title">
+                    <span>⚡ Открытые позиции (Trend & Range Maker)</span>
+                </div>
+                <div style="font-size: 12px; color: var(--text-muted);" id="pos-counter">Позиций: 0</div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Модуль</th>
+                        <th>Монета</th>
+                        <th>Сторона</th>
+                        <th>Объём</th>
+                        <th>Вход</th>
+                        <th>Текущая</th>
+                        <th>Нереализованный PnL</th>
+                        <th>Stop Loss / TP</th>
+                    </tr>
+                </thead>
+                <tbody id="positions-table-body">
+                    <tr><td colspan="8" style="text-align: center; color: var(--text-muted);">Нет открытых позиций. Сканирование рынка...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pending Limit Orders (Range Maker) -->
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-title">
+                    <span>🎯 Лимитные Maker-ордера в боковике (Ожидают исполнения на границах)</span>
+                </div>
+                <div style="font-size: 12px; color: var(--text-muted);" id="orders-counter">Ордеров: 0</div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Монета</th>
+                        <th>Тип Maker</th>
+                        <th>Лимитная цена</th>
+                        <th>Объём</th>
+                        <th>Целевой тейк (SMA20)</th>
+                        <th>Защитный стоп (1.0 ATR)</th>
+                    </tr>
+                </thead>
+                <tbody id="orders-table-body">
+                    <tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Нет активных лимитных ордеров. Мониторинг фазы CHOP/RANGE...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Market Radar with Regimes -->
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-title">
+                    <span>🌐 Радар рынка (Top Bybit Perpetuals) — Классификатор режимов и уровни</span>
+                </div>
+                <div style="font-size: 12px; color: var(--text-muted);" id="radar-counter">Монет в мониторинге: 0</div>
+            </div>
+            <div class="macro-banner" id="macro-banner" style="background: rgba(0,0,0,0.25); padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; font-size: 12px;">
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <span style="color: var(--text-muted);">🛡️ Фильтр рынка BTC:</span>
+                    <span id="banner-btc-status" style="font-weight: 700; color: var(--red);">🔴 BEARISH (Long-пробои альтов заморожены)</span>
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <span style="color: var(--text-muted);">⏱️ До закрытия 1h бара:</span>
+                    <span id="banner-candle-timer" style="font-family: 'JetBrains Mono', monospace; font-weight: 700; color: var(--accent);">--:--</span>
+                    <span style="color: var(--text-muted); font-size: 11px;">(решения строго на закрытии свечи)</span>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Монета</th>
+                        <th>Режим рынка</th>
+                        <th>Цена</th>
+                        <th>До Long (+30B)</th>
+                        <th>До Short (-30B)</th>
+                        <th>До Maker Buy (BB Low)</th>
+                        <th>До Maker Sell (BB High)</th>
+                        <th>RSI</th>
+                        <th>ADX</th>
+                        <th>Статус</th>
+                    </tr>
+                </thead>
+                <tbody id="radar-table-body">
+                    <tr><td colspan="10" style="text-align: center; color: var(--text-muted);">Загрузка рыночных данных...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- IRAS Chop Screener Panel -->
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-title">
+                    <span>🔬 Скринер IRAS (Institutional Range Alpha Score) — Пул монет для боковика</span>
+                </div>
+                <div style="font-size: 12px; color: var(--text-muted);" id="chop-counter">Отобрано: 0</div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Монета</th>
+                        <th>Цена</th>
+                        <th>24h Оборот</th>
+                        <th>Ширина канала (BW ≥ 2.5%)</th>
+                        <th>KER (Шум ≤ 0.25)</th>
+                        <th>ADX (< 20)</th>
+                        <th>Колебания (SMA20)</th>
+                        <th>Фандинг (8h)</th>
+                        <th>IRAS Score</th>
+                        <th>Статус отбора</th>
+                    </tr>
+                </thead>
+                <tbody id="chop-table-body">
+                    <tr><td colspan="10" style="text-align: center; color: var(--text-muted);">Загрузка пула IRAS...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Closed Trades -->
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-title">
+                    <span>📜 История закрытых сделок (Trend + Range)</span>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Модуль</th>
+                        <th>Монета</th>
+                        <th>Сторона</th>
+                        <th>Вход</th>
+                        <th>Выход</th>
+                        <th>Net PnL ($)</th>
+                        <th>Причина закрытия</th>
+                    </tr>
+                </thead>
+                <tbody id="closed-table-body">
+                    <tr><td colspan="7" style="text-align: center; color: var(--text-muted);">Сделок пока нет. Ожидание сигналов...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Logs -->
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-title">
+                    <span>🖥️ Системный лог Dual-Regime Daemon v3.2</span>
+                </div>
+            </div>
+            <div class="log-box" id="log-box">Подключение к серверу логов...</div>
+        </div>
+    </div>
+
+    <script>
+    var chartInstance = null;
+    var equityChart = null;
+
+
+    function formatChartTs(ts) {
+        if (!ts) return '';
+        const ms = typeof ts === 'number' ? (ts < 1e11 ? ts * 1000 : ts) : Date.parse(ts);
+        if (isNaN(ms)) return String(ts);
+        const d = new Date(ms);
+        const day = String(d.getUTCDate()).padStart(2, '0');
+        const mon = String(d.getUTCMonth() + 1).padStart(2, '0');
+        const hr = String(d.getUTCHours()).padStart(2, '0');
+        const min = String(d.getUTCMinutes()).padStart(2, '0');
+        return `${day}.${mon} ${hr}:${min}`;
+    }
+
+    function syncPaperTestStatsAndChart(data) {
+        if (!data) return;
+        const eq = Number(data.capital || data.equity || data.equity_usdt || 300.0);
+        const initCap = Number(data.initial_capital || 300.0);
+        const netPnl = eq - initCap;
+        const roiPct = (netPnl / initCap) * 100.0;
+        const rawTrades = data.closed_trades || [];
+        const trades = [...rawTrades].sort((a, b) => {
+            const ta = a.exit_time || a.closed_at_ms || a.timestamp || 0;
+            const tb = b.exit_time || b.closed_at_ms || b.timestamp || 0;
+            return ta - tb;
+        });
+
+        const wins = trades.filter(t => (t.net_pnl || t.net_pnl_usdt || 0) > 0);
+        const losses = trades.filter(t => (t.net_pnl || t.net_pnl_usdt || 0) < 0);
+        const grossWin = wins.reduce((acc, t) => acc + Number(t.net_pnl || t.net_pnl_usdt || 0), 0);
+        const grossLoss = Math.abs(losses.reduce((acc, t) => acc + Number(t.net_pnl || t.net_pnl_usdt || 0), 0));
+        const pf = grossLoss > 0 ? (grossWin / grossLoss) : (grossWin > 0 ? 99.9 : 1.0);
+        const wr = trades.length > 0 ? ((wins.length / trades.length) * 100.0) : Number(data.win_rate || data.win_rate_pct || 0);
+        const dd = Number(data.max_drawdown_pct || data.drawdown_pct || 0.0);
+        const rf = dd > 0 ? (netPnl / (initCap * dd / 100.0)) : (netPnl >= 0 ? 1.0 : -1.0);
+
+        const roiEl = document.getElementById('paper-roi');
+        if (roiEl) {
+            roiEl.innerText = (roiPct >= 0 ? '+' : '') + roiPct.toFixed(2) + '% (' + (netPnl >= 0 ? '+$' : '-$') + Math.abs(netPnl).toFixed(2) + ')';
+            roiEl.style.color = roiPct >= 0 ? '#10b981' : '#ef4444';
+        }
+        const wrEl = document.getElementById('paper-wr');
+        if (wrEl) wrEl.innerText = wr.toFixed(1) + '% (' + wins.length + '/' + trades.length + ')';
+        const pfEl = document.getElementById('paper-pf');
+        if (pfEl) pfEl.innerText = grossLoss > 0 ? pf.toFixed(2) : (grossWin > 0 ? '∞' : '1.00');
+        const ddEl = document.getElementById('paper-dd');
+        if (ddEl) ddEl.innerText = dd.toFixed(2) + '%';
+        const rfEl = document.getElementById('paper-sharpe');
+        if (rfEl) rfEl.innerText = trades.length >= 2 ? rf.toFixed(2) : '--';
+        const trEl = document.getElementById('paper-trades');
+        if (trEl) trEl.innerText = trades.length;
+
+        const firstTradeTs = trades.length > 0 ? (trades[0].exit_time || trades[0].closed_at_ms || trades[0].timestamp) : 0;
+        const startMs = firstTradeTs ? (firstTradeTs < 1e11 ? firstTradeTs * 1000 : firstTradeTs) : (Date.now() - 86400000 * 1.5);
+        const durHours = Math.max(0.1, (Date.now() - startMs) / 3600000);
+        const durStr = durHours >= 24 ? `${Math.floor(durHours / 24)}д ${Math.floor(durHours % 24)}ч` : `${durHours.toFixed(1)}ч`;
+
+        const startEl = document.getElementById('paper-start-time');
+        if (startEl) startEl.innerText = formatChartTs(startMs) + ' UTC';
+        const currEl = document.getElementById('paper-current-time');
+        if (currEl) currEl.innerText = formatChartTs(Date.now()) + ' UTC';
+        const durEl = document.getElementById('paper-duration');
+        if (durEl) durEl.innerText = durStr;
+
+        const chartCurrEq = document.getElementById('chart-curr-equity');
+        if (chartCurrEq) chartCurrEq.innerText = '$' + eq.toFixed(2);
+
+        try {
+            const chartObj = window.chartInstance || chartInstance || window.equityChart || equityChart;
+            if (chartObj && chartObj.data) {
+            let labels = [];
+            let points = [];
+            if (data.equity_chart_data && data.equity_chart_data.length > 0) {
+                labels = data.equity_chart_data.map(d => d[0]);
+                points = data.equity_chart_data.map(d => d[1]);
+            } else {
+                labels = [formatChartTs(startMs - 3600000) + ' (Старт)'];
+                points = [initCap];
+                let run = initCap;
+                trades.forEach((t, i) => {
+                    run += Number(t.net_pnl || t.net_pnl_usdt || 0.0);
+                    const ts = t.exit_time || t.closed_at_ms || t.timestamp;
+                    labels.push(formatChartTs(ts) + ' (#' + (i + 1) + ' ' + (t.symbol || '') + ')');
+                    points.push(Number(run.toFixed(2)));
+                });
+                if (points.length === 1 || Math.abs(points[points.length - 1] - eq) > 0.001) {
+                    labels.push(formatChartTs(Date.now()) + ' (Сейчас)');
+                    points.push(Number(eq.toFixed(2)));
+                }
+            }
+            chartObj.data.labels = labels;
+            chartObj.data.datasets[0].data = points;
+            const isProfit = eq >= initCap;
+            chartObj.data.datasets[0].borderColor = isProfit ? '#00f2fe' : '#ef4444';
+            chartObj.data.datasets[0].pointBackgroundColor = isProfit ? '#00f2fe' : '#ef4444';
+            chartObj.data.datasets[0].backgroundColor = isProfit ? 'rgba(0, 242, 254, 0.08)' : 'rgba(239, 68, 68, 0.08)';
+            chartObj.update();
+            }
+        } catch (chartErr) {
+            console.warn("Chart sync warning:", chartErr);
+        }
+    }
+
+
+
+        var chartInstance = chartInstance || null;
+        function initEquityChart() {
+            const canvas = document.getElementById('equityChart');
+            if (!canvas || typeof Chart === 'undefined') return;
+            const ctx = canvas.getContext('2d');
+            chartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: ['Старт'],
+                    datasets: [{
+                        label: 'Эквити ($)',
+                        data: [300.0],
+                        borderColor: '#38bdf8',
+                        backgroundColor: 'rgba(56, 189, 248, 0.08)',
+                        fill: true,
+                        tension: 0.25,
+                        borderWidth: 2,
+                        pointRadius: 4,
+                        pointHoverRadius: 6,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: (c) => ` Эквити: $${Number(c.parsed.y).toFixed(2)}`
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: 'rgba(255, 255, 255, 0.04)' },
+                            ticks: { color: '#64748b', font: { family: "'JetBrains Mono', monospace", size: 10 } }
+                        },
+                        y: {
+                            grid: { color: 'rgba(255, 255, 255, 0.04)' },
+                            ticks: {
+                                color: '#94a3b8',
+                                font: { family: "'JetBrains Mono', monospace", size: 11 },
+                                callback: (v) => '$' + Number(v).toFixed(2)
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+
+        document.addEventListener('DOMContentLoaded', initEquityChart);
+        async function updateDashboard() {
+            try {
+                const res = await fetch('/api/status');
+                if (!res.ok) return;
+                const data = await res.json();
+                try { syncPaperTestStatsAndChart(data); } catch (e) { console.error("syncPaperTestStatsAndChart error:", e); }
+
+                // Metrics
+                const equity = Number(data.portfolio_equity || data.capital || data.equity || 300.0);
+                const capital = Number(data.capital || data.portfolio_equity || 300.0);
+                const pnl = equity - 300.0;
+                const pnlPct = (pnl / 300.0) * 100.0;
+
+                const eqEl = document.getElementById('metric-equity');
+                if (eqEl) eqEl.innerText = `$${equity.toFixed(2)}`;
+                const capEl = document.getElementById('metric-capital-sub');
+                if (capEl) capEl.innerText = `Капитал: $${capital.toFixed(2)}`;
+
+                const pnlEl = document.getElementById('metric-pnl');
+                if (pnlEl) {
+                    pnlEl.innerText = `${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} (${pnlPct.toFixed(2)}%)`;
+                    pnlEl.className = `metric-val ${pnl >= 0 ? 'positive' : 'negative'}`;
+                }
+
+                const wrEl = document.getElementById('metric-wr');
+                if (wrEl) wrEl.innerText = `${(data.win_rate_pct || 0).toFixed(1)}%`;
+                const trSubEl = document.getElementById('metric-trades-sub');
+                if (trSubEl) trSubEl.innerText = `Всего закрыто: ${data.total_trades || 0} сделок`;
+
+                const ddEl = document.getElementById('metric-dd');
+                if (ddEl) ddEl.innerText = `${(data.drawdown_pct || 0).toFixed(2)}%`;
+                const pkEl = document.getElementById('metric-peak-sub');
+                if (pkEl) pkEl.innerText = `Пик: $${(data.peak_equity || 300.0).toFixed(2)}`;
+
+                // News Shield Badge
+                const newsBadge = document.getElementById('badge-news');
+                if (newsBadge) {
+                    const isNewsOn = data.news_defense_active || data.news_shield;
+                    if (isNewsOn) {
+                        newsBadge.className = 'badge active';
+                        newsBadge.innerHTML = '<span class="pulse-dot"></span><span>NEWS SHIELD: v1.2 ACTIVE</span>';
+                    } else {
+                        newsBadge.className = 'badge pure';
+                        newsBadge.innerHTML = '<span>NEWS SHIELD: OFF (PURE QUANT)</span>';
+                    }
+                }
+
+                // Positions
+                const tPos = data.trend_open_positions || [];
+                const rPos = data.range_open_positions || [];
+                const rawPos = (data.open_positions && Array.isArray(data.open_positions) && data.open_positions.length > 0)
+                    ? data.open_positions
+                    : (data.open_positions && typeof data.open_positions === 'object' && Object.keys(data.open_positions).length > 0)
+                        ? Object.values(data.open_positions)
+                        : [...tPos, ...rPos];
+                const allPos = Array.isArray(rawPos) ? rawPos : Object.values(rawPos || {});
+                const posCounter = document.getElementById('pos-counter');
+                if (posCounter) posCounter.innerText = `Позиций: ${allPos.length}`;
+
+                const posBody = document.getElementById('positions-table-body');
+                if (posBody) {
+                    if (allPos.length === 0) {
+                        posBody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted);">Нет открытых позиций. Сканирование рынка...</td></tr>';
+                    } else {
+                        posBody.innerHTML = allPos.map(p => {
+                            const mod = p.module || 'TREND';
+                            const dirStr = (p.direction === 1 || p.direction === 'LONG' || p.direction === 'BUY') ? 'LONG' : 'SHORT';
+                            const isLong = dirStr === 'LONG';
+                            const ep = Number(p.entry_price || 0.0);
+                            const cp = Number(p.current_price || ep);
+                            const uPnl = Number(p.unrealized_pnl || 0.0);
+                            const sl = Number(p.stop_loss || p.sl_price || 0.0);
+                            const tp = Number(p.take_profit || p.tp1_price || 0.0);
+                            return `
+                                <tr>
+                                    <td><span class="tag" style="background:${mod==='TREND'?'rgba(56,189,248,0.15)':'rgba(168,85,247,0.15)'};color:${mod==='TREND'?'var(--accent)':'var(--purple)'};">${mod}</span></td>
+                                    <td><strong>${p.symbol}</strong></td>
+                                    <td class="${isLong?'positive':'negative'}">${dirStr}</td>
+                                    <td>${p.qty}</td>
+                                    <td>$${ep.toFixed(4)}</td>
+                                    <td>$${cp.toFixed(4)}</td>
+                                    <td class="${uPnl>=0?'positive':'negative'}">${uPnl>=0?'+':''}$${uPnl.toFixed(2)}</td>
+                                    <td>SL: $${sl.toFixed(4)} ${tp > 0 ? '| TP: $'+tp.toFixed(4) : ''}</td>
+                                </tr>
+                            `;
+                        }).join('');
+                    }
+                }
+
+                // Range Orders
+                const rOrders = data.range_pending_orders || [];
+                document.getElementById('orders-counter').innerText = `Ордеров: ${rOrders.length}`;
+                const ordBody = document.getElementById('orders-table-body');
+                if (rOrders.length === 0) {
+                    ordBody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Нет активных лимитных ордеров. Мониторинг фазы CHOP/RANGE...</td></tr>';
+                } else {
+                    ordBody.innerHTML = rOrders.map(o => `
+                        <tr>
+                            <td><strong>${o.symbol}</strong></td>
+                            <td class="${o.direction==='BUY'?'positive':'negative'}">${o.direction} LIMIT</td>
+                            <td class="positive">$${o.price.toFixed(4)}</td>
+                            <td>${o.qty}</td>
+                            <td>$${o.take_profit.toFixed(4)}</td>
+                            <td>$${o.stop_loss.toFixed(4)}</td>
+                        </tr>
+                    `).join('');
+                }
+
+                // Macro BTC Banner & 1h Countdown
+                const btcStatusEl = document.getElementById('banner-btc-status');
+                const btcTrend = data.btc_trend_status || 'NEUTRAL';
+                if (btcStatusEl) {
+                    if (btcTrend === 'BEARISH') {
+                        btcStatusEl.innerHTML = '<span style="color:var(--red);">🔴 BEARISH (Защита: Long-пробои альтов заморожены)</span>';
+                    } else if (btcTrend === 'BULLISH') {
+                        btcStatusEl.innerHTML = '<span style="color:var(--green);">🟢 BULLISH (Рынок разрешает пробойные покупки)</span>';
+                    } else {
+                        btcStatusEl.innerHTML = '<span style="color:var(--gold);">🟡 NEUTRAL (Переходная фаза)</span>';
+                    }
+                }
+                const candleTimerEl = document.getElementById('banner-candle-timer');
+                if (candleTimerEl && data.next_candle_seconds !== undefined) {
+                    const mins = Math.floor(data.next_candle_seconds / 60);
+                    const secs = data.next_candle_seconds % 60;
+                    candleTimerEl.innerText = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+                }
+
+                // Market Radar
+                const radar = data.market_radar || {};
+                const rKeys = Object.keys(radar);
+                document.getElementById('radar-counter').innerText = `Монет в мониторинге: ${rKeys.length}`;
+                const radBody = document.getElementById('radar-table-body');
+                if (rKeys.length === 0) {
+                    radBody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted);">Загрузка рыночных данных...</td></tr>';
+                } else {
+                    radBody.innerHTML = rKeys.map(sym => {
+                        const it = radar[sym];
+                        const regClass = it.regime === 'TREND' ? 'regime-trend' : (it.regime === 'RANGE' ? 'regime-range' : 'regime-neutral');
+                        
+                        let stBadge = it.status;
+                        if (it.status.includes('БЛОК: BTC BEAR')) {
+                            stBadge = `<span class="badge" style="background:rgba(244,63,94,0.15); color:var(--red); border-color:rgba(244,63,94,0.3); font-size:11px;" title="BTC падает. Защитный фильтр блокирует покупки альткоинов">${it.status}</span>`;
+                        } else if (it.status.includes('НЕ БОКОВИК')) {
+                            stBadge = `<span class="badge" style="background:rgba(255,255,255,0.05); color:var(--text-muted); border-color:var(--border); font-size:11px;" title="Maker-лимитки выставляются только в подтверждённом боковике RANGE">${it.status}</span>`;
+                        } else if (it.status.includes('ЖДЁТ ЗАКРЫТИЯ')) {
+                            stBadge = `<span class="badge" style="background:rgba(245,158,11,0.15); color:var(--gold); border-color:rgba(245,158,11,0.3); font-size:11px;" title="Свеча формируется. Вход строго по закрытию 1h бара">${it.status}</span>`;
+                        } else if (it.status.includes('ГОТОВ К ЛИМИТКЕ')) {
+                            stBadge = `<span class="badge" style="background:rgba(168,85,247,0.15); color:var(--purple); border-color:rgba(168,85,247,0.3); font-size:11px;">${it.status}</span>`;
+                        } else if (it.status.includes('ИМПУЛЬС')) {
+                            stBadge = `<span class="badge" style="background:rgba(56,189,248,0.15); color:var(--accent); border-color:rgba(56,189,248,0.3); font-size:11px;">${it.status}</span>`;
+                        }
+
+                        const longTitle = it.dist_to_long_pct === 0 ? 'title="Уровень Дончяна пробит внутри часа. Торговые решения принимаются строго на закрытии свечи!"' : '';
+                        const makerTitle = it.dist_to_maker_buy_pct === 0 ? 'title="Цена опустилась до нижней полосы Боллинджера. Лимитка ставится только в режиме RANGE и при RSI < 35"' : '';
+
+                        return `
+                            <tr>
+                                <td><strong>${sym}</strong></td>
+                                <td><span class="tag-regime ${regClass}">${it.regime}</span></td>
+                                <td>$${it.current_price.toFixed(4)}</td>
+                                <td class="${it.dist_to_long_pct===0?'positive':''}" ${longTitle}>${it.dist_to_long_pct}% ${it.dist_to_long_pct===0?'⏳':''}</td>
+                                <td class="${it.dist_to_short_pct===0?'negative':''}">${it.dist_to_short_pct}%</td>
+                                <td style="color:var(--purple); font-weight:${it.dist_to_maker_buy_pct===0?'700':'normal'};" ${makerTitle}>${it.dist_to_maker_buy_pct}% ${it.dist_to_maker_buy_pct===0?'🎯':''}</td>
+                                <td style="color:var(--purple);">${it.dist_to_maker_sell_pct}%</td>
+                                <td>${it.rsi}</td>
+                                <td>${it.adx}</td>
+                                <td>${stBadge}</td>
+                            </tr>
+                        `;
+                    }).join('');
+                }
+
+                // IRAS Chop Screener Table
+                const chopPool = data.chop_screened_universe || [];
+                const chopCounter = document.getElementById('chop-counter');
+                if (chopCounter) chopCounter.innerText = `Отобрано: ${chopPool.length}`;
+                const chopBody = document.getElementById('chop-table-body');
+                if (chopBody) {
+                    if (chopPool.length === 0) {
+                        chopBody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted);">Поиск кандидатов с шириной ≥ 2.5% и KER ≤ 0.25...</td></tr>';
+                    } else {
+                        chopBody.innerHTML = chopPool.map(c => `
+                            <tr>
+                                <td><strong>${c.symbol}</strong></td>
+                                <td>$${Number(c.price).toFixed(4)}</td>
+                                <td>$${c.turnover_24h_m}M</td>
+                                <td style="color:var(--accent); font-weight:700;">${c.bandwidth_pct}%</td>
+                                <td style="color:${c.ker<=0.10?'var(--green)':'var(--gold)'};">${c.ker}</td>
+                                <td>${c.adx}</td>
+                                <td>${c.crossings || 5}x</td>
+                                <td style="color:${c.funding_rate_pct<0?'var(--green)':'var(--text-muted)'};">${c.funding_rate_pct>0?'+':''}${c.funding_rate_pct}%</td>
+                                <td style="color:var(--purple); font-weight:700; font-size:13px;">${c.chop_score}</td>
+                                <td><span class="badge" style="background:rgba(168,85,247,0.15); color:var(--purple); border-color:rgba(168,85,247,0.3); font-size:11px;">КАНДИДАТ MAKER</span></td>
+                            </tr>
+                        `).join('');
+                    }
+                }
+
+                // Closed trades
+                const closed = data.closed_trades || [];
+                const clBody = document.getElementById('closed-table-body');
+                if (closed.length === 0) {
+                    clBody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted);">Сделок пока нет. Ожидание сигналов...</td></tr>';
+                } else {
+                    clBody.innerHTML = closed.slice(0, 15).map(t => `
+                        <tr>
+                            <td><span class="tag" style="background:${t.module==='TREND'?'rgba(56,189,248,0.15)':'rgba(168,85,247,0.15)'};color:${t.module==='TREND'?'var(--accent)':'var(--purple)'};">${t.module}</span></td>
+                            <td><strong>${t.symbol}</strong></td>
+                            <td class="${t.direction==='LONG'||t.direction==='BUY'?'positive':'negative'}">${t.direction}</td>
+                            <td>$${t.entry_price.toFixed(4)}</td>
+                            <td>$${t.exit_price.toFixed(4)}</td>
+                            <td class="${t.net_pnl>=0?'positive':'negative'}">${t.net_pnl>=0?'+':''}$${t.net_pnl.toFixed(2)}</td>
+                            <td>${t.exit_reason}</td>
+                        </tr>
+                    `).join('');
+                }
+
+                
+                // Update Equity Chart & Telemetry
+                const eq = Number(data.portfolio_equity || data.capital || 300.0);
+                const initCap = Number(data.initial_capital || 300.0);
+                const chartCurr = document.getElementById('chart-curr-equity');
+                if (chartCurr) chartCurr.innerText = '$' + eq.toFixed(2);
+
+                if (chartInstance) {
+                    const labels = ['Старт'];
+                    const points = [initCap];
+                    let runEq = initCap;
+
+                    closed.forEach((t, idx) => {
+                        const pnlVal = Number(t.net_pnl !== undefined ? t.net_pnl : (t.net_pnl_usdt || 0.0));
+                        runEq += pnlVal;
+                        labels.push(`#${idx + 1} ${t.symbol}`);
+                        points.push(Number(runEq.toFixed(2)));
+                    });
+
+                    if (points.length === 1 || Math.abs(points[points.length - 1] - eq) > 0.001) {
+                        labels.push('Текущее');
+                        points.push(Number(eq.toFixed(2)));
+                    }
+
+                    chartInstance.data.labels = labels;
+                    chartInstance.data.datasets[0].data = points;
+                    const isProfit = eq >= initCap;
+                    chartInstance.data.datasets[0].borderColor = isProfit ? '#38bdf8' : '#f43f5e';
+                    chartInstance.data.datasets[0].pointBackgroundColor = isProfit ? '#38bdf8' : '#f43f5e';
+                    chartInstance.data.datasets[0].backgroundColor = isProfit ? 'rgba(56, 189, 248, 0.08)' : 'rgba(244, 63, 94, 0.08)';
+                    chartInstance.update();
+                } else if (typeof Chart !== 'undefined') {
+                    initEquityChart();
+                }
+
+                // Subsystem Telemetry
+                const pingEl = document.getElementById('sub-ping-val');
+                if (pingEl) pingEl.innerText = (data.ping_ms || 2.4) + ' ms';
+
+                const wsInfo = document.getElementById('sub-ws-info');
+                if (wsInfo) {
+                    const coins = data.monitored_symbols_count || (data.bybit_ws_symbols || (data.monitored_symbols ? data.monitored_symbols.length : 27));
+                    wsInfo.innerHTML = `Подписка: <strong>${coins} монет</strong> | V5 Linear`;
+                }
+
+                const gearInfo = document.getElementById('sub-gear-info');
+                if (gearInfo) {
+                    const g = data.gearbox_gear || data.gear || 1;
+                    const r = data.gearbox_risk_pct || data.risk_pct || 1.5;
+                    gearInfo.innerHTML = `Ступень: <strong>G${g}</strong> | Риск: <strong>${r}%</strong>`;
+                }
+
+                const newsInfo = document.getElementById('sub-news-info');
+                if (newsInfo) {
+                    const isEmbargo = data.macro_blackout_active || data.macro_embargo_active || false;
+                    newsInfo.innerHTML = isEmbargo 
+                        ? '<strong style="color: #f43f5e;">ЭМБАРГО АКТИВНО (Торговля заблокирована)</strong>'
+                        : 'Эмбарго: <strong>НЕТ (Торговля активна)</strong>';
+                }
+
+
+                // Logs
+                const logRes = await fetch('/api/logs');
+                if (logRes.ok) {
+                    const logs = await logRes.json();
+                    const logBox = document.getElementById('log-box');
+                    logBox.innerText = logs.join('\n');
+                    logBox.scrollTop = logBox.scrollHeight;
+                }
+            } catch (err) {
+                console.error("Dashboard update error:", err);
+            }
+        }
+
+        setInterval(updateDashboard, 3000);
+        updateDashboard();
+    </script>
+</body>
+</html>

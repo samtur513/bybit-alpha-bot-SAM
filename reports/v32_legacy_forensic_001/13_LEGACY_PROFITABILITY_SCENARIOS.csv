@@ -1,0 +1,5 @@
+scenario_id,description,net_pnl_usd,net_return_pct,profit_factor,win_rate_pct,confirmed_trades,audit_verdict
+SCENARIO_A_DASHBOARD_REPORTED,Original Dashboard (Closed Trades + Banked Partials - Entry Fees),21.88,7.29,2.47,57.14,28,VERIFIED_PER_ORIGINAL_CODE
+SCENARIO_B_CLOSED_TRADES_ONLY,Strict Finalized Closed Trades (Excludes Active Floating & Partials),17.99,6.0,2.47,57.14,28,VERIFIED_PER_CLOSED_LEDGER
+SCENARIO_C_EXECUTION_ADJUSTED,Adjusted for Realistic Market Slippage (0.05% Entry + 0.05% Exit),16.67,5.56,2.29,57.14,28,REALISTIC_ESTIMATE_PASS
+SCENARIO_D_CONSERVATIVE_STRESS,Conservative Stress Test (0.10% Slippage + Outlier AKEUSDT Excluded),10.23,3.41,1.72,55.56,27,CONSERVATIVE_ROBUST_PASS
