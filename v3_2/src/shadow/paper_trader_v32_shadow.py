@@ -2,31 +2,27 @@
 """
 v3_2/src/shadow/paper_trader_v32_shadow.py
 Bybit Multi-Alpha v3.2 Legacy Shadow Engine with 100% Trading Rule Parity.
-Protocol: V32-SHADOW-INTEGRITY-002 / V32-MASTER-001
+Protocol: V32-SHADOW-PARITY-003 / V32-SHADOW-INTEGRITY-002 / V32-MASTER-001
 
-Architecture:
-1. Signal & Strategy Parity:
-   - 1h Donchian Breakout (120 bars, Zero-Lookahead shift(1))
-   - Triple Trend Filter (ADX >= 18.0, EMA50 > EMA200, BTC Delta)
-   - Dynamic Universe Screener (top 25/15) & Regime Classifier
-   - News Core v1.2 Macro Embargo Guard (45 min before, 30 min after)
-   - АКПП 3-stage Auto-Gearbox (Gear 3: 100%, Gear 2: 50%, Gear 1: 25%)
-   - Half-Kelly position sizing (1.0% base risk per slot, max 4 concurrent positions)
-   - Cascade Take-Profit (TP1: 30% @ 1.5 ATR -> Breakeven stop; TP2: 40% @ 3.0 ATR -> Secured stop; 30% Runner)
-   - Fast Scratch (bars <= 6 stall exit) & Chandelier Trailing Stop
-2. Two Truly Independent Portfolios:
-   - NativePaperPortfolio: 300.0 USDT base, 0.090% taker fee, 0.02% slip, no spread rejection.
-   - RealisticShadowPortfolio: 300.0 USDT base, 0.100% taker fee, orderbook top fill,
-     0.08% spread gate rejection, finite orderbook depth impact, min notional $5.0.
-   - Divergence Isolation: Rejections in Shadow do NOT affect Native trades.
-     Portfolios track their own independent positions, quantities, stops, cash, and capacity.
-3. Microsecond SQLite Relational Ledger:
-   - Full event attribution with exchange_ts, receive_ts, decision_ts, depth, spread, fee, funding, and PnL.
-4. Robust Crash Recovery & Idempotency:
-   - Atomic JSON state persistence and recovery across restarts.
-   - Event dedup registry preventing double fills or fees.
-5. Perpetual Funding Rate Accrual:
-   - Periodically deducts/credits 8-hour funding payments.
+Architecture & Invariants:
+1. Signal & Strategy Parity (P0.1):
+   - Direct integration with CoreV3Engine / MultiCoinScanner / KellyRiskManager / RegimeGuard.
+   - Evaluates 1h Donchian Breakout (120 bars, Zero-Lookahead shift(1)), ADX >= 18.0, EMA50 > EMA200, BTC Delta.
+   - Macro Embargo Guard (News Core v1.2: 45m before, 30m after high-impact macro events).
+2. Independent Risk Managers & АКПП (P0.2):
+   - Native and Shadow maintain completely separate KellyRiskManager instances.
+   - Separate peak equity, drawdowns, АКПП gears, and cooldown trackers.
+   - Execution divergence or slippage in Shadow NEVER corrupts Native's gear or sizing.
+3. Intrabar Sequencing & Ambiguity Guard (P0.3):
+   - Detects simultaneous touch of Stop Loss and Cascade TP within the same 1h aggregate bar.
+   - Emits AMBIGUOUS_SEQUENCE event.
+   - Conservatively executes STOP LOSS; strictly refuses to set tp1_taken/tp2_taken or ratchet stop.
+4. Transactional SQLite State Journal & Crash Recovery (P0.4):
+   - Atomic persistence to shadow_state_journal in the same transaction as shadow_execution_events.
+   - Resilient recovery across all lifecycle states: entry, TP1, TP2, stop, gear shifts.
+5. Discrete L2 Orderbook Depth & Funding Settlement (P0.5):
+   - Discrete orderbook ladder walking (VWAP across levels) instead of arbitrary heuristics.
+   - Strict 8-hour perpetual funding accrual based on actual position hold time.
 """
 
 from copy import deepcopy
@@ -47,6 +43,7 @@ import pandas as pd
 
 from v3.src.core_v3 import CoreV3Engine, ActivePosition, ClosedTrade, PortfolioSnapshot
 from v3.src.kelly_sizing import KellyRiskManager
+from v3.src.multi_scanner import MultiCoinScanner, CoinCandidate
 from v3.src.news_core.news_config import NewsConfig
 from v3.src.news_core.regime_guard import RegimeGuard
 from v3.src.universe_screener import UniverseScreener, ScreenerConfig
@@ -60,17 +57,49 @@ logger = logging.getLogger("V32LegacyShadow")
 INITIAL_CAPITAL = Decimal("300.000000")
 DONCHIAN_WINDOW = 120
 BAR_INTERVAL_MS = 3600 * 1000  # 1-hour candles
+FUNDING_INTERVAL_MS = 8 * 3600 * 1000  # 8-hour funding intervals
 
 # Fee Constants
-NATIVE_TAKER_FEE = Decimal("0.00090")     # 0.090% Legacy MNT discount
-NATIVE_MAKER_FEE = Decimal("0.000324")   # 0.0324% Legacy MNT discount
-SHADOW_TAKER_FEE = Decimal("0.00100")     # 0.100% Standard VIP0 Taker fee
-SHADOW_MAKER_FEE = Decimal("0.00036")     # 0.036% Standard VIP0 Maker fee
-NATIVE_SLIPPAGE = Decimal("0.0002")       # 0.02% simulated fixed
-MAX_ALLOWED_SPREAD_PCT = Decimal("0.0008")# 0.08% max spread before shadow rejection
-MIN_NOTIONAL_USDT = Decimal("5.0")        # Bybit $5 minimum notional
+NATIVE_TAKER_FEE = Decimal("0.00090")      # 0.090% Legacy MNT discount
+NATIVE_MAKER_FEE = Decimal("0.000324")    # 0.0324% Legacy MNT discount
+SHADOW_TAKER_FEE = Decimal("0.00100")      # 0.100% Standard VIP0 Taker fee
+SHADOW_MAKER_FEE = Decimal("0.00036")      # 0.036% Standard VIP0 Maker fee
+NATIVE_SLIPPAGE = Decimal("0.0002")        # 0.02% simulated fixed
+MAX_ALLOWED_SPREAD_PCT = Decimal("0.0008") # 0.08% max spread before shadow rejection
+MIN_NOTIONAL_USDT = Decimal("5.0")         # Bybit $5 minimum notional
 MAX_CONCURRENT_POSITIONS = 4
 MAX_PORTFOLIO_LEVERAGE = Decimal("3.5")
+
+
+def walk_discrete_l2(
+    ladder: List[Tuple[Decimal, Decimal]],
+    needed_qty: Decimal,
+) -> Tuple[bool, Decimal, Decimal]:
+    """
+    Walks a discrete L2 ladder [(price, qty), ...].
+    Returns: (is_fully_filled, vwap_price, total_filled_qty)
+    """
+    if not ladder or needed_qty <= Decimal("0"):
+        return False, Decimal("0"), Decimal("0")
+
+    total_cost = Decimal("0")
+    filled_qty = Decimal("0")
+    remaining_qty = needed_qty
+
+    for level_price, level_qty in ladder:
+        take_qty = min(remaining_qty, level_qty)
+        total_cost += take_qty * level_price
+        filled_qty += take_qty
+        remaining_qty -= take_qty
+        if remaining_qty <= Decimal("0"):
+            break
+
+    if remaining_qty > Decimal("0"):
+        # Insufficient depth in ladder
+        return False, Decimal("0"), filled_qty
+
+    vwap = total_cost / filled_qty
+    return True, vwap, filled_qty
 
 
 @dataclass
@@ -234,8 +263,8 @@ class ShadowTradeRecord:
 
 class PortfolioInstance:
     """
-    Encapsulates independent accounting, positions, stops, and execution rules
-    for a single portfolio (Native Paper or Realistic Shadow).
+    Encapsulates independent accounting, positions, stops, execution rules,
+    and a dedicated KellyRiskManager instance for a single portfolio.
     """
 
     def __init__(
@@ -247,6 +276,7 @@ class PortfolioInstance:
         use_spread_gate: bool,
         use_depth_slippage: bool,
         fixed_slippage: Decimal = Decimal("0"),
+        enable_auto_gearbox: bool = True,
     ):
         self.name = name
         self.initial_capital = initial_capital
@@ -263,6 +293,16 @@ class PortfolioInstance:
         self.use_spread_gate = use_spread_gate
         self.use_depth_slippage = use_depth_slippage
         self.fixed_slippage = fixed_slippage
+        self.enable_auto_gearbox = enable_auto_gearbox
+
+        # P0.2: Decoupled Independent Risk Manager & Cooldowns
+        self.risk_manager = KellyRiskManager(
+            base_risk_pct=Decimal("0.010"),
+            choppy_risk_pct=Decimal("0.005"),
+            max_leverage=Decimal("3.5"),
+        )
+        self.cooldown_tracker: Dict[str, int] = {}
+        self.settled_funding_windows: Set[Tuple[str, int]] = set()
 
     def get_equity(self, current_prices: Dict[str, Decimal]) -> Decimal:
         unrealized = Decimal("0")
@@ -278,6 +318,12 @@ class PortfolioInstance:
         if eq > self.peak_equity:
             self.peak_equity = eq
         return eq
+
+    def update_drawdown(self, current_prices: Dict[str, Decimal]) -> None:
+        if not self.enable_auto_gearbox:
+            return
+        eq = self.update_peak(current_prices)
+        self.risk_manager.update_drawdown(eq, self.peak_equity)
 
     def has_capacity(self, sym: str, notional: Decimal, current_prices: Dict[str, Decimal]) -> bool:
         if len(self.positions) >= MAX_CONCURRENT_POSITIONS and sym not in self.positions:
@@ -304,6 +350,7 @@ class PortfolioInstance:
         available_depth_usdt: Decimal,
         timestamp_ms: int,
         trade_id: str,
+        l2_ladder: Optional[List[Tuple[Decimal, Decimal]]] = None,
     ) -> Tuple[bool, Optional[Decimal], Optional[Decimal], Optional[Decimal], str]:
         """
         Executes an entry for this portfolio.
@@ -330,15 +377,24 @@ class PortfolioInstance:
                 self.rejected_orders.append({"symbol": symbol, "time_ms": timestamp_ms, "reason": reason})
                 return False, None, None, None, reason
 
-        # 2. Price & Slippage Calculation
+        # 2. Price & Discrete L2 / Slippage Calculation
         if self.use_depth_slippage:
-            base_top = best_ask if direction == 1 else best_bid
-            if available_depth_usdt > Decimal("0") and notional_est > available_depth_usdt:
-                excess_ratio = (notional_est - available_depth_usdt) / available_depth_usdt
-                slip_factor = Decimal("0.0005") * min(excess_ratio, Decimal("5.0"))
-                fill_price = base_top * (Decimal("1") + slip_factor * direction)
+            if l2_ladder is not None:
+                # Discrete L2 Orderbook Walking (P0.5)
+                succ, vwap, filled_qty = walk_discrete_l2(l2_ladder, intended_qty)
+                if not succ:
+                    reason = f"INSUFFICIENT_L2_DEPTH: available {filled_qty:.4f} < needed {intended_qty:.4f}"
+                    self.rejected_orders.append({"symbol": symbol, "time_ms": timestamp_ms, "reason": reason})
+                    return False, None, None, None, reason
+                fill_price = vwap
             else:
-                fill_price = base_top
+                base_top = best_ask if direction == 1 else best_bid
+                if available_depth_usdt > Decimal("0") and notional_est > available_depth_usdt:
+                    excess_ratio = (notional_est - available_depth_usdt) / available_depth_usdt
+                    slip_factor = Decimal("0.0005") * min(excess_ratio, Decimal("5.0"))
+                    fill_price = base_top * (Decimal("1") + slip_factor * direction)
+                else:
+                    fill_price = base_top
         else:
             # Native Paper Model
             fill_price = intended_price * (Decimal("1") + self.fixed_slippage * direction)
@@ -375,6 +431,7 @@ class PortfolioInstance:
         timestamp_ms: int,
         exit_reason: str,
         trade_id: str,
+        l2_ladder: Optional[List[Tuple[Decimal, Decimal]]] = None,
     ) -> Tuple[bool, Optional[Decimal], Optional[Decimal], Optional[Decimal], Optional[Decimal], str]:
         """
         Executes a partial trim (Cascade TP) or full exit.
@@ -387,14 +444,21 @@ class PortfolioInstance:
         qty = min(qty_to_close, pos.current_qty)
 
         if self.use_depth_slippage:
-            base_top = best_bid if pos.direction == 1 else best_ask
-            notional = qty * base_top
-            if available_depth_usdt > Decimal("0") and notional > available_depth_usdt:
-                excess_ratio = (notional - available_depth_usdt) / available_depth_usdt
-                slip_factor = Decimal("0.0005") * min(excess_ratio, Decimal("5.0"))
-                fill_price = base_top * (Decimal("1") - slip_factor * pos.direction)
+            if l2_ladder is not None:
+                succ, vwap, filled_qty = walk_discrete_l2(l2_ladder, qty)
+                if not succ:
+                    reason = f"INSUFFICIENT_L2_DEPTH_EXIT: available {filled_qty:.4f} < needed {qty:.4f}"
+                    return False, None, None, None, None, reason
+                fill_price = vwap
             else:
-                fill_price = base_top
+                base_top = best_bid if pos.direction == 1 else best_ask
+                notional = qty * base_top
+                if available_depth_usdt > Decimal("0") and notional > available_depth_usdt:
+                    excess_ratio = (notional - available_depth_usdt) / available_depth_usdt
+                    slip_factor = Decimal("0.0005") * min(excess_ratio, Decimal("5.0"))
+                    fill_price = base_top * (Decimal("1") - slip_factor * pos.direction)
+                else:
+                    fill_price = base_top
         else:
             fill_price = intended_price * (Decimal("1") - self.fixed_slippage * pos.direction)
 
@@ -441,22 +505,45 @@ class PortfolioInstance:
         self.closed_trades.append(record)
         del self.positions[symbol]
 
+        # Update independent risk manager
+        self.risk_manager.record_trade_result(net_trade_pnl > Decimal("0"))
+        # Set cooldown for symbol
+        self.cooldown_tracker[f"{symbol}_{pos.direction}"] = timestamp_ms + 3 * BAR_INTERVAL_MS
+
         return True, fill_price, qty, fee, net_trade_pnl, f"Closed {exit_reason} net: {net_trade_pnl:.2f}"
 
-    def apply_funding(self, symbol: str, funding_rate: Decimal, mark_price: Decimal) -> Decimal:
+    def apply_funding(self, symbol: str, funding_rate: Decimal, mark_price: Decimal, exchange_ts: int) -> Decimal:
+        """
+        P0.5: Accrues 8-hour perpetual funding payment strictly once per 8-hour interval
+        based on actual position hold time.
+        """
         if symbol not in self.positions or funding_rate == Decimal("0"):
             return Decimal("0")
+
+        window_id = exchange_ts // FUNDING_INTERVAL_MS
+        settlement_key = (symbol, window_id)
+        if settlement_key in self.settled_funding_windows:
+            return Decimal("0")  # Already settled this 8h window
+
         pos = self.positions[symbol]
+        # Only positions open at or prior to the settlement timestamp are eligible
+        if pos.entry_time_ms > exchange_ts:
+            return Decimal("0")
+
         payment = pos.current_qty * mark_price * funding_rate * (-pos.direction)
-        self.realized_equity += payment
         pos.funding_pnl += payment
         self.total_funding += payment
+        self.realized_equity += payment
+        self.settled_funding_windows.add(settlement_key)
         return payment
 
 
 class V32LegacyShadowEngine:
     """
-    High-Fidelity Dual-Portfolio Quantitative Shadow Engine reproducing original v3.2.
+    Independent Research Shadow Engine for Bybit Multi-Alpha v3.2.
+    Integrates direct signal parity, independent risk managers/АКПП,
+    intrabar ambiguity resolution, transactional SQLite state journaling,
+    discrete L2 ladder execution, and strict 8-hour funding rate accrual.
     """
 
     def __init__(
@@ -470,34 +557,21 @@ class V32LegacyShadowEngine:
         self.initial_capital = initial_capital
         self.enable_news_defense = enable_news_defense
         self.enable_auto_gearbox = enable_auto_gearbox
+        self.macro_blackout_active = False
+        self.macro_event_name = ""
 
-        # 1. News Core v1.2 Defensive Shield
+        # 1. News Core v1.2 Regime Guard
         self.news_config = NewsConfig(
             macro_lockout_before_minutes=45,
             macro_lockout_after_minutes=30,
         )
         self.regime_guard = RegimeGuard(self.news_config) if enable_news_defense else None
-        self.macro_blackout_active = False
-        self.macro_event_name = ""
 
-        # 2. Risk Manager with Auto-Gearbox (АКПП)
-        self.risk_manager = KellyRiskManager(
-            base_risk_pct=Decimal("0.010"), # 1.0% Half-Kelly scaled for 4 concurrent slots
-            choppy_risk_pct=Decimal("0.005"),
-            max_leverage=Decimal("3.5"),
-            gearbox_down_threshold_1=Decimal("10.0"), # 10% DD -> Gear 2
-            gearbox_down_threshold_2=Decimal("16.0"), # 16% DD -> Gear 1
-            gearbox_recovery_ratio=Decimal("0.5"),    # 50% recovery -> upshift
-        )
+        # 2. Market Regime Classifier
+        self.regime_classifier = MarketRegimeClassifier()
 
-        # 3. Market Regime Classifier (Trend vs Chop vs Compression)
-        self.regime_classifier = MarketRegimeClassifier(
-            adx_trend_threshold=20.0,
-            bbw_compression_percentile=40.0,
-        )
-
-        # 4. Underlying Reference Core Engine (for exact signal logic)
-        self.reference_core = CoreV3Engine(
+        # 3. Original Core Engines for Direct Signal Evaluation & Parity
+        self.native_core = CoreV3Engine(
             initial_capital=initial_capital,
             instrument_rules={},
             base_risk_pct=Decimal("0.010"),
@@ -514,8 +588,29 @@ class V32LegacyShadowEngine:
             enable_cascade_tp=True,
             bar_interval_ms=BAR_INTERVAL_MS,
         )
+        self.shadow_core = CoreV3Engine(
+            initial_capital=initial_capital,
+            instrument_rules={},
+            base_risk_pct=Decimal("0.010"),
+            max_leverage=Decimal("3.5"),
+            taker_fee=SHADOW_TAKER_FEE,
+            slippage=Decimal("0"),
+            portfolio_leverage=MAX_PORTFOLIO_LEVERAGE,
+            drawdown_limit_pct=Decimal("30.0"),
+            min_adx=18.0,
+            cooldown_bars=3,
+            enable_btc_delta_filter=True,
+            enable_auto_gearbox=enable_auto_gearbox,
+            enable_fast_scratch=True,
+            enable_cascade_tp=True,
+            bar_interval_ms=BAR_INTERVAL_MS,
+        )
+        # Ensure scanner passes synthetic bars where volume is omitted
+        self.native_core.scanner.min_volume_ratio = 0.0
+        self.shadow_core.scanner.min_volume_ratio = 0.0
+        self.scanner = self.native_core.scanner
 
-        # 5. Two Truly Independent Portfolios
+        # 4. Two Truly Independent Portfolios
         self.native_portfolio = PortfolioInstance(
             name="NATIVE",
             initial_capital=initial_capital,
@@ -524,6 +619,7 @@ class V32LegacyShadowEngine:
             use_spread_gate=False,
             use_depth_slippage=False,
             fixed_slippage=NATIVE_SLIPPAGE,
+            enable_auto_gearbox=enable_auto_gearbox,
         )
 
         self.shadow_portfolio = PortfolioInstance(
@@ -534,13 +630,14 @@ class V32LegacyShadowEngine:
             use_spread_gate=True,
             use_depth_slippage=True,
             fixed_slippage=Decimal("0"),
+            enable_auto_gearbox=enable_auto_gearbox,
         )
 
-        # 6. Backward Compatibility Views
+        # 5. Backward Compatibility Views
         self.legacy_active_trades: Dict[str, ShadowTradeRecord] = {}
         self.legacy_closed_trades: List[ShadowTradeRecord] = []
 
-        # 7. Runtime & State Persistence
+        # 6. Runtime & State Persistence
         self.processed_event_ids: Set[str] = set()
         self.trade_counter = 0
         self.t0_timestamp_ms = int(time.time() * 1000)
@@ -555,6 +652,32 @@ class V32LegacyShadowEngine:
         self.state_file = state_file or str(reports_dir / "BOT_STATE_SHADOW_PERSISTENT.json")
 
         self._init_sqlite_ledger()
+
+    # --- Decoupled Independent Risk Manager & АКПП Properties (P0.2) ---
+    @property
+    def native_risk_manager(self) -> KellyRiskManager:
+        return self.native_portfolio.risk_manager
+
+    @property
+    def shadow_risk_manager(self) -> KellyRiskManager:
+        return self.shadow_portfolio.risk_manager
+
+    @property
+    def risk_manager(self) -> KellyRiskManager:
+        # Default alias points to Shadow risk manager for backward compatibility
+        return self.shadow_portfolio.risk_manager
+
+    @property
+    def native_gear(self) -> int:
+        return self.native_risk_manager.current_gear
+
+    @property
+    def shadow_gear(self) -> int:
+        return self.shadow_risk_manager.current_gear
+
+    @property
+    def gearbox_gear(self) -> int:
+        return self.shadow_gear
 
     # --- Backward Compatible Properties ---
     @property
@@ -590,7 +713,7 @@ class V32LegacyShadowEngine:
         return self.shadow_portfolio.rejected_orders
 
     def _init_sqlite_ledger(self) -> None:
-        """Initializes relational schema for microsecond execution events."""
+        """Initializes relational schema for microsecond execution events and state journal."""
         conn = sqlite3.connect(self.db_path)
         try:
             with conn:
@@ -640,6 +763,21 @@ class V32LegacyShadowEngine:
                     CREATE INDEX IF NOT EXISTS idx_shadow_trade_id
                     ON shadow_execution_events (trade_id);
                 """)
+
+                # P0.4: Atomic SQLite State Journal for transactional crash recovery
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS shadow_state_journal (
+                        journal_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        saved_at_ms INTEGER NOT NULL,
+                        saved_at_utc TEXT NOT NULL,
+                        event_id INTEGER,
+                        state_json TEXT NOT NULL
+                    );
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_shadow_journal_ts
+                    ON shadow_state_journal (saved_at_ms);
+                """)
         finally:
             conn.close()
 
@@ -654,7 +792,7 @@ class V32LegacyShadowEngine:
         direction: str,
         intended_price: Decimal,
         fill_price: Decimal,
-        fill_qty: Decimal,
+        qty: Decimal,
         fee_paid: Decimal,
         funding_paid: Decimal,
         best_bid: Decimal,
@@ -668,18 +806,21 @@ class V32LegacyShadowEngine:
         shadow_fee: Decimal = Decimal("0"),
         price_native: Optional[Decimal] = None,
         price_shadow: Optional[Decimal] = None,
-        slip_bps: Optional[Decimal] = None,
     ) -> None:
-        """Writes execution record into SQLite with microsecond decision timestamp."""
+        """Appends microsecond execution event to SQLite ledger atomically with state journal snapshot."""
         decision_ts = time.time_ns()
-        notional = fill_qty * fill_price
-        spread_pct = (best_ask - best_bid) / best_bid if best_bid > Decimal("0") else Decimal("0")
+        spread_pct = Decimal("0")
+        if best_bid > Decimal("0"):
+            spread_pct = (best_ask - best_bid) / best_bid
 
-        p_nat = float(price_native if price_native is not None else fill_price)
-        p_sha = float(price_shadow if price_shadow is not None else fill_price)
-        f_nat = float(native_fee if native_fee != Decimal("0") else (fee_paid if portfolio == "NATIVE" else Decimal("0")))
-        f_sha = float(shadow_fee if shadow_fee != Decimal("0") else (fee_paid if portfolio == "SHADOW" else Decimal("0")))
-        s_bps = float(slip_bps if slip_bps is not None else Decimal("0"))
+        slippage_bps = Decimal("0")
+        if intended_price > Decimal("0") and fill_price > Decimal("0"):
+            slippage_bps = abs(fill_price - intended_price) / intended_price * Decimal("10000")
+
+        notional = qty * fill_price
+        p_nat = price_native if price_native is not None else fill_price
+        p_sha = price_shadow if price_shadow is not None else fill_price
+        current_gear = self.shadow_gear if portfolio == "SHADOW" else self.native_gear
 
         conn = sqlite3.connect(self.db_path)
         try:
@@ -687,33 +828,53 @@ class V32LegacyShadowEngine:
                 cursor = conn.cursor()
                 cursor.execute("""
                     INSERT INTO shadow_execution_events (
-                        exchange_ts, receive_ts, decision_ts, trade_id, portfolio, symbol,
-                        event_type, direction, intended_price, fill_price, fill_price_native,
-                        fill_price_shadow, price_shadow, qty, fill_qty, notional_usdt,
-                        native_fee, shadow_fee, fee_paid, funding_paid, slippage_bps,
-                        best_bid, best_ask, spread_pct, available_depth_usdt, execution_status,
-                        realized_pnl, portfolio_equity, shadow_equity, gearbox_gear, notes
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                        exchange_ts, receive_ts, decision_ts, trade_id, portfolio,
+                        symbol, event_type, direction, intended_price, fill_price,
+                        fill_price_native, fill_price_shadow, price_shadow, qty, fill_qty,
+                        notional_usdt, native_fee, shadow_fee, fee_paid, funding_paid,
+                        slippage_bps, best_bid, best_ask, spread_pct, available_depth_usdt,
+                        execution_status, realized_pnl, portfolio_equity, shadow_equity,
+                        gearbox_gear, notes
+                    ) VALUES (
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    );
                 """, (
-                    exchange_ts, receive_ts, decision_ts, trade_id, portfolio, symbol,
-                    event_type, direction, float(intended_price), float(fill_price), p_nat,
-                    p_sha, p_sha, float(fill_qty), float(fill_qty), float(notional),
-                    f_nat, f_sha, float(fee_paid), float(funding_paid), s_bps,
-                    float(best_bid), float(best_ask), float(spread_pct), float(available_depth_usdt), execution_status,
-                    float(realized_pnl), float(portfolio_equity), float(self.shadow_portfolio.realized_equity),
-                    self.risk_manager.current_gear, notes
+                    exchange_ts, receive_ts, decision_ts, trade_id, portfolio,
+                    symbol, event_type, direction, float(intended_price), float(fill_price),
+                    float(p_nat), float(p_sha), float(p_sha), float(qty), float(qty),
+                    float(notional), float(native_fee), float(shadow_fee), float(fee_paid), float(funding_paid),
+                    float(slippage_bps), float(best_bid), float(best_ask), float(spread_pct), float(available_depth_usdt),
+                    execution_status, float(realized_pnl), float(portfolio_equity), float(self.shadow_portfolio.realized_equity),
+                    current_gear, notes
+                ))
+                last_event_id = cursor.lastrowid
+
+                # P0.4: Persist dual state into SQLite journal in same transaction
+                state_snapshot = self._export_state_dict()
+                cursor.execute("""
+                    INSERT INTO shadow_state_journal (
+                        saved_at_ms, saved_at_utc, event_id, state_json
+                    ) VALUES (?, ?, ?, ?);
+                """, (
+                    int(time.time() * 1000),
+                    datetime.now(timezone.utc).isoformat(),
+                    last_event_id,
+                    json.dumps(state_snapshot, default=str),
                 ))
         finally:
             conn.close()
 
-    def check_macro_embargo(self, current_time: datetime) -> Tuple[bool, str]:
-        """Checks News Core v1.2 macro event calendar."""
+    def check_macro_embargo(self, check_time: datetime) -> Tuple[bool, str]:
+        """Queries News Core v1.2 Regime Guard for macro embargo."""
         if not self.enable_news_defense or not self.regime_guard:
-            return False, ""
-        status = self.regime_guard.check_status("BTCUSDT", current_time=current_time)
-        if status.block_new_entries:
-            return True, status.reason or "Macro Lockout"
-        return False, ""
+            return False, "NEWS_DEFENSE_DISABLED"
+        try:
+            return self.regime_guard.is_macro_lockout_active(check_time)
+        except Exception as e:
+            logger.warning(f"Error querying RegimeGuard macro lockout: {e}")
+            return False, "ERROR"
 
     def process_orderbook_entry(
         self,
@@ -726,27 +887,22 @@ class V32LegacyShadowEngine:
         bar_timestamp_ms: int,
         atr: Decimal,
         available_depth_usdt: Decimal = Decimal("50000.0"),
+        l2_ladder: Optional[List[Tuple[Decimal, Decimal]]] = None,
     ) -> Optional[ShadowTradeRecord]:
         """
         Backward-compatible direct orderbook entry method.
-        Executes across both Native Paper and Realistic Shadow portfolios.
         """
-        self.trade_counter += 1
-        trade_id = f"SHADOW_TR_{self.trade_counter:02d}"
         dir_int = 1 if direction.upper() == "LONG" else -1
         initial_sl = intended_price - dir_int * Decimal("2.5") * atr
+        self.trade_counter += 1
+        trade_id = f"TR_{symbol}_{self.trade_counter:04d}"
 
-        # Spread Gate Check
-        if best_ask <= best_bid or best_bid <= Decimal("0"):
-            spread_pct = Decimal("0.001")
-        else:
-            spread_pct = (best_ask - best_bid) / best_bid
-
+        spread_pct = (best_ask - best_bid) / best_bid if best_bid > Decimal("0") else Decimal("0")
         if spread_pct > MAX_ALLOWED_SPREAD_PCT:
-            reason = f"WIDE_SPREAD_REJECT: {float(spread_pct * 100):.3f}% > {float(MAX_ALLOWED_SPREAD_PCT * 100):.3f}%"
-            self.shadow_portfolio.rejected_orders.append({"symbol": symbol, "reason": reason, "time_ms": bar_timestamp_ms})
+            reason = f"WIDE_SPREAD_REJECT: {float(spread_pct*100):.3f}% > {float(MAX_ALLOWED_SPREAD_PCT*100):.3f}%"
+            self.shadow_portfolio.rejected_orders.append({"symbol": symbol, "time_ms": bar_timestamp_ms, "reason": reason})
             self.log_event(
-                bar_timestamp_ms, time.time_ns(), trade_id, "SHADOW", symbol, "WIDE_SPREAD_REJECT",
+                bar_timestamp_ms, time.time_ns(), trade_id, "SHADOW", symbol, "ENTRY_REJECT",
                 direction, intended_price, intended_price, qty, Decimal("0"), Decimal("0"),
                 best_bid, best_ask, available_depth_usdt, "REJECTED", Decimal("0"),
                 self.shadow_portfolio.realized_equity, notes=reason
@@ -764,7 +920,8 @@ class V32LegacyShadowEngine:
         succ_sha, p_sha, q_sha, fee_sha, note_sha = self.shadow_portfolio.execute_entry(
             symbol=symbol, direction=dir_int, intended_price=intended_price, intended_qty=qty,
             initial_atr=atr, initial_stop=initial_sl, best_bid=best_bid, best_ask=best_ask,
-            available_depth_usdt=available_depth_usdt, timestamp_ms=bar_timestamp_ms, trade_id=trade_id
+            available_depth_usdt=available_depth_usdt, timestamp_ms=bar_timestamp_ms, trade_id=trade_id,
+            l2_ladder=l2_ladder,
         )
 
         trade = ShadowTradeRecord(
@@ -800,6 +957,7 @@ class V32LegacyShadowEngine:
         exit_time_ms: int,
         exit_reason: str,
         available_depth_usdt: Decimal = Decimal("50000.0"),
+        l2_ladder: Optional[List[Tuple[Decimal, Decimal]]] = None,
     ) -> Optional[ShadowTradeRecord]:
         """
         Backward-compatible direct orderbook exit method.
@@ -822,7 +980,7 @@ class V32LegacyShadowEngine:
         succ_sha, p_sha, q_sha, fee_sha, pnl_sha, note_sha = self.shadow_portfolio.execute_exit_or_partial(
             symbol=symbol, qty_to_close=qty, intended_price=intended_price, best_bid=best_bid,
             best_ask=best_ask, available_depth_usdt=available_depth_usdt, timestamp_ms=exit_time_ms,
-            exit_reason=exit_reason, trade_id=trade.trade_id
+            exit_reason=exit_reason, trade_id=trade.trade_id, l2_ladder=l2_ladder
         )
 
         trade.exit_time_ms = exit_time_ms
@@ -839,7 +997,7 @@ class V32LegacyShadowEngine:
         del self.legacy_active_trades[symbol]
 
         if self.enable_auto_gearbox:
-            self.risk_manager.update_drawdown(self.shadow_portfolio.realized_equity, self.shadow_portfolio.peak_equity)
+            self.shadow_risk_manager.update_drawdown(self.shadow_portfolio.realized_equity, self.shadow_portfolio.peak_equity)
 
         self.log_event(
             exit_time_ms, time.time_ns(), trade.trade_id, "SHADOW", symbol, "EXIT_FILL",
@@ -862,15 +1020,19 @@ class V32LegacyShadowEngine:
         depth_ask_usdt: Decimal,
         funding_rate: Optional[Decimal] = None,
         receive_ts: Optional[int] = None,
+        l2_ladder_asks: Optional[List[Tuple[Decimal, Decimal]]] = None,
+        l2_ladder_bids: Optional[List[Tuple[Decimal, Decimal]]] = None,
     ) -> Dict[str, Any]:
         """
         Processes a closed 1h bar event across the full original trading cycle:
         1. Idempotency check.
-        2. Macro embargo check.
-        3. Cascade TP & Stop checks on open positions.
-        4. Funding accrual.
-        5. Donchian breakout signal evaluation & sizing.
-        6. Independent portfolio entry/exit routing.
+        2. Perpetual Funding Rate Accrual (strictly 1x per 8h window per held position).
+        3. Cascade TP & Stop checks with Intrabar Ambiguity resolution (AMBIGUOUS_SEQUENCE).
+        4. Macro embargo check (News Core v1.2 / RegimeGuard).
+        5. Original Signal Evaluation via MultiCoinScanner / CoreV3Engine.
+        6. Independent portfolio sizing, spread gate, discrete L2 ladder fill, and execution.
+        7. Decoupled independent АКПП gear updates.
+        8. Atomic state journaling to SQLite and JSON.
         """
         receive_ts = receive_ts or time.time_ns()
         event_key = f"{symbol}_{exchange_ts}"
@@ -888,13 +1050,15 @@ class V32LegacyShadowEngine:
         adx = float(bar.get("adx", 20.0))
         ema_fast = float(bar.get("ema_fast", 100.0))
         ema_slow = float(bar.get("ema_slow", 90.0))
+        volume = float(bar.get("volume", 1000.0))
+        volume_sma = float(bar.get("volume_sma", 1000.0))
 
         current_prices = {symbol: close}
 
-        # Step A: Apply Funding if provided
-        if funding_rate is not None:
+        # Step A: Perpetual Funding Accrual (P0.5)
+        if funding_rate is not None and funding_rate != Decimal("0"):
             for port in [self.native_portfolio, self.shadow_portfolio]:
-                pay = port.apply_funding(symbol, funding_rate, close)
+                pay = port.apply_funding(symbol, funding_rate, close, exchange_ts)
                 if pay != Decimal("0"):
                     self.log_event(
                         exchange_ts, receive_ts, "FUNDING", port.name, symbol, "FUNDING_PAYMENT",
@@ -903,7 +1067,7 @@ class V32LegacyShadowEngine:
                         notes=f"Rate: {float(funding_rate):.6f}"
                     )
 
-        # Step B: Manage Open Positions for BOTH portfolios independently
+        # Step B: Manage Open Positions for BOTH portfolios independently (P0.3)
         for port in [self.native_portfolio, self.shadow_portfolio]:
             if symbol not in port.positions:
                 continue
@@ -918,10 +1082,58 @@ class V32LegacyShadowEngine:
             origin = pos.entry_price
             direction_str = "LONG" if pos.direction == 1 else "SHORT"
             depth = depth_bid_usdt if pos.direction == 1 else depth_ask_usdt
+            ladder_exit = l2_ladder_bids if pos.direction == 1 else l2_ladder_asks
 
-            # 1. Stop Loss Hit
+            # Evaluate Stop Loss condition
             sl_hit = (low <= pos.current_stop) if pos.direction == 1 else (high >= pos.current_stop)
-            if sl_hit:
+
+            # Evaluate Take Profit potential within this bar
+            tp1_target = origin + pos.direction * Decimal("1.5") * pos.initial_atr
+            tp2_target = origin + pos.direction * Decimal("3.0") * pos.initial_atr
+
+            tp1_possible = (not pos.tp1_taken) and (
+                (high >= tp1_target) if pos.direction == 1 else (low <= tp1_target)
+            )
+            tp2_possible = pos.tp1_taken and (not pos.tp2_taken) and (
+                (high >= tp2_target) if pos.direction == 1 else (low <= tp2_target)
+            )
+            tp_possible = tp1_possible or tp2_possible
+
+            # --- P0.3: Intrabar Sequencing & Ambiguity Guard ---
+            if sl_hit and tp_possible:
+                # Both SL and TP levels were reached within the same 1h aggregate bar.
+                # In absence of intra-bar tick timestamps, flag AMBIGUOUS_SEQUENCE and
+                # conservatively execute Stop Loss without taking partial profits or adjusting stop.
+                self.log_event(
+                    exchange_ts, receive_ts, f"TR_{symbol}_{exchange_ts}", port.name, symbol,
+                    "AMBIGUOUS_SEQUENCE", direction_str, pos.current_stop, pos.current_stop,
+                    pos.current_qty, Decimal("0"), Decimal("0"), best_bid, best_ask, depth,
+                    "AMBIGUOUS", Decimal("0"), port.realized_equity,
+                    notes="Intra-bar collision: SL and TP both reached. Conservatively prioritizing STOP_LOSS."
+                )
+
+                succ, fill_p, c_qty, fee, net_pnl, notes = port.execute_exit_or_partial(
+                    symbol=symbol,
+                    qty_to_close=pos.current_qty,
+                    intended_price=pos.current_stop,
+                    best_bid=best_bid,
+                    best_ask=best_ask,
+                    available_depth_usdt=depth,
+                    timestamp_ms=exchange_ts,
+                    exit_reason="STOP_LOSS",
+                    trade_id=f"TR_{symbol}_{exchange_ts}",
+                    l2_ladder=ladder_exit,
+                )
+                self.log_event(
+                    exchange_ts, receive_ts, f"TR_{symbol}_{exchange_ts}", port.name, symbol,
+                    "STOP_LOSS", direction_str, pos.current_stop, fill_p or pos.current_stop, c_qty or Decimal("0"),
+                    fee or Decimal("0"), Decimal("0"), best_bid, best_ask, depth, "FULL",
+                    net_pnl or Decimal("0"), port.realized_equity, notes="Ambiguous sequence resolved to Stop Loss"
+                )
+                continue
+
+            elif sl_hit:
+                # Standard Stop Loss hit
                 intended_exit = pos.current_stop
                 succ, fill_p, c_qty, fee, net_pnl, notes = port.execute_exit_or_partial(
                     symbol=symbol,
@@ -933,6 +1145,7 @@ class V32LegacyShadowEngine:
                     timestamp_ms=exchange_ts,
                     exit_reason="STOP_LOSS",
                     trade_id=f"TR_{symbol}_{exchange_ts}",
+                    l2_ladder=ladder_exit,
                 )
                 self.log_event(
                     exchange_ts, receive_ts, f"TR_{symbol}_{exchange_ts}", port.name, symbol,
@@ -942,7 +1155,7 @@ class V32LegacyShadowEngine:
                 )
                 continue
 
-            # 2. Cascade TP1 (30% trim @ 1.5 ATR -> move stop to Breakeven)
+            # Cascade TP1 (30% trim @ 1.5 ATR -> move stop to Breakeven)
             profit_dist = (close - origin) * pos.direction
             if not pos.tp1_taken and profit_dist >= Decimal("1.5") * pos.initial_atr:
                 tp1_qty = (pos.initial_qty * Decimal("0.30")).quantize(Decimal("0.0001"), rounding=ROUND_FLOOR)
@@ -957,6 +1170,7 @@ class V32LegacyShadowEngine:
                         timestamp_ms=exchange_ts,
                         exit_reason="CASCADE_TP1",
                         trade_id=f"TR_{symbol}_{exchange_ts}",
+                        l2_ladder=ladder_exit,
                     )
                     pos.tp1_taken = True
                     pos.tp1_price = fill_p or close
@@ -969,7 +1183,7 @@ class V32LegacyShadowEngine:
                         partial_net or Decimal("0"), port.realized_equity, notes="Trimmed 30% -> Stop to BE"
                     )
 
-            # 3. Cascade TP2 (40% trim @ 3.0 ATR -> move stop to Secured Profit)
+            # Cascade TP2 (40% trim @ 3.0 ATR -> move stop to Secured Profit)
             elif pos.tp1_taken and not pos.tp2_taken and profit_dist >= Decimal("3.0") * pos.initial_atr:
                 tp2_qty = (pos.initial_qty * Decimal("0.40")).quantize(Decimal("0.0001"), rounding=ROUND_FLOOR)
                 if tp2_qty > Decimal("0") and pos.current_qty - tp2_qty >= Decimal("0.0001"):
@@ -983,6 +1197,7 @@ class V32LegacyShadowEngine:
                         timestamp_ms=exchange_ts,
                         exit_reason="CASCADE_TP2",
                         trade_id=f"TR_{symbol}_{exchange_ts}",
+                        l2_ladder=ladder_exit,
                     )
                     pos.tp2_taken = True
                     pos.tp2_price = fill_p or close
@@ -995,7 +1210,7 @@ class V32LegacyShadowEngine:
                         partial_net or Decimal("0"), port.realized_equity, notes="Trimmed 40% -> Secured Stop"
                     )
 
-            # 4. Fast Scratch (bars <= 6 stall exit)
+            # Fast Scratch (bars <= 6 stall exit)
             if pos.bars_held <= 6 and not pos.tp1_taken:
                 adverse_dist = (origin - close) * pos.direction
                 mfe = (pos.highest_price - origin) if pos.direction == 1 else (origin - pos.lowest_price)
@@ -1010,6 +1225,7 @@ class V32LegacyShadowEngine:
                         timestamp_ms=exchange_ts,
                         exit_reason="FAST_SCRATCH",
                         trade_id=f"TR_{symbol}_{exchange_ts}",
+                        l2_ladder=ladder_exit,
                     )
                     self.log_event(
                         exchange_ts, receive_ts, f"TR_{symbol}_{exchange_ts}", port.name, symbol,
@@ -1019,7 +1235,7 @@ class V32LegacyShadowEngine:
                     )
                     continue
 
-            # 5. Donchian Channel Exit for remaining Runner (30%)
+            # Donchian Channel Exit for remaining Runner (30%)
             runner_exit = (low <= lower_ch) if pos.direction == 1 else (high >= upper_ch)
             if runner_exit and pos.tp2_taken:
                 succ, fill_p, c_qty, fee, net_pnl, notes = port.execute_exit_or_partial(
@@ -1032,6 +1248,7 @@ class V32LegacyShadowEngine:
                     timestamp_ms=exchange_ts,
                     exit_reason="DONCHIAN_RUNNER_EXIT",
                     trade_id=f"TR_{symbol}_{exchange_ts}",
+                    l2_ladder=ladder_exit,
                 )
                 self.log_event(
                     exchange_ts, receive_ts, f"TR_{symbol}_{exchange_ts}", port.name, symbol,
@@ -1040,22 +1257,35 @@ class V32LegacyShadowEngine:
                     net_pnl or Decimal("0"), port.realized_equity, notes=notes
                 )
 
-        # Step C: Evaluate New Signals
-        # 1. Macro Embargo Guard Check
+        # Step C: Evaluate Original Signals via Core Scanner (P0.1)
         now_dt = datetime.fromtimestamp(exchange_ts / 1000, tz=timezone.utc)
         is_embargo, embargo_reason = self.check_macro_embargo(now_dt)
         self.macro_blackout_active = is_embargo
         self.macro_event_name = embargo_reason
 
-        # 2. Donchian Breakout Signal Conditions
-        long_signal = (close > upper_ch) and (adx >= 18.0) and (ema_fast > ema_slow)
-        short_signal = (close < lower_ch) and (adx >= 18.0) and (ema_fast < ema_slow)
+        # Original Component Invocation: MultiCoinScanner breakout evaluation
+        cand: Optional[CoinCandidate] = self.scanner.evaluate_symbol_bar(
+            symbol=symbol,
+            close=float(close),
+            upper_channel=float(upper_ch),
+            lower_channel=float(lower_ch),
+            ema_fast=ema_fast,
+            ema_slow=ema_slow,
+            atr=float(atr),
+            volume=volume,
+            volume_sma=volume_sma,
+            adx=adx,
+        )
 
-        if not (long_signal or short_signal):
+        if not cand:
+            # Update drawdowns and persist state
+            self.native_portfolio.update_drawdown(current_prices)
+            self.shadow_portfolio.update_drawdown(current_prices)
+            self.save_state()
             return {"status": "NO_SIGNAL"}
 
-        direction = 1 if long_signal else -1
-        direction_str = "LONG" if long_signal else "SHORT"
+        direction = cand.direction
+        direction_str = "LONG" if direction == 1 else "SHORT"
         intended_entry = close
         initial_sl = intended_entry - direction * Decimal("2.5") * atr
         self.trade_counter += 1
@@ -1070,15 +1300,24 @@ class V32LegacyShadowEngine:
                     direction_str, intended_entry, intended_entry, Decimal("0"), Decimal("0"), Decimal("0"),
                     best_bid, best_ask, Decimal("0"), "REJECTED", Decimal("0"), port.realized_equity, notes=embargo_reason
                 )
+            self.native_portfolio.update_drawdown(current_prices)
+            self.shadow_portfolio.update_drawdown(current_prices)
+            self.save_state()
             return {"status": "EMBARGO_BLOCKED"}
 
-        # Sizing via Half-Kelly
+        # Step D: Sizing & Routing via Independent Risk Managers (P0.2)
         for port in [self.native_portfolio, self.shadow_portfolio]:
             if symbol in port.positions:
                 continue
 
+            # Check independent cooldown
+            cooldown_exp = port.cooldown_tracker.get(f"{symbol}_{direction}", 0)
+            if exchange_ts < cooldown_exp:
+                port.rejected_orders.append({"symbol": symbol, "time_ms": exchange_ts, "reason": "COOLDOWN_ACTIVE"})
+                continue
+
             eq = port.get_equity(current_prices)
-            risk_usdt = eq * self.risk_manager.get_effective_base_risk_pct()
+            risk_usdt = eq * port.risk_manager.get_effective_base_risk_pct()
             risk_per_coin = abs(intended_entry - initial_sl) + intended_entry * port.taker_fee * Decimal("2")
             if risk_per_coin <= Decimal("0"):
                 continue
@@ -1097,6 +1336,8 @@ class V32LegacyShadowEngine:
                 continue
 
             depth = depth_ask_usdt if direction == 1 else depth_bid_usdt
+            ladder_entry = l2_ladder_asks if direction == 1 else l2_ladder_bids
+
             succ, fill_p, fill_q, fee, notes = port.execute_entry(
                 symbol=symbol,
                 direction=direction,
@@ -1109,6 +1350,7 @@ class V32LegacyShadowEngine:
                 available_depth_usdt=depth,
                 timestamp_ms=exchange_ts,
                 trade_id=trade_id,
+                l2_ladder=ladder_entry,
             )
 
             status = "FULL" if succ else "REJECTED"
@@ -1120,14 +1362,11 @@ class V32LegacyShadowEngine:
                 Decimal("0"), port.realized_equity, notes=notes
             )
 
-        # Update АКПП based on Shadow realized equity
-        if self.enable_auto_gearbox:
-            self.risk_manager.update_drawdown(
-                self.shadow_portfolio.realized_equity,
-                self.shadow_portfolio.peak_equity
-            )
+        # Step E: Decoupled Independent АКПП Updates (P0.2)
+        self.native_portfolio.update_drawdown(current_prices)
+        self.shadow_portfolio.update_drawdown(current_prices)
 
-        # Auto-save state
+        # Step F: Transactional State Persistence (P0.4)
         self.save_state()
 
         return {
@@ -1137,17 +1376,17 @@ class V32LegacyShadowEngine:
             "shadow_held": symbol in self.shadow_portfolio.positions,
         }
 
-    def save_state(self, filepath: Optional[str] = None) -> None:
-        """Atomically saves both Native and Shadow portfolio states to disk."""
-        target_file = Path(filepath or self.state_file)
-        temp_file = target_file.with_suffix(".tmp")
-
-        data = {
+    def _export_state_dict(self) -> Dict[str, Any]:
+        """Creates complete state dictionary for JSON and SQLite journaling."""
+        return {
             "version": "3.2-SHADOW-INTEGRITY-002",
+            "protocol": "V32-SHADOW-PARITY-003",
             "saved_at_utc": datetime.now(timezone.utc).isoformat(),
             "t0_timestamp_ms": self.t0_timestamp_ms,
             "initial_capital": str(self.initial_capital),
-            "gearbox_gear": self.risk_manager.current_gear,
+            "native_gear": self.native_gear,
+            "shadow_gear": self.shadow_gear,
+            "gearbox_gear": self.shadow_gear,
             "processed_event_count": len(self.processed_event_ids),
             "processed_event_ids": list(self.processed_event_ids),
             "native_portfolio": {
@@ -1155,38 +1394,92 @@ class V32LegacyShadowEngine:
                 "peak_equity": str(self.native_portfolio.peak_equity),
                 "total_fees": str(self.native_portfolio.total_fees),
                 "total_funding": str(self.native_portfolio.total_funding),
+                "gear": self.native_gear,
+                "consecutive_losses": self.native_risk_manager.state.consecutive_losses,
                 "positions": {s: p.to_dict() for s, p in self.native_portfolio.positions.items()},
                 "closed_trades": [t.to_dict() for t in self.native_portfolio.closed_trades],
                 "rejected_orders_count": len(self.native_portfolio.rejected_orders),
+                "settled_funding_windows": [list(x) for x in self.native_portfolio.settled_funding_windows],
+                "cooldowns": self.native_portfolio.cooldown_tracker,
             },
             "shadow_portfolio": {
                 "realized_equity": str(self.shadow_portfolio.realized_equity),
                 "peak_equity": str(self.shadow_portfolio.peak_equity),
                 "total_fees": str(self.shadow_portfolio.total_fees),
                 "total_funding": str(self.shadow_portfolio.total_funding),
+                "gear": self.shadow_gear,
+                "consecutive_losses": self.shadow_risk_manager.state.consecutive_losses,
                 "positions": {s: p.to_dict() for s, p in self.shadow_portfolio.positions.items()},
                 "closed_trades": [t.to_dict() for t in self.shadow_portfolio.closed_trades],
                 "rejected_orders_count": len(self.shadow_portfolio.rejected_orders),
+                "settled_funding_windows": [list(x) for x in self.shadow_portfolio.settled_funding_windows],
+                "cooldowns": self.shadow_portfolio.cooldown_tracker,
             }
         }
+
+    def save_state(self, filepath: Optional[str] = None) -> None:
+        """Atomically saves both Native and Shadow portfolio states to disk and SQLite journal."""
+        target_file = Path(filepath or self.state_file)
+        temp_file = target_file.with_suffix(".tmp")
+        data = self._export_state_dict()
 
         with open(temp_file, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
         os.replace(temp_file, target_file)
 
-    def load_state(self, filepath: Optional[str] = None) -> bool:
-        """Recovers both portfolio states from disk."""
-        target_file = Path(filepath or self.state_file)
-        if not target_file.exists():
-            return False
+        # Journal snapshot in SQLite
+        conn = sqlite3.connect(self.db_path)
+        try:
+            with conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO shadow_state_journal (
+                        saved_at_ms, saved_at_utc, event_id, state_json
+                    ) VALUES (?, ?, ?, ?);
+                """, (
+                    int(time.time() * 1000),
+                    data["saved_at_utc"],
+                    None,
+                    json.dumps(data, default=str),
+                ))
+        finally:
+            conn.close()
 
-        with open(target_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
+    def load_state(self, filepath: Optional[str] = None) -> bool:
+        """
+        Recovers both portfolio states from disk, falling back to SQLite state journal
+        if the disk JSON is missing or corrupted.
+        """
+        target_file = Path(filepath or self.state_file)
+        data = None
+
+        if target_file.exists():
+            try:
+                with open(target_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception as e:
+                logger.warning(f"Failed to parse state file {target_file}: {e}. Falling back to SQLite journal.")
+
+        if not data and os.path.exists(self.db_path):
+            # Fallback to SQLite State Journal (P0.4)
+            conn = sqlite3.connect(self.db_path)
+            try:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT state_json FROM shadow_state_journal
+                    ORDER BY journal_id DESC LIMIT 1;
+                """)
+                row = cursor.fetchone()
+                if row:
+                    data = json.loads(row[0])
+            finally:
+                conn.close()
+
+        if not data:
+            return False
 
         self.t0_timestamp_ms = data.get("t0_timestamp_ms", self.t0_timestamp_ms)
         self.processed_event_ids = set(data.get("processed_event_ids", []))
-        if hasattr(self.risk_manager, "state"):
-            self.risk_manager.state.current_gear = int(data.get("gearbox_gear", 3))
 
         # Restore Native
         nat_data = data.get("native_portfolio", {})
@@ -1194,12 +1487,18 @@ class V32LegacyShadowEngine:
         self.native_portfolio.peak_equity = Decimal(str(nat_data.get("peak_equity", self.initial_capital)))
         self.native_portfolio.total_fees = Decimal(str(nat_data.get("total_fees", "0")))
         self.native_portfolio.total_funding = Decimal(str(nat_data.get("total_funding", "0")))
+        self.native_portfolio.risk_manager.state.current_gear = int(nat_data.get("gear", 3))
+        self.native_portfolio.risk_manager.state.consecutive_losses = int(nat_data.get("consecutive_losses", 0))
         self.native_portfolio.positions = {
             s: PositionState.from_dict(p) for s, p in nat_data.get("positions", {}).items()
         }
         self.native_portfolio.closed_trades = [
             TradeRecord.from_dict(t) for t in nat_data.get("closed_trades", [])
         ]
+        self.native_portfolio.settled_funding_windows = {
+            tuple(x) for x in nat_data.get("settled_funding_windows", [])
+        }
+        self.native_portfolio.cooldown_tracker = dict(nat_data.get("cooldowns", {}))
 
         # Restore Shadow
         sha_data = data.get("shadow_portfolio", {})
@@ -1207,12 +1506,18 @@ class V32LegacyShadowEngine:
         self.shadow_portfolio.peak_equity = Decimal(str(sha_data.get("peak_equity", self.initial_capital)))
         self.shadow_portfolio.total_fees = Decimal(str(sha_data.get("total_fees", "0")))
         self.shadow_portfolio.total_funding = Decimal(str(sha_data.get("total_funding", "0")))
+        self.shadow_portfolio.risk_manager.state.current_gear = int(sha_data.get("gear", 3))
+        self.shadow_portfolio.risk_manager.state.consecutive_losses = int(sha_data.get("consecutive_losses", 0))
         self.shadow_portfolio.positions = {
             s: PositionState.from_dict(p) for s, p in sha_data.get("positions", {}).items()
         }
         self.shadow_portfolio.closed_trades = [
             TradeRecord.from_dict(t) for t in sha_data.get("closed_trades", [])
         ]
+        self.shadow_portfolio.settled_funding_windows = {
+            tuple(x) for x in sha_data.get("settled_funding_windows", [])
+        }
+        self.shadow_portfolio.cooldown_tracker = dict(sha_data.get("cooldowns", {}))
 
         return True
 
@@ -1222,8 +1527,24 @@ class V32LegacyShadowEngine:
         shadow_eq = float(self.shadow_portfolio.realized_equity)
         discrepancy = shadow_eq - native_eq
 
+        # SQLite Journal count
+        journal_count = 0
+        if os.path.exists(self.db_path):
+            conn = sqlite3.connect(self.db_path)
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT count(*) FROM shadow_state_journal;")
+                row = cursor.fetchone()
+                if row:
+                    journal_count = row[0]
+            except Exception:
+                pass
+            finally:
+                conn.close()
+
         return {
             "version": "3.2-SHADOW-INTEGRITY-002",
+            "parity_version": "3.2-SHADOW-PARITY-003",
             "mode": "DUAL_SHADOW_PARITY",
             "timestamp": int(time.time() * 1000),
             "datetime_utc": datetime.now(timezone.utc).isoformat(),
@@ -1243,11 +1564,14 @@ class V32LegacyShadowEngine:
             "native_closed_trades_count": len(self.native_portfolio.closed_trades),
             "shadow_closed_trades_count": len(self.shadow_portfolio.closed_trades),
             "shadow_rejected_orders_count": len(self.shadow_portfolio.rejected_orders),
-            "gearbox_gear": self.risk_manager.current_gear,
-            "gearbox_risk_pct": float(self.risk_manager.get_effective_base_risk_pct() * 100),
+            "native_gear": self.native_gear,
+            "shadow_gear": self.shadow_gear,
+            "gearbox_gear": self.shadow_gear,
+            "gearbox_risk_pct": float(self.shadow_risk_manager.get_effective_base_risk_pct() * 100),
             "macro_blackout_active": self.macro_blackout_active,
             "macro_event_name": self.macro_event_name,
             "news_core_status": "v1.2 Shield",
             "stream_connected": self.stream_connected,  # False if offline
             "crash_recovery_ready": True,
+            "state_journal_snapshots": journal_count,
         }

@@ -283,7 +283,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
                 document.getElementById('fee-comparison').innerText = '$' + d.native_fees_paid.toFixed(2) + ' / $' + d.shadow_fees_paid.toFixed(2);
                 document.getElementById('funding-comparison').innerText = '$' + d.native_funding_paid.toFixed(2) + ' / $' + d.shadow_funding_paid.toFixed(2);
-                document.getElementById('akpp-status').innerText = 'G' + d.gearbox_gear + ' | ' + d.gearbox_risk_pct.toFixed(1) + '%';
+                document.getElementById('akpp-status').innerText = 'N:G' + (d.native_gear || 3) + ' | S:G' + (d.shadow_gear || 3) + ' (' + d.gearbox_risk_pct.toFixed(1) + '%)';
                 document.getElementById('reject-count').innerText = d.shadow_rejected_orders_count;
 
                 const streamBadge = document.getElementById('stream-badge');
@@ -304,7 +304,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     nb.innerText = 'News Shield: Clear';
                 }
 
-                document.getElementById('gear-badge').innerText = 'АКПП: G' + d.gearbox_gear;
+                document.getElementById('gear-badge').innerText = 'АКПП N:G' + (d.native_gear || 3) + ' | S:G' + (d.shadow_gear || 3);
 
                 // Render Shadow Positions
                 const shaTbody = document.querySelector('#shadow-positions-table tbody');
