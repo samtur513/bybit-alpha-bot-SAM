@@ -1,0 +1,54 @@
+{
+  "protocol": "TORG-BOT \u2014 THREE-SYSTEM-LAUNCH-GATE-006",
+  "generated_at_utc": "2026-11-15T02:35:30+00:00",
+  "files": {
+    "v3_2/src/integrations/r2_consumer.py": {
+      "bytes": 21647,
+      "sha256": "ab4b7e0a75c7597db5f072809315f5fca30cfc922405b0732a9e83459ac03e82"
+    },
+    "v3_2/src/integrations/three_system_dashboard.py": {
+      "bytes": 31427,
+      "sha256": "47680ca1dc746023c1f4e13bd00486806bb0500126ee9d367945e46539e9c406"
+    },
+    "v3_2/src/runners/__init__.py": {
+      "bytes": 453,
+      "sha256": "41c8cfe2878b4c053e9951c06002489848590fe98fc0ad22e3d41c9918e6e300"
+    },
+    "v3_2/src/runners/run_native_paper.py": {
+      "bytes": 11669,
+      "sha256": "802cb11221c4ac1a29cc09b3e7d79ccd820fab6d6fac6f6ca8c2ef8fe1864b31"
+    },
+    "v3_2/src/runners/run_shadow_paper.py": {
+      "bytes": 11960,
+      "sha256": "da7ad9cc2fc4c6720520c93de5c2bc955d56143a0ec4d0adfb7ebbf480aa801b"
+    },
+    "v3_2/src/runners/run_r2_observer.py": {
+      "bytes": 11453,
+      "sha256": "5ded418f20458fcdcf67c011ca7467d3a489a51d2f9f62fa83703f95644fb087"
+    },
+    "v3_2/src/runners/run_three_system_dashboard.py": {
+      "bytes": 7827,
+      "sha256": "01e9b7f916c2e45dc6567b7a3c9390c81f9cdcb77fbf3aea5f8aebef837a1b79"
+    },
+    "tests/test_three_system_dashboard.py": {
+      "bytes": 9484,
+      "sha256": "6847faaeafc03f228f0bf2235c3b5d9459faadafacd2740aaf7eed5a85e4ee31"
+    },
+    "tests/test_three_system_launch_gate_006.py": {
+      "bytes": 9934,
+      "sha256": "12fe107990783642260ed3cf50b376c1ad2bedaa63271a2346d6e828b5fc32c9"
+    },
+    "reports/three_system_launch_gate_006/THREE_SYSTEM_INTEGRATION_PROOF.md": {
+      "bytes": 12173,
+      "sha256": "e99ead758c4bfbb23c649e8e14785539a4ec128b0525b58621a01acad711e25b"
+    },
+    "reports/three_system_launch_gate_006/VPS_PREFLIGHT_AND_ROLLBACK.md": {
+      "bytes": 9507,
+      "sha256": "41e96059ea03ad5f35a0df739bc93fb79d0e9541ceccf95e2c72d4313cea850f"
+    },
+    "reports/three_system_launch_gate_006/LAUNCH_APPROVAL_CHECKLIST.md": {
+      "bytes": 4406,
+      "sha256": "01f79f22fe198f5231a8f94bb7db5ddfdbf3391b03eb2db725c81df67a109c95"
+    }
+  }
+}

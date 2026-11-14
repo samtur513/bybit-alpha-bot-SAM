@@ -189,9 +189,13 @@ class R2TelemetryConsumer:
         max_valuation_age_sec: float = MAX_VALUATION_AGE_SEC,
     ):
         if schema_path is None:
-            # Default to docs/integrations/r2_shadow/telemetry.schema.json
-            repo_root = Path(__file__).resolve().parent.parent.parent
-            schema_path = repo_root / "docs" / "integrations" / "r2_shadow" / "telemetry.schema.json"
+            # Resolve repo root (4 levels up from this file) or current working directory
+            candidates = [
+                Path(__file__).resolve().parents[3] / "docs" / "integrations" / "r2_shadow" / "telemetry.schema.json",
+                Path.cwd() / "docs" / "integrations" / "r2_shadow" / "telemetry.schema.json",
+                Path(__file__).resolve().parent.parent.parent / "docs" / "integrations" / "r2_shadow" / "telemetry.schema.json",
+            ]
+            schema_path = next((c for c in candidates if c.exists()), candidates[0])
         
         self.schema_path = schema_path
         self.max_snapshot_age_sec = max_snapshot_age_sec
@@ -457,18 +461,19 @@ class R2TelemetryConsumer:
 
     def read_telemetry_file(
         self,
-        file_path: Path,
+        file_path: Any,
         now_dt: Optional[datetime] = None,
     ) -> R2ConsumerResult:
         """Reads and validates an atomic UTF-8 telemetry.json file."""
-        if not file_path.exists():
+        p = Path(file_path)
+        if not p.exists():
             return R2ConsumerResult(
                 is_valid=False,
                 status="INVALID",
-                rejection_reason=f"Telemetry file does not exist: {file_path}",
+                rejection_reason=f"Telemetry file does not exist: {p}",
             )
         try:
-            content = file_path.read_text(encoding="utf-8")
+            content = p.read_text(encoding="utf-8")
             return self.parse_and_validate(content, now_dt=now_dt)
         except Exception as e:
             return R2ConsumerResult(
