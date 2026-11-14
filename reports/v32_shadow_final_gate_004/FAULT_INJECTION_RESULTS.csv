@@ -1,0 +1,4 @@
+test_case,injection_point,description,crash_triggered,sqlite_transaction_committed,dedup_key_present,journal_entry_present,json_recovered_from_sqlite,data_loss_detected,status
+after_dedup,after_dedup,Crash immediately after dedup insert,True,False,False,False,False,False,PASS
+before_commit,before_commit,Crash before SQLite commit,True,False,False,False,False,False,PASS
+after_commit_before_json,after_commit_before_json,Crash after commit before JSON write,True,True,True,True,True,False,PASS
