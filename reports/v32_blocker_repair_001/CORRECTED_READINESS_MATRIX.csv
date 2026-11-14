@@ -1,0 +1,11 @@
+component_id,component_name,target_port_or_host,stage_status,actual_state,blocking_reason,remediation_requirement
+G-01_VPS_DISK_BACKUP,Live VPS Disk State Backup,VPS 150.241.98.70,BLOCKED,Local source archived only; VPS disk uncaptured,BLOCKED_NO_VPS_ACCESS (SSH permission denied),Execute create_vps_atomic_snapshot.sh directly on VPS or provide SSH key
+G-02_V32_PRE_RESET_ARCHIVE,Original v3.2 Pre-Reset State Archive,Port 8083,BLOCKED,Local git code + HTTP snapshot saved; disk state uncaptured,BLOCKED_NO_VPS_ACCESS,Capture /opt/bybit-bot/v3_2/reports/BOT_STATE_PERSISTENT_V32.json directly from VPS disk
+G-03_REAL_ORDER_CHECK,Verification of Zero Real Exchange Orders,All 16 Engines,BLOCKED,Codebase audit shows API key ingestion capability,NOT_VERIFIED (Exchange private API credentials unavailable),Operator must verify Bybit account order realtime endpoint
+G-04_SAFE_STOP_EXECUTION,Safe Stop of 14 Paper Daemons,Ports 8080-8098,BLOCKED,Execution prohibited by safety gates G-01 and G-03,Categorical prohibition in user directive,Must NOT run systemctl stop until full VPS snapshot is verified
+G-05_SHADOW_ENGINE_CORE,v3.2 Legacy Shadow Trading Engine,Port 8084 (Local),TESTED,Fully implemented in v3_2/src/shadow/paper_trader_v32_shadow.py,NONE (Local test passed),Ready for VPS deployment upon authorization
+G-06_SHADOW_SQLITE_LEDGER,Microsecond Event Ledger (SQLite),Port 8084 (Local),TESTED,Fully implemented and verified via PyTest,NONE (Local test passed),Ready for VPS deployment upon authorization
+G-07_SHADOW_WEB_DASHBOARD,Shadow Telemetry Dashboard UI,Port 8084 (Local),TESTED,Fully implemented in v3_2/src/shadow/web_dashboard_shadow.py,NONE (Local test passed),Ready for VPS deployment upon authorization
+G-08_DUAL_CAPITAL_CONTRACT,Dual $300.00 Starting Capital Contract,Dual Systems,TESTED,Contract logic mathematically verified,Pending T0 authorization,Initialize state files upon authorized start
+G-09_BYBIT_PUBLIC_WS_FEED,Bybit V5 Linear WebSocket Feed,Port 8083 / 8084,IMPLEMENTED,MarketStream configured with 10-topic batching & keepalive,None,Public feed accessible
+G-10_SYNCHRONIZED_T0_START,Synchronized T0 Execution Trigger,Dual Systems,BLOCKED,Cannot initiate forward test while stopping is blocked,Dependent on G-01 G-02 G-03 G-04,Awaiting authorized resolution of VPS gates
