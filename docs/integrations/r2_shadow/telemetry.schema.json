@@ -1,0 +1,436 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "R2 SHADOW read-only telemetry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "system",
+    "generated_at",
+    "deployment_status",
+    "process_status",
+    "heartbeat_at",
+    "cohort",
+    "market",
+    "profiles",
+    "comparison",
+    "last_signal_at",
+    "signal",
+    "target_weights",
+    "missed_decisions",
+    "missed_executions",
+    "data_errors",
+    "real_orders",
+    "demo_orders",
+    "economic_verdict",
+    "fill_claim"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "r2-shadow-telemetry/1"
+    },
+    "system": {
+      "const": "CRYPTOLAB_R2_SHADOW"
+    },
+    "generated_at": {
+      "type": "string"
+    },
+    "deployment_status": {
+      "enum": [
+        "NOT_DEPLOYED",
+        "STARTED_UNVERIFIED"
+      ]
+    },
+    "process_status": {
+      "enum": [
+        "ARMED",
+        "OBSERVING",
+        "NO_FRESH_HEARTBEAT"
+      ]
+    },
+    "heartbeat_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cohort": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "t0_utc",
+        "minimum_end_utc",
+        "schedule_active"
+      ],
+      "properties": {
+        "t0_utc": {
+          "type": "string"
+        },
+        "minimum_end_utc": {
+          "type": "string"
+        },
+        "schedule_active": {
+          "type": "boolean"
+        }
+      }
+    },
+    "market": {
+      "const": "BYBIT_SPOT_LONG_CASH_NO_LEVERAGE"
+    },
+    "profiles": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "profile",
+          "initial_capital_usdt",
+          "cash_usdt",
+          "quantities",
+          "equity_usdt",
+          "net_pnl_usdt",
+          "net_return_pct",
+          "liquidatable_cash_usdt",
+          "dust_usdt",
+          "exposure_pct",
+          "cash_fraction_pct",
+          "mdd_pct",
+          "risk_breached",
+          "valuation_at",
+          "valuation_status",
+          "profit_factor",
+          "profit_factor_reason",
+          "totals",
+          "equity_history"
+        ],
+        "properties": {
+          "profile": {
+            "enum": [
+              "R2:300:BASE:OBSERVED_BOOK",
+              "R2:300:STRESS:OBSERVED_BOOK",
+              "BASELINE:300:BASE:OBSERVED_BOOK"
+            ]
+          },
+          "initial_capital_usdt": {
+            "const": 300
+          },
+          "cash_usdt": {
+            "type": "number",
+            "minimum": 0
+          },
+          "quantities": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "BTCUSDT",
+              "ETHUSDT",
+              "SOLUSDT"
+            ],
+            "properties": {
+              "BTCUSDT": {
+                "type": "number",
+                "minimum": 0
+              },
+              "ETHUSDT": {
+                "type": "number",
+                "minimum": 0
+              },
+              "SOLUSDT": {
+                "type": "number",
+                "minimum": 0
+              }
+            }
+          },
+          "equity_usdt": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "net_pnl_usdt": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "net_return_pct": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "liquidatable_cash_usdt": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "dust_usdt": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "exposure_pct": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cash_fraction_pct": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "mdd_pct": {
+            "type": "number",
+            "maximum": 0
+          },
+          "risk_breached": {
+            "type": "boolean"
+          },
+          "valuation_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "valuation_status": {
+            "enum": [
+              "FRESH",
+              "UNVALUED_OR_STALE"
+            ]
+          },
+          "profit_factor": {
+            "type": "null"
+          },
+          "profit_factor_reason": {
+            "const": "LOT_REALIZATION_NOT_DEFINED"
+          },
+          "totals": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "estimated_legs": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "rejected_legs": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "fees_usdt": {
+                "type": "number",
+                "minimum": 0
+              },
+              "buffer_usdt": {
+                "type": "number",
+                "minimum": 0
+              },
+              "spread_impact_usdt": {
+                "type": "number",
+                "minimum": 0
+              },
+              "turnover_usdt": {
+                "type": "number",
+                "minimum": 0
+              }
+            }
+          },
+          "equity_history": {
+            "type": "array",
+            "maxItems": 512,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "at",
+                "equity_usdt"
+              ],
+              "properties": {
+                "at": {
+                  "type": "string"
+                },
+                "equity_usdt": {
+                  "type": "number"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "r2_minus_t01_usdt",
+        "r2_minus_t01_pp",
+        "status"
+      ],
+      "properties": {
+        "r2_minus_t01_usdt": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "r2_minus_t01_pp": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "status": {
+          "enum": [
+            "PAIRED_PRELIMINARY",
+            "UNPAIRED_OR_UNVALUED"
+          ]
+        }
+      }
+    },
+    "last_signal_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "signal": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "BTCUSDT": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "score",
+            "eligible",
+            "target_weight"
+          ],
+          "properties": {
+            "score": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "eligible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "target_weight": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          }
+        },
+        "ETHUSDT": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "score",
+            "eligible",
+            "target_weight"
+          ],
+          "properties": {
+            "score": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "eligible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "target_weight": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          }
+        },
+        "SOLUSDT": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "score",
+            "eligible",
+            "target_weight"
+          ],
+          "properties": {
+            "score": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "eligible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "target_weight": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "target_weights": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      ]
+    },
+    "missed_decisions": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "missed_executions": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "data_errors": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "real_orders": {
+      "const": 0
+    },
+    "demo_orders": {
+      "const": 0
+    },
+    "economic_verdict": {
+      "const": "INCONCLUSIVE_REAL_CAPITAL_NO_GO"
+    },
+    "fill_claim": {
+      "const": "QUOTE_ESTIMATE_NOT_PROVED_FILL"
+    }
+  }
+}

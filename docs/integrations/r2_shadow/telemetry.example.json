@@ -1,0 +1,106 @@
+{
+  "schema_version": "r2-shadow-telemetry/1",
+  "system": "CRYPTOLAB_R2_SHADOW",
+  "generated_at": "2026-11-15T00:00:00+00:00",
+  "deployment_status": "NOT_DEPLOYED",
+  "process_status": "NO_FRESH_HEARTBEAT",
+  "heartbeat_at": null,
+  "cohort": {
+    "t0_utc": "2030-01-01T00:00:00+00:00",
+    "minimum_end_utc": "2030-07-01T00:00:00+00:00",
+    "schedule_active": false
+  },
+  "market": "BYBIT_SPOT_LONG_CASH_NO_LEVERAGE",
+  "profiles": [
+    {
+      "profile": "R2:300:BASE:OBSERVED_BOOK",
+      "initial_capital_usdt": 300,
+      "cash_usdt": 300.0,
+      "quantities": {
+        "BTCUSDT": 0.0,
+        "ETHUSDT": 0.0,
+        "SOLUSDT": 0.0
+      },
+      "equity_usdt": null,
+      "net_pnl_usdt": null,
+      "net_return_pct": null,
+      "mdd_pct": 0.0,
+      "risk_breached": false,
+      "liquidatable_cash_usdt": null,
+      "dust_usdt": null,
+      "exposure_pct": null,
+      "cash_fraction_pct": null,
+      "valuation_at": null,
+      "valuation_status": "UNVALUED_OR_STALE",
+      "profit_factor": null,
+      "profit_factor_reason": "LOT_REALIZATION_NOT_DEFINED",
+      "totals": {},
+      "equity_history": []
+    },
+    {
+      "profile": "R2:300:STRESS:OBSERVED_BOOK",
+      "initial_capital_usdt": 300,
+      "cash_usdt": 300.0,
+      "quantities": {
+        "BTCUSDT": 0.0,
+        "ETHUSDT": 0.0,
+        "SOLUSDT": 0.0
+      },
+      "equity_usdt": null,
+      "net_pnl_usdt": null,
+      "net_return_pct": null,
+      "mdd_pct": 0.0,
+      "risk_breached": false,
+      "liquidatable_cash_usdt": null,
+      "dust_usdt": null,
+      "exposure_pct": null,
+      "cash_fraction_pct": null,
+      "valuation_at": null,
+      "valuation_status": "UNVALUED_OR_STALE",
+      "profit_factor": null,
+      "profit_factor_reason": "LOT_REALIZATION_NOT_DEFINED",
+      "totals": {},
+      "equity_history": []
+    },
+    {
+      "profile": "BASELINE:300:BASE:OBSERVED_BOOK",
+      "initial_capital_usdt": 300,
+      "cash_usdt": 300.0,
+      "quantities": {
+        "BTCUSDT": 0.0,
+        "ETHUSDT": 0.0,
+        "SOLUSDT": 0.0
+      },
+      "equity_usdt": null,
+      "net_pnl_usdt": null,
+      "net_return_pct": null,
+      "mdd_pct": 0.0,
+      "risk_breached": false,
+      "liquidatable_cash_usdt": null,
+      "dust_usdt": null,
+      "exposure_pct": null,
+      "cash_fraction_pct": null,
+      "valuation_at": null,
+      "valuation_status": "UNVALUED_OR_STALE",
+      "profit_factor": null,
+      "profit_factor_reason": "LOT_REALIZATION_NOT_DEFINED",
+      "totals": {},
+      "equity_history": []
+    }
+  ],
+  "comparison": {
+    "r2_minus_t01_usdt": null,
+    "r2_minus_t01_pp": null,
+    "status": "UNPAIRED_OR_UNVALUED"
+  },
+  "last_signal_at": null,
+  "signal": {},
+  "target_weights": null,
+  "missed_decisions": 0,
+  "missed_executions": 0,
+  "data_errors": 0,
+  "real_orders": 0,
+  "demo_orders": 0,
+  "economic_verdict": "INCONCLUSIVE_REAL_CAPITAL_NO_GO",
+  "fill_claim": "QUOTE_ESTIMATE_NOT_PROVED_FILL"
+}
