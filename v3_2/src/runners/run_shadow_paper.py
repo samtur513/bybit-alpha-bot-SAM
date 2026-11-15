@@ -500,7 +500,8 @@ class ShadowPaperRunner:
                                 except Exception as ob_err:
                                     logger.debug(f"Orderbook fetch failed for {sym}: {ob_err}")
 
-                            f_rate = funding_map.get(sym)
+                            is_funding_boundary = (bar_close_ms % 28_800_000 == 0)
+                            f_rate = funding_map.get(sym) if is_funding_boundary else None
                             res = self.ingest_closed_bar(
                                 symbol=sym,
                                 bar=bar_dict,
@@ -539,11 +540,12 @@ class ShadowPaperRunner:
         now_dt = datetime.now(timezone.utc)
         now_mono = time.monotonic()
 
-        # Check freshness of L2 quotes (must be <= 60s)
+        # Check freshness of L2 quotes (must be confirmed and <= 60s)
         is_fresh = False
         if self.has_market_data and self.latest_l2_times:
             newest_l2_age = min(now_mono - t for t in self.latest_l2_times.values())
-            is_fresh = (0.0 <= newest_l2_age <= 60.0)
+            has_all_pos_fresh = all((now_mono - self.latest_l2_times.get(s, 0.0) <= 60.0) for s in self.portfolio.positions)
+            is_fresh = (0.0 <= newest_l2_age <= 60.0) and has_all_pos_fresh
 
         init_cap = float(self.initial_capital)
 

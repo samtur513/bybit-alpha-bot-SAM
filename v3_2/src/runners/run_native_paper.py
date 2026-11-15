@@ -106,13 +106,16 @@ class NativePaperRunner:
         self.client = BybitClient(timeout=10, max_retries=5)
         self.instrument_rules: Dict[str, Dict[str, Decimal]] = self._build_default_rules()
 
+        self.peak_equity = self.initial_capital
+
         # 2. Initialize Real Quantitative Dual-Regime Engines (Trend + Range)
+        # Retail VIP0 standard fees: 0.100% taker, 0.036% maker
         self.engine = CoreV3Engine(
             initial_capital=self.initial_capital,
             instrument_rules=self.instrument_rules,
             base_risk_pct=Decimal("0.010"),
             max_leverage=Decimal("3.5"),
-            taker_fee=Decimal("0.00090"),    # 0.090% Legacy MNT discount
+            taker_fee=Decimal("0.00100"),    # 0.100% Retail VIP0 Taker fee
             slippage=Decimal("0.0002"),      # 0.02% simulated fixed
             portfolio_leverage=Decimal("3.5"),
             drawdown_limit_pct=Decimal("30.0"),
@@ -133,8 +136,8 @@ class NativePaperRunner:
             risk_per_trade_pct=Decimal("0.01"),
             max_concurrent_positions=2,
             max_portfolio_leverage=Decimal("3.5"),
-            maker_fee=Decimal("0.000324"),
-            taker_fee=Decimal("0.00090"),
+            maker_fee=Decimal("0.00036"),    # 0.036% Retail VIP0 Maker fee
+            taker_fee=Decimal("0.00100"),    # 0.100% Retail VIP0 Taker fee
             slippage=Decimal("0.0002"),
         )
 
@@ -155,22 +158,66 @@ class NativePaperRunner:
 
     @property
     def total_fees(self) -> Decimal:
-        closed = sum((getattr(t, "fees_paid", Decimal("0")) for t in self.engine.closed_trades), Decimal("0"))
-        open_f = sum((p.entry_fees for p in self.engine.open_positions.values()), Decimal("0"))
-        return closed + open_f
+        trend_closed = sum((getattr(t, "fees_paid", Decimal("0")) for t in self.engine.closed_trades), Decimal("0"))
+        trend_open = sum((p.entry_fees for p in self.engine.open_positions.values()), Decimal("0"))
+        range_closed = sum((getattr(t, "fees_paid", Decimal("0")) for t in self.range_engine.closed_trades), Decimal("0")) if hasattr(self, "range_engine") else Decimal("0")
+        range_open = sum((getattr(p, "entry_fees", Decimal("0")) for p in self.range_engine.open_positions.values()), Decimal("0")) if hasattr(self, "range_engine") else Decimal("0")
+        return trend_closed + trend_open + range_closed + range_open
 
     @property
     def total_funding(self) -> Decimal:
-        closed = sum((getattr(t, "funding_pnl", Decimal("0")) for t in self.engine.closed_trades), Decimal("0"))
-        open_f = sum((p.funding_pnl for p in self.engine.open_positions.values()), Decimal("0"))
-        return closed + open_f
+        trend_closed = sum((getattr(t, "funding_pnl", Decimal("0")) for t in self.engine.closed_trades), Decimal("0"))
+        trend_open = sum((p.funding_pnl for p in self.engine.open_positions.values()), Decimal("0"))
+        range_closed = sum((getattr(t, "funding_pnl", Decimal("0")) for t in self.range_engine.closed_trades), Decimal("0")) if hasattr(self, "range_engine") else Decimal("0")
+        return trend_closed + trend_open + range_closed
 
     @property
     def total_turnover(self) -> Decimal:
-        return sum(
+        trend_to = sum(
             (t.initial_qty * t.entry_price + t.final_qty * t.exit_price for t in self.engine.closed_trades),
             Decimal("0"),
         )
+        range_to = sum(
+            (t.qty * t.entry_price + t.qty * t.exit_price for t in self.range_engine.closed_trades),
+            Decimal("0"),
+        ) if hasattr(self, "range_engine") else Decimal("0")
+        return trend_to + range_to
+
+    def get_unified_cash(self) -> Decimal:
+        """Calculates unified realized cash across both Trend and Range submodules."""
+        trend_realized = sum((t.net_pnl for t in self.engine.closed_trades), Decimal("0"))
+        range_realized = sum((t.net_pnl for t in self.range_engine.closed_trades), Decimal("0")) if hasattr(self, "range_engine") else Decimal("0")
+        return self.initial_capital + trend_realized + range_realized
+
+    def get_unified_unrealized(self) -> Decimal:
+        """Calculates unified unrealized PnL across both Trend and Range open positions."""
+        trend_snap = self.engine.get_portfolio_snapshot(self.latest_prices)
+        trend_unrealized = trend_snap.equity - self.engine.realized_equity
+        range_unrealized = Decimal("0")
+        if hasattr(self, "range_engine"):
+            for s, pos in self.range_engine.open_positions.items():
+                p_qty = getattr(pos, "current_qty", getattr(pos, "qty", Decimal("0")))
+                mark = self.latest_prices.get(s, pos.entry_price)
+                gross = (mark - pos.entry_price) * p_qty * Decimal(str(pos.direction))
+                exit_fee = p_qty * mark * self.range_engine.taker_fee
+                range_unrealized += (gross - exit_fee)
+        return trend_unrealized + range_unrealized
+
+    def get_unified_equity(self) -> Decimal:
+        """Unified equity = Realized Cash ($300 base) + Total Unrealized PnL."""
+        return self.get_unified_cash() + self.get_unified_unrealized()
+
+    def get_total_gross_notional(self) -> Decimal:
+        """Total gross notional exposure across BOTH Trend and Range engines."""
+        trend_notional = sum(
+            (p.current_qty * self.latest_prices.get(p.symbol, p.entry_price) for p in self.engine.open_positions.values()),
+            Decimal("0"),
+        )
+        range_notional = sum(
+            (getattr(p, "current_qty", getattr(p, "qty", Decimal("0"))) * self.latest_prices.get(p.symbol, p.entry_price) for p in self.range_engine.open_positions.values()),
+            Decimal("0"),
+        ) if hasattr(self, "range_engine") else Decimal("0")
+        return trend_notional + range_notional
 
     def _build_default_rules(self) -> Dict[str, Dict[str, Decimal]]:
         rules = {}
@@ -268,10 +315,14 @@ class NativePaperRunner:
                         if "range_engine" in data and hasattr(self.range_engine, "load_dict"):
                             self.range_engine.load_dict(data["range_engine"])
                         self.last_processed_bar_ts = data.get("last_processed_bar_ts", self.last_processed_bar_ts)
+                        if "peak_equity" in data:
+                            self.peak_equity = Decimal(str(data["peak_equity"]))
+                        if "settled_funding_windows" in data:
+                            self.settled_funding_windows = set(tuple(x) for x in data["settled_funding_windows"])
                         recovered_from_sqlite = True
                         logger.info(
                             f"Authoritatively restored Native state from SQLite native_state_journal: "
-                            f"Realized Equity={self.engine.realized_equity:.4f}, Positions={len(self.engine.open_positions)}"
+                            f"Combined Cash={self.get_unified_cash():.4f}, Peak Equity={self.peak_equity:.4f}, Positions={len(self.engine.open_positions) + len(self.range_engine.open_positions)}"
                         )
                 finally:
                     conn.close()
@@ -285,9 +336,13 @@ class NativePaperRunner:
                 if "range_engine" in data and hasattr(self.range_engine, "load_dict"):
                     self.range_engine.load_dict(data["range_engine"])
                 self.last_processed_bar_ts = data.get("last_processed_bar_ts", self.last_processed_bar_ts)
+                if "peak_equity" in data:
+                    self.peak_equity = Decimal(str(data["peak_equity"]))
+                if "settled_funding_windows" in data:
+                    self.settled_funding_windows = set(tuple(x) for x in data["settled_funding_windows"])
                 logger.info(
                     f"Restored Native state from JSON {self.state_path}: "
-                    f"Realized Equity={self.engine.realized_equity:.4f}, Positions={len(self.engine.open_positions)}"
+                    f"Combined Cash={self.get_unified_cash():.4f}, Peak Equity={self.peak_equity:.4f}, Positions={len(self.engine.open_positions) + len(self.range_engine.open_positions)}"
                 )
             except Exception as e:
                 logger.warning(f"Failed to load state from {self.state_path}: {e}")
@@ -298,6 +353,8 @@ class NativePaperRunner:
             "version": "3.2-NATIVE-DUAL-REGIME",
             "saved_at_iso": datetime.now(timezone.utc).isoformat(),
             "cohort_id": self.cohort_id,
+            "peak_equity": str(self.peak_equity),
+            "settled_funding_windows": [list(x) for x in self.settled_funding_windows],
             "engine": self.engine.to_dict(),
             "range_engine": self.range_engine.to_dict() if hasattr(self.range_engine, "to_dict") else {},
             "last_processed_bar_ts": self.last_processed_bar_ts,
@@ -313,6 +370,7 @@ class NativePaperRunner:
         btc_bullish: bool = True,
         btc_bearish: bool = True,
         fault_injection_point: Optional[str] = None,
+        is_historical_catchup: bool = False,
     ) -> Dict[str, Any]:
         """
         Processes a closed bar through the real Donchian quantitative cycle:
@@ -395,15 +453,30 @@ class NativePaperRunner:
         self.candle_buffers[symbol] = df
         self.last_processed_bar_ts[symbol] = ts
 
-        # Close price and quotes
-        price = current_price or Decimal(str(bar["close"]))
+        # Close price and quotes: for historical catchup (> 120s ago), strictly use candle close
+        bar_close_price = Decimal(str(bar["close"]))
+        is_historical = is_historical_catchup or ((time.time() * 1000 - bar_close_ms) > 120000)
+        if is_historical or current_price is None:
+            price = bar_close_price
+        else:
+            price = current_price
         self.latest_prices[symbol] = price
         self.latest_quote_times[symbol] = time.monotonic()
         self.has_market_data = True
 
-        # Process Funding Payment if provided
-        if funding_rate is not None and funding_rate != Decimal("0"):
-            self.engine.process_funding_event(symbol, funding_rate, ts, price)
+        # Process Funding Payment strictly on 8-hour boundary (00:00, 08:00, 16:00 UTC)
+        if bar_close_ms % 28_800_000 == 0:
+            funding_window_id = bar_close_ms
+            settlement_key = (symbol, funding_window_id)
+            if settlement_key not in self.settled_funding_windows:
+                if funding_rate is not None and funding_rate != Decimal("0"):
+                    if symbol in self.engine.open_positions:
+                        self.engine.process_funding_event(
+                            timestamp=funding_window_id,
+                            funding_rates={symbol: funding_rate},
+                            current_prices={symbol: price},
+                        )
+                    self.settled_funding_windows.add(settlement_key)
 
         # 3. Dual-Regime indicator preparation and classification (Section P0.2)
         bar_dict = df.iloc[-1].to_dict() if len(df) > 0 else record
@@ -425,26 +498,43 @@ class NativePaperRunner:
         )
         self.latest_regimes[symbol] = reg
 
-        # 4. Step Range Mean-Reversion Engine (Chop / Range)
+        # 4. Synchronize unified cash balance ($300 base) to prevent phantom capital / double spending
+        unified_cash = self.get_unified_cash()
+        self.engine.realized_equity = unified_cash
+        if hasattr(self, "range_engine"):
+            self.range_engine.realized_equity = unified_cash
+
+        # Check total gross notional against 3.5x portfolio leverage cap
+        current_gross_notional = self.get_total_gross_notional()
+        unified_equity = self.get_unified_equity()
+        max_portfolio_notional = unified_equity * Decimal("3.5")
+        can_open_new = (current_gross_notional < max_portfolio_notional)
+
+        # Step Range Mean-Reversion Engine (Chop / Range)
         is_chop = reg.regime.value in ["CHOP", "COMPRESSION", "RANGE"]
         prev_range_trades = len(self.range_engine.closed_trades) if hasattr(self, "range_engine") else 0
         if is_chop and hasattr(self, "range_engine"):
             active_trend_syms = list(self.engine.open_positions.keys())
-            self.range_engine.step_bar(
-                timestamp=ts,
-                bars={symbol: bar_dict},
-                next_bars={symbol: record},
-                next_open_prices=price_map,
-                regimes={symbol: reg},
-                btc_bullish=btc_bullish,
-                btc_bearish=btc_bearish,
-                active_trend_symbols=active_trend_syms,
-            )
+            if not can_open_new:
+                # Max leverage reached: manage existing positions only, forbid new orders
+                self.range_engine.manage_positions_on_bar(ts, {symbol: bar_dict}, {symbol: reg})
+            else:
+                self.range_engine.step_bar(
+                    timestamp=ts,
+                    bars={symbol: bar_dict},
+                    next_bars={symbol: record},
+                    next_open_prices=price_map,
+                    regimes={symbol: reg},
+                    btc_bullish=btc_bullish,
+                    btc_bearish=btc_bearish,
+                    active_trend_symbols=active_trend_syms,
+                )
         new_range_trades = self.range_engine.closed_trades[prev_range_trades:] if hasattr(self, "range_engine") else []
 
         # 5. Step Trend Engine on symbols not held by Range
         prev_trades_count = len(self.engine.closed_trades)
-        if not hasattr(self, "range_engine") or symbol not in self.range_engine.open_positions:
+        range_held = hasattr(self, "range_engine") and (symbol in self.range_engine.open_positions or symbol in self.range_engine.pending_orders)
+        if not range_held:
             self.engine.process_bar_event(
                 timestamp=ts,
                 bars={symbol: bar_dict},
@@ -513,12 +603,13 @@ class NativePaperRunner:
                         f"RANGE_{r_trade.exit_reason}",
                     ))
 
-                # Checkpoint journal
+                # Checkpoint journal with unified $300 account math
                 now_dt = datetime.now(timezone.utc)
-                snap = self.engine.get_portfolio_snapshot(self.latest_prices)
-                range_net = (self.range_engine.get_equity(self.latest_prices) - self.range_engine.initial_capital) if hasattr(self, "range_engine") else Decimal("0")
-                comb_equity = float(snap.equity + range_net)
-                unrealized = float(comb_equity - float(self.initial_capital))
+                cash = self.get_unified_cash()
+                unrealized = self.get_unified_unrealized()
+                comb_equity = cash + unrealized
+                if comb_equity > self.peak_equity:
+                    self.peak_equity = comb_equity
 
                 cursor.execute("""
                     INSERT INTO native_journal (
@@ -530,13 +621,13 @@ class NativePaperRunner:
                     int(now_dt.timestamp() * 1000),
                     now_dt.isoformat(),
                     self.cohort_id,
-                    float(self.engine.realized_equity),
-                    unrealized,
-                    comb_equity,
-                    float(self.engine.realized_equity),
+                    float(cash),
+                    float(unrealized),
+                    float(comb_equity),
+                    float(cash),
                     float(self.total_fees),
                     float(self.total_funding),
-                    float(self.engine.peak_equity),
+                    float(self.peak_equity),
                     len(self.engine.open_positions) + (len(self.range_engine.open_positions) if hasattr(self, "range_engine") else 0),
                     3,
                     f"closed_bar_{symbol}",
@@ -547,6 +638,8 @@ class NativePaperRunner:
                     "version": "3.2-NATIVE-DUAL-REGIME",
                     "saved_at_iso": now_dt.isoformat(),
                     "cohort_id": self.cohort_id,
+                    "peak_equity": str(self.peak_equity),
+                    "settled_funding_windows": [list(x) for x in self.settled_funding_windows],
                     "engine": self.engine.to_dict(),
                     "range_engine": self.range_engine.to_dict() if hasattr(self.range_engine, "to_dict") else {},
                     "last_processed_bar_ts": self.last_processed_bar_ts,
@@ -560,8 +653,8 @@ class NativePaperRunner:
                     int(now_dt.timestamp() * 1000),
                     now_dt.isoformat(),
                     event_key,
-                    float(self.engine.realized_equity),
-                    float(self.engine.peak_equity),
+                    float(cash),
+                    float(self.peak_equity),
                     json.dumps(state_dict, default=str),
                 ))
 
@@ -589,16 +682,18 @@ class NativePaperRunner:
             "symbol": symbol,
             "ts": ts,
             "positions_count": len(self.engine.open_positions) + (len(self.range_engine.open_positions) if hasattr(self, "range_engine") else 0),
-            "realized_equity": float(self.engine.realized_equity),
+            "realized_equity": float(cash),
         }
 
     def update_quotes(
         self,
         quotes: Dict[str, Decimal],
         timestamp_ms: Optional[int] = None,
+        fault_injection_point: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Updates live quotes for continuous MTM equity tracking and accompanies open positions.
+        Enforces atomic state persistence on tick-level position exits so that a crash never resurrects closed positions.
         """
         now_mono = time.monotonic()
         ts = timestamp_ms or int(time.time() * 1000)
@@ -609,42 +704,162 @@ class NativePaperRunner:
         self.has_market_data = True
 
         # Accompany open positions on tick quotes: manage stops & MTM
+        new_closed_trend = []
         if self.engine.open_positions:
             prev_closed = len(self.engine.closed_trades)
             self.engine.process_price_event(timestamp=ts, prices=self.latest_prices)
-            new_closed = self.engine.closed_trades[prev_closed:]
-            if new_closed:
-                conn = sqlite3.connect(str(self.db_path), timeout=30.0)
-                try:
-                    with conn:
-                        cursor = conn.cursor()
-                        for trade in new_closed:
-                            gross = getattr(trade, "gross_pnl", float((trade.exit_price - trade.entry_price) * trade.final_qty * Decimal(str(trade.direction))))
-                            fees = getattr(trade, "fees_paid", 0.0)
-                            funding = getattr(trade, "funding_pnl", 0.0)
-                            cursor.execute("""
-                                INSERT OR REPLACE INTO native_trades (
-                                    trade_id, symbol, direction, entry_time_ms, exit_time_ms,
-                                    entry_price, exit_price, qty, gross_pnl, fees_paid,
-                                    funding_pnl, net_pnl, exit_reason
-                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-                            """, (
-                                f"T_{trade.symbol}_{trade.entry_time}",
-                                trade.symbol,
-                                trade.direction,
-                                trade.entry_time,
-                                trade.exit_time,
-                                float(trade.entry_price),
-                                float(trade.exit_price),
-                                float(trade.initial_qty),
-                                float(gross),
-                                float(fees),
-                                float(funding),
-                                float(trade.net_pnl),
-                                trade.exit_reason,
-                            ))
-                finally:
-                    conn.close()
+            new_closed_trend = self.engine.closed_trades[prev_closed:]
+
+        # Check if any Range position hit stop-loss on tick quotes
+        new_closed_range = []
+        if hasattr(self, "range_engine") and self.range_engine.open_positions:
+            symbols_to_close = []
+            for sym, pos in list(self.range_engine.open_positions.items()):
+                price = self.latest_prices.get(sym)
+                if price is not None:
+                    sl_hit = (price <= pos.stop_loss) if pos.direction == 1 else (price >= pos.stop_loss)
+                    if sl_hit:
+                        symbols_to_close.append((sym, price))
+            for sym, price in symbols_to_close:
+                pos = self.range_engine.open_positions.pop(sym)
+                exit_fee = pos.qty * price * self.range_engine.taker_fee
+                gross_pnl = (price - pos.entry_price) * pos.qty * Decimal(str(pos.direction))
+                net_pnl = gross_pnl - pos.entry_fees - exit_fee
+                trade = RangeClosedTrade(
+                    symbol=sym,
+                    direction=pos.direction,
+                    entry_time=pos.entry_time,
+                    exit_time=ts,
+                    entry_price=pos.entry_price,
+                    exit_price=price,
+                    qty=pos.qty,
+                    net_pnl=net_pnl,
+                    exit_reason="STOP_LOSS_TICK",
+                    fees_paid=pos.entry_fees + exit_fee,
+                    funding_pnl=Decimal("0"),
+                )
+                self.range_engine.closed_trades.append(trade)
+                new_closed_range.append(trade)
+
+        # Update peak equity on ticks
+        comb_eq = self.get_unified_equity()
+        if comb_eq > self.peak_equity:
+            self.peak_equity = comb_eq
+
+        # If any trades closed on this tick: perform atomic SQLite transaction
+        if new_closed_trend or new_closed_range:
+            conn = sqlite3.connect(str(self.db_path), timeout=30.0)
+            try:
+                with conn:
+                    cursor = conn.cursor()
+                    for trade in new_closed_trend:
+                        gross = getattr(trade, "gross_pnl", float((trade.exit_price - trade.entry_price) * trade.final_qty * Decimal(str(trade.direction))))
+                        fees = getattr(trade, "fees_paid", 0.0)
+                        funding = getattr(trade, "funding_pnl", 0.0)
+                        cursor.execute("""
+                            INSERT OR REPLACE INTO native_trades (
+                                trade_id, symbol, direction, entry_time_ms, exit_time_ms,
+                                entry_price, exit_price, qty, gross_pnl, fees_paid,
+                                funding_pnl, net_pnl, exit_reason
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                        """, (
+                            f"T_{trade.symbol}_{trade.entry_time}",
+                            trade.symbol,
+                            trade.direction,
+                            trade.entry_time,
+                            trade.exit_time,
+                            float(trade.entry_price),
+                            float(trade.exit_price),
+                            float(trade.initial_qty),
+                            float(gross),
+                            float(fees),
+                            float(funding),
+                            float(trade.net_pnl),
+                            f"TREND_{trade.exit_reason}",
+                        ))
+                    for r_trade in new_closed_range:
+                        cursor.execute("""
+                            INSERT OR REPLACE INTO native_trades (
+                                trade_id, symbol, direction, entry_time_ms, exit_time_ms,
+                                entry_price, exit_price, qty, gross_pnl, fees_paid,
+                                funding_pnl, net_pnl, exit_reason
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                        """, (
+                            f"R_{r_trade.symbol}_{r_trade.entry_time}",
+                            r_trade.symbol,
+                            r_trade.direction,
+                            r_trade.entry_time,
+                            r_trade.exit_time,
+                            float(r_trade.entry_price),
+                            float(r_trade.exit_price),
+                            float(r_trade.qty),
+                            float(r_trade.net_pnl + r_trade.fees_paid),
+                            float(r_trade.fees_paid),
+                            float(r_trade.funding_pnl),
+                            float(r_trade.net_pnl),
+                            f"RANGE_{r_trade.exit_reason}",
+                        ))
+
+                    # Insert journal checkpoint
+                    now_dt = datetime.now(timezone.utc)
+                    cash = self.get_unified_cash()
+                    unrealized = self.get_unified_unrealized()
+                    total_eq = cash + unrealized
+                    cursor.execute("""
+                        INSERT INTO native_journal (
+                            timestamp_ms, iso_time, cohort_id, realized_equity,
+                            unrealized_pnl, total_equity, cash_balance, total_fees,
+                            total_funding, peak_equity, positions_count, gear, notes
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    """, (
+                        int(now_dt.timestamp() * 1000),
+                        now_dt.isoformat(),
+                        self.cohort_id,
+                        float(cash),
+                        float(unrealized),
+                        float(total_eq),
+                        float(cash),
+                        float(self.total_fees),
+                        float(self.total_funding),
+                        float(self.peak_equity),
+                        len(self.engine.open_positions) + (len(self.range_engine.open_positions) if hasattr(self, "range_engine") else 0),
+                        3,
+                        "tick_position_exit",
+                    ))
+
+                    # Insert authoritative state snapshot in native_state_journal in the SAME transaction!
+                    state_dict = {
+                        "version": "3.2-NATIVE-DUAL-REGIME",
+                        "saved_at_iso": now_dt.isoformat(),
+                        "cohort_id": self.cohort_id,
+                        "peak_equity": str(self.peak_equity),
+                        "settled_funding_windows": [list(x) for x in self.settled_funding_windows],
+                        "engine": self.engine.to_dict(),
+                        "range_engine": self.range_engine.to_dict() if hasattr(self.range_engine, "to_dict") else {},
+                        "last_processed_bar_ts": self.last_processed_bar_ts,
+                    }
+                    cursor.execute("""
+                        INSERT INTO native_state_journal (
+                            saved_at_ms, saved_at_utc, event_key, realized_equity,
+                            peak_equity, state_json
+                        ) VALUES (?, ?, ?, ?, ?, ?);
+                    """, (
+                        int(now_dt.timestamp() * 1000),
+                        now_dt.isoformat(),
+                        f"TICK_EXIT_{ts}",
+                        float(cash),
+                        float(self.peak_equity),
+                        json.dumps(state_dict, default=str),
+                    ))
+            finally:
+                conn.close()
+
+            # Fault injection point for testing crash recovery after tick exit commit
+            if fault_injection_point == "after_tick_commit_before_json":
+                raise RuntimeError("FAULT_INJECTION: Crash immediately after tick exit commit before JSON write")
+
+        self.save_state()
+        return self.export_telemetry()
 
         self.save_state()
         return self.export_telemetry()
@@ -717,7 +932,11 @@ class NativePaperRunner:
                             settlement_key = (sym, next_f_ts)
                             if settlement_key not in self.settled_funding_windows and now_srv >= next_f_ts:
                                 if sym in self.engine.open_positions:
-                                    self.engine.process_funding_event(sym, f_rate, now_srv, p)
+                                    self.engine.process_funding_event(
+                                        timestamp=next_f_ts,
+                                        funding_rates={sym: f_rate},
+                                        current_prices={sym: p},
+                                    )
                                 self.settled_funding_windows.add(settlement_key)
                     except Exception:
                         pass
@@ -748,6 +967,7 @@ class NativePaperRunner:
                     closed_bars.sort(key=lambda k: int(k[0]))
                     for k in closed_bars:
                         bar_ts = int(k[0])
+                        bar_close_ms = bar_ts + BAR_INTERVAL_MS
                         if bar_ts > self.last_processed_bar_ts.get(sym, 0):
                             bar_dict = {
                                 "timestamp": bar_ts,
@@ -758,13 +978,18 @@ class NativePaperRunner:
                                 "volume": float(k[5]),
                                 "turnover": float(k[6]),
                             }
+                            # Check if bar is historical catchup (> 120s ago)
+                            is_hist = (now_srv - bar_close_ms) > 120000
+                            # For historical bars, current_price is None so that bar["close"] is strictly used
+                            c_price = None if is_hist else quotes_to_update.get(sym)
                             res = self.ingest_closed_bar(
                                 symbol=sym,
                                 bar=bar_dict,
-                                current_price=quotes_to_update.get(sym),
+                                current_price=c_price,
                                 funding_rate=None,
                                 btc_bullish=btc_bullish,
                                 btc_bearish=btc_bearish,
+                                is_historical_catchup=is_hist,
                             )
                             if res.get("status") == "PROCESSED":
                                 processed_count += 1
@@ -818,7 +1043,7 @@ class NativePaperRunner:
                 "fees_paid_usdt": float(self.total_fees),
                 "slippage_cost_usdt": 0.0,
                 "funding_paid_usdt": float(self.total_funding),
-                "positions_count": len(self.engine.open_positions),
+                "positions_count": len(self.engine.open_positions) + (len(self.range_engine.open_positions) if hasattr(self, "range_engine") else 0),
                 "positions_detail": {},
                 "data_freshness_status": status,
                 "valuation_status": val_status,
@@ -829,28 +1054,38 @@ class NativePaperRunner:
                 "schedule_active": bool(self.schedule_active),  # Protocol 009 Invariant
             }
         else:
-            snap = self.engine.get_portfolio_snapshot(self.latest_prices)
-            eq = float(snap.equity)
+            cash = float(self.get_unified_cash())
+            unrealized = float(self.get_unified_unrealized())
+            eq = cash + unrealized
             pnl = eq - init_cap
             ret_pct = (pnl / init_cap) * 100.0 if init_cap > 0 else 0.0
-            peak = float(self.engine.peak_equity)
+            peak = float(self.peak_equity)
             mdd = round(((eq - peak) / peak) * 100.0, 2) if peak > 0 else 0.0
 
             pos_detail = {}
             for s, pos in self.engine.open_positions.items():
                 pos_detail[s] = {
+                    "strategy": "TREND",
                     "direction": "LONG" if pos.direction == 1 else "SHORT",
                     "entry_price": float(pos.entry_price),
                     "current_qty": float(pos.current_qty),
                     "current_stop": float(pos.current_stop),
                     "bars_held": pos.bars_held,
                 }
+            if hasattr(self, "range_engine"):
+                for s, pos in self.range_engine.open_positions.items():
+                    p_qty = getattr(pos, "current_qty", getattr(pos, "qty", Decimal("0")))
+                    pos_detail[f"{s}_RANGE"] = {
+                        "strategy": "RANGE",
+                        "direction": "LONG" if pos.direction == 1 else "SHORT",
+                        "entry_price": float(pos.entry_price),
+                        "current_qty": float(p_qty),
+                        "current_stop": float(pos.stop_loss),
+                        "bars_held": getattr(pos, "bars_held", 0),
+                    }
 
-            tot_exposure = sum(
-                (p.current_qty * self.latest_prices.get(p.symbol, p.entry_price) for p in self.engine.open_positions.values()),
-                Decimal("0"),
-            )
-            exposure_pct = round(float(tot_exposure / Decimal(str(eq)) * Decimal("100.0")), 2) if eq > 0 else 0.0
+            tot_notional = float(self.get_total_gross_notional())
+            exposure_pct = round((tot_notional / eq * 100.0), 2) if eq > 0 else 0.0
 
             telemetry = {
                 "name": "v3.2 Native",
@@ -864,19 +1099,19 @@ class NativePaperRunner:
                 "net_pnl_usdt": round(pnl, 4),
                 "net_return_pct": round(ret_pct, 3),
                 "mdd_pct": mdd,
-                "cash_usdt": round(float(self.engine.realized_equity), 4),
+                "cash_usdt": round(cash, 4),
                 "exposure_pct": exposure_pct,
                 "turnover_usdt": float(self.total_turnover),
                 "fees_paid_usdt": round(float(self.total_fees), 4),
                 "slippage_cost_usdt": 0.0,
                 "funding_paid_usdt": round(float(self.total_funding), 4),
-                "positions_count": len(self.engine.open_positions),
+                "positions_count": len(self.engine.open_positions) + (len(self.range_engine.open_positions) if hasattr(self, "range_engine") else 0),
                 "positions_detail": pos_detail,
                 "data_freshness_status": "FRESH",
                 "valuation_status": "FRESH",
                 "error_count": 0,
                 "last_update_iso": now_dt.isoformat(),
-                "notes": "Linear Perpetuals, Half-Kelly sizing, 0.09% MNT taker fee tier, active engine",
+                "notes": "Linear Perpetuals, Half-Kelly sizing, Retail VIP0 fee tier (0.100% taker, 0.036% maker), unified $300 account",
                 "is_active": True,
                 "schedule_active": bool(self.schedule_active),
             }

@@ -66,9 +66,9 @@ BAR_INTERVAL_MS = 3600 * 1000  # 1-hour candles
 FUNDING_INTERVAL_MS = 8 * 3600 * 1000  # 8-hour funding intervals
 MAX_L2_STALENESS_MS = 60000  # 60s max age for orderbook snapshots
 
-# Fee Constants
-NATIVE_TAKER_FEE = Decimal("0.00090")      # 0.090% Legacy MNT discount
-NATIVE_MAKER_FEE = Decimal("0.000324")    # 0.0324% Legacy MNT discount
+# Standard VIP0 Retail Fee Constants (No unconfirmed MNT discounts)
+NATIVE_TAKER_FEE = Decimal("0.00100")      # 0.100% Standard VIP0 Taker fee
+NATIVE_MAKER_FEE = Decimal("0.00036")      # 0.036% Standard VIP0 Maker fee
 SHADOW_TAKER_FEE = Decimal("0.00100")      # 0.100% Standard VIP0 Taker fee
 SHADOW_MAKER_FEE = Decimal("0.00036")      # 0.036% Standard VIP0 Maker fee
 NATIVE_SLIPPAGE = Decimal("0.0002")        # 0.02% simulated fixed
@@ -572,20 +572,31 @@ class PortfolioInstance:
 
     def apply_funding(self, symbol: str, funding_rate: Decimal, mark_price: Decimal, exchange_ts: int) -> Decimal:
         """
-        Accrues 8-hour perpetual funding payment strictly once per 8-hour interval
+        Accrues 8-hour perpetual funding payment strictly once per 8-hour interval (00:00, 08:00, 16:00 UTC)
         based on actual position hold time.
         """
         if symbol not in self.positions or funding_rate == Decimal("0"):
             return Decimal("0")
 
-        window_id = exchange_ts // FUNDING_INTERVAL_MS
+        # In Bybit Linear Perpetuals, funding is settled at 00:00, 08:00, 16:00 UTC.
+        # Check whether exchange_ts or candle close time aligns with an 8h funding boundary.
+        is_exact_boundary = (exchange_ts % FUNDING_INTERVAL_MS == 0)
+        bar_close_ms = exchange_ts + BAR_INTERVAL_MS
+        is_bar_close_boundary = (bar_close_ms % FUNDING_INTERVAL_MS == 0)
+
+        if not (is_exact_boundary or is_bar_close_boundary):
+            return Decimal("0")
+
+        boundary_ts = bar_close_ms if is_bar_close_boundary else exchange_ts
+        window_id = boundary_ts // FUNDING_INTERVAL_MS
         settlement_key = (symbol, window_id)
         if settlement_key in self.settled_funding_windows:
             return Decimal("0")  # Already settled this 8h window
 
         pos = self.positions[symbol]
         # Only positions open at or prior to the settlement timestamp are eligible
-        if pos.entry_time_ms > exchange_ts:
+        entry_ts = getattr(pos, "entry_time_ms", getattr(pos, "entry_time", 0))
+        if entry_ts > boundary_ts:
             return Decimal("0")
 
         payment = pos.current_qty * mark_price * funding_rate * (-pos.direction)

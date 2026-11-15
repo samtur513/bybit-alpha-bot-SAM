@@ -1,0 +1,216 @@
+{
+  "timestamp_utc": "2026-11-15T11:23:30.258382+00:00",
+  "overall_verdict": "GO-WITH-WARNINGS",
+  "counts": {
+    "total": 6,
+    "pass": 5,
+    "warn": 1,
+    "fail": 0
+  },
+  "checks": [
+    {
+      "check_name": "system_resources",
+      "category": "RESOURCES",
+      "status": "PASS",
+      "details": {
+        "os": "Windows",
+        "release": "11",
+        "cpu_count": 16,
+        "disk_total_gb": 475.7,
+        "disk_used_gb": 430.84,
+        "disk_free_gb": 44.86,
+        "disk_free_pct": 9.4
+      },
+      "message": "System resources healthy."
+    },
+    {
+      "check_name": "running_services",
+      "category": "SERVICES",
+      "status": "PASS",
+      "details": {
+        "vps_linux": false,
+        "simulated_mode": true,
+        "port_8083_listening": false
+      },
+      "message": "Local simulation: port 8083 check completed (listening=False)."
+    },
+    {
+      "check_name": "network_latency",
+      "category": "NETWORK",
+      "status": "WARN",
+      "details": {
+        "Bybit Public Server Time": {
+          "url": "https://api.bybit.com/v5/market/time",
+          "latencies_ms": [
+            753.65,
+            614.21,
+            767.96
+          ],
+          "avg_latency_ms": 711.94,
+          "status_codes": [
+            200,
+            200,
+            200
+          ]
+        },
+        "OKX Public System Status": {
+          "url": "https://www.okx.com/api/v5/public/status",
+          "latencies_ms": [
+            624.35,
+            661.9,
+            618.55
+          ],
+          "avg_latency_ms": 634.93,
+          "status_codes": [
+            404,
+            404,
+            404
+          ]
+        }
+      },
+      "message": "Bybit Public Server Time HIGH LATENCY: 711.94ms; OKX Public System Status HIGH LATENCY: 634.93ms"
+    },
+    {
+      "check_name": "telemetry_ports",
+      "category": "PORTS",
+      "status": "PASS",
+      "details": {
+        "open_ports": [],
+        "closed_ports": [
+          8080,
+          8081,
+          8082,
+          8083,
+          8084,
+          8085,
+          8086,
+          8087,
+          8090,
+          8094,
+          8095
+        ],
+        "total_audited": 11
+      },
+      "message": "Audited 11 fleet ports: 0 listening, 11 available."
+    },
+    {
+      "check_name": "sqlite_integrity",
+      "category": "STORAGE",
+      "status": "PASS",
+      "details": {
+        "checked_dbs": {
+          "tca_attribution.db": {
+            "status": "OK",
+            "quick_check": [
+              "ok"
+            ],
+            "integrity_check": [
+              "ok"
+            ]
+          },
+          ".scratch\\t_nat.db": {
+            "status": "OK",
+            "quick_check": [
+              "ok"
+            ],
+            "integrity_check": [
+              "ok"
+            ]
+          },
+          ".scratch\\t_rec.db": {
+            "status": "OK",
+            "quick_check": [
+              "ok"
+            ],
+            "integrity_check": [
+              "ok"
+            ]
+          },
+          ".scratch\\t_rec2.db": {
+            "status": "OK",
+            "quick_check": [
+              "ok"
+            ],
+            "integrity_check": [
+              "ok"
+            ]
+          },
+          ".scratch\\t_sha.db": {
+            "status": "OK",
+            "quick_check": [
+              "ok"
+            ],
+            "integrity_check": [
+              "ok"
+            ]
+          },
+          ".scratch\\t_sha2.db": {
+            "status": "OK",
+            "quick_check": [
+              "ok"
+            ],
+            "integrity_check": [
+              "ok"
+            ]
+          },
+          "data\\metadata.db": {
+            "status": "OK",
+            "quick_check": [
+              "ok"
+            ],
+            "integrity_check": [
+              "ok"
+            ]
+          },
+          "reports\\parity_test_v314.db": {
+            "status": "OK",
+            "quick_check": [
+              "ok"
+            ],
+            "integrity_check": [
+              "ok"
+            ]
+          },
+          "reports\\parity_test_v32.db": {
+            "status": "OK",
+            "quick_check": [
+              "ok"
+            ],
+            "integrity_check": [
+              "ok"
+            ]
+          },
+          "reports\\parity_test_v38.db": {
+            "status": "OK",
+            "quick_check": [
+              "ok"
+            ],
+            "integrity_check": [
+              "ok"
+            ]
+          }
+        },
+        "total_checked": 10,
+        "corrupt_count": 0
+      },
+      "message": "Audited 10 SQLite databases: 10 intact, 0 corrupt."
+    },
+    {
+      "check_name": "cryptolab_immutability",
+      "category": "CODEBASE",
+      "status": "PASS",
+      "details": {
+        "path": "C:\\projects\\Torg_Bot_3 -Antigraviti\\.scratch\\cryptolab_ref\\research\\hunter001_dg001\\r2_shadow",
+        "git_head": "313a908782271a6e1fffaee83be7ea1a616337cb",
+        "file_hashes": {
+          "telemetry.schema.json": "5f78bb6fed230489104a0d58b9793404509ffb0f93f1a726d3f32735b23340d9",
+          "recovery_scenario.py": "e8282627edbdcff5c2dbb87bf6abcc50d05d0ccfd4da6569ab0e35202b4aae90",
+          "telemetry.py": "e0e54d5dee17061b6b0f7f5248056bdff54067d8528941d48490733dac55ed50"
+        },
+        "missing_files": [],
+        "verify_frozen_error": "No module named 'raw_store'"
+      },
+      "message": "CryptoLab confirmed intact at C:\\projects\\Torg_Bot_3 -Antigraviti\\.scratch\\cryptolab_ref\\research\\hunter001_dg001\\r2_shadow (3 contract files verified)."
+    }
+  ]
+}

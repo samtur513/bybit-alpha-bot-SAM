@@ -1,9 +1,12 @@
 {
-  "v3_2/src/runners/run_native_paper.py": "454ce75418e5224e5b8eab3b474da856a7afa11aa737a5c15795f9cb8a7afbb4",
-  "v3_2/src/runners/run_shadow_paper.py": "3f255c6de54dfa30b77d1bb4d1e081e4d1c9969459b976b2226e23e593bc59e5",
-  "v3_2/src/shadow/paper_trader_v32_shadow.py": "98b817397e9d902498dafe02936c060fd08e455618adc7e0810e0d7d3c2c642c",
-  "tests/test_final_start_blockers_009.py": "4d62f2521b438fc147d3dc61d680f7d2c08ae6cb3787eb7fa61f649bcab4b51c",
+  "v3_2/src/runners/run_native_paper.py": "edaf554ce7b6a537895fa7e87c58f4da5b89155e421e78ca6a14c2f7bdbd8d4e",
+  "v3_2/src/runners/run_shadow_paper.py": "1dfc98abb2095c0f63e371ebcca065d0dbb3dc560f3e6b69826505d233eb40b0",
+  "v3_2/src/shadow/paper_trader_v32_shadow.py": "1420b2974cfc8e4acb57cdc96818d2c4f804b9bfc2d4e05c43d697242f0ce954",
+  "tools/vps_preflight_readonly_check.py": "531bfc019b92bca31263a959d9d18c91fe5f444e072e791bbc124f5d36d643e0",
+  "tools/vps_preflight_readonly.sh": "d084cd455929691a30da48687bd672c2e183448e548370240b55152f04921e31",
+  "tests/test_final_start_blockers_009.py": "36cfbaf94a3174b1d339f2e7ded44b8b119d7dd6f5c9f448709406d16b14cc49",
   "tests/test_forward_live_data_gate_008.py": "70c555684393a8fc4e0f96854c8bbadef26ce0941da7b545641e9583b36872d3",
   "tests/test_real_engine_wiring_007.py": "30ca7cb304556ebea88e365769765371f8a9921e23ca6c8c6dfaf41448686521",
-  "reports/final_start_blockers_009/FINAL_START_BLOCKERS_009_REPORT.md": "cdf3ee04fe8fff5ae3baac39ea51101e758a30a702a71ac3119ea66696a6b4cb"
+  "reports/final_start_blockers_009/FINAL_START_BLOCKERS_009_REPORT.md": "71da46724c96d007c32d051fd55d5e355cf8f28ec1986771cd58f3cd024b6bed",
+  "reports/final_start_blockers_009/vps_preflight_audit.json": "82e13ed5c8d77a1193806fdb2b1056d07bba354a6fa7f5b28cd4966aa7b6a379"
 }

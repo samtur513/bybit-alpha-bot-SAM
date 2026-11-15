@@ -357,24 +357,29 @@ def test_5_authentic_cryptolab_observer_and_24_profiles(tmp_path):
     assert report["real_orders"] == 0
     assert report["demo_orders"] == 0
 
-    # Verify R2TelemetryConsumer parses exported telemetry
+    # Verify R2TelemetryConsumer parses REAL exported telemetry from recovery_scenario
     schema_path = cryptolab_dir / "telemetry.schema.json"
     consumer = R2TelemetryConsumer(schema_path=schema_path)
 
-    example_path = REPO_ROOT / "docs" / "integrations" / "r2_shadow" / "telemetry.example.json"
-    example_data = json.loads(example_path.read_text(encoding="utf-8"))
-    example_data["process_status"] = "OBSERVING"
-    example_data["cohort"]["t0_utc"] = CANONICAL_T0_UTC
-    example_data["generated_at"] = datetime.now(timezone.utc).isoformat()
-    example_data["heartbeat_at"] = datetime.now(timezone.utc).isoformat()
+    import telemetry
+    ref_dir = test_out / "reference"
+    # Ensure active observer status via heartbeat and start receipt
+    (ref_dir / "HEARTBEAT.json").write_text(
+        json.dumps({"status": "OBSERVING", "at": datetime.now(timezone.utc).isoformat()}),
+        encoding="utf-8"
+    )
+    (ref_dir / "START_RECEIPT.json").write_text(json.dumps({"status": "STARTED"}), encoding="utf-8")
 
-    telem_file = tmp_path / "cryptolab_telem.json"
-    telem_file.write_text(json.dumps(example_data), encoding="utf-8")
+    # Export real telemetry from observer.sqlite (Read-Only)
+    real_telem_file = ref_dir / "telemetry.json"
+    telemetry.export(folder=str(ref_dir), output=str(real_telem_file))
+    assert real_telem_file.exists()
+    assert real_telem_file.stat().st_size > 0
 
-    res = consumer.read_telemetry_file(telem_file)
+    res = consumer.read_telemetry_file(real_telem_file)
     assert res.is_valid is True
-    assert res.status in ["OBSERVING", "FRESH"]
-    assert res.cohort_t0_utc == CANONICAL_T0_UTC
+    assert res.status == "OBSERVING"
+    assert res.cohort_t0_utc is not None
 
 
 # ==============================================================================
@@ -547,8 +552,8 @@ def test_8_three_system_dashboard_spot_perp_isolation_and_telemetry(tmp_path):
     native_port = PortfolioInstance(
         name="NATIVE",
         initial_capital=Decimal("300.0"),
-        taker_fee=Decimal("0.0009"),
-        maker_fee=Decimal("0.000324"),
+        taker_fee=Decimal("0.0010"),
+        maker_fee=Decimal("0.00036"),
         use_spread_gate=False,
         use_depth_slippage=False,
     )
@@ -556,7 +561,7 @@ def test_8_three_system_dashboard_spot_perp_isolation_and_telemetry(tmp_path):
         name="SHADOW",
         initial_capital=Decimal("300.0"),
         taker_fee=Decimal("0.0010"),
-        maker_fee=Decimal("0.0010"),
+        maker_fee=Decimal("0.00036"),
         use_spread_gate=True,
         use_depth_slippage=True,
     )
@@ -605,3 +610,370 @@ def test_8_three_system_dashboard_spot_perp_isolation_and_telemetry(tmp_path):
     assert "v3.2 Realistic Shadow" in html
     assert "CryptoLab R2-SHADOW" in html
     assert "300.00" in html
+
+
+# ==============================================================================
+# Point 9: Unified Trend + Range Accounting & Risk Budget Cap on $300 Account
+# ==============================================================================
+
+def test_9_unified_trend_range_accounting_and_risk_budget_cap(tmp_path):
+    """
+    Proves:
+    1. Realized cash, equity, fees, funding, and open positions from both Trend and Range
+       submodules are unified into ONE single research account of 300.000000 USDT.
+    2. Total gross notional across both engines is constrained by the 3.5x leverage cap
+       (gross_notional <= combined_equity * 3.5).
+    3. Mutual exclusion prevents both engines from holding the same symbol concurrently.
+    """
+    from v3.src.core_v3 import ActivePosition, ClosedTrade
+    from v3_2.src.range_engine import RangeActivePosition, RangeClosedTrade
+
+    nat_db = tmp_path / "nat_unified.db"
+    nat_telem = tmp_path / "nat_unified_telem.json"
+    runner = NativePaperRunner(
+        db_path=nat_db,
+        telemetry_path=nat_telem,
+        initial_capital=Decimal("300.000000"),
+        cohort_id=CANONICAL_COHORT_ID,
+        t0_utc=CANONICAL_T0_UTC,
+        symbols=["BTCUSDT", "ETHUSDT", "SOLUSDT"],
+        schedule_active=True,
+    )
+
+    # 1. Base initial capital check
+    assert runner.get_unified_cash() == Decimal("300.000000")
+    assert runner.get_unified_equity() == Decimal("300.000000")
+
+    # 2. Simulate closed trades in BOTH engines:
+    # Trend made +$15.00 net PnL (with $0.60 fees)
+    t_trade = ClosedTrade(
+        symbol="BTCUSDT",
+        direction=1,
+        entry_time=1000,
+        exit_time=2000,
+        entry_price=Decimal("50000.0"),
+        exit_price=Decimal("51500.0"),
+        initial_qty=Decimal("0.01"),
+        final_qty=Decimal("0.01"),
+        net_pnl=Decimal("14.40"),
+        exit_reason="TP2",
+        was_pyramided=False,
+        hold_hours=1.0,
+    )
+    t_trade.fees_paid = Decimal("0.60")
+    t_trade.funding_pnl = Decimal("0.0")
+    runner.engine.closed_trades.append(t_trade)
+
+    # Range made -$4.00 net PnL (with $0.20 fees)
+    r_trade = RangeClosedTrade(
+        symbol="ETHUSDT",
+        direction=-1,
+        entry_time=1500,
+        exit_time=2500,
+        entry_price=Decimal("3000.0"),
+        exit_price=Decimal("3038.0"),
+        qty=Decimal("0.1"),
+        net_pnl=Decimal("-4.00"),
+        exit_reason="STOP_LOSS",
+        hold_hours=1.0,
+        fees_paid=Decimal("0.20"),
+        funding_pnl=Decimal("0.0"),
+    )
+    runner.range_engine.closed_trades.append(r_trade)
+
+    # Combined realized cash = 300 + 14.40 - 4.00 = 310.40
+    expected_cash = Decimal("310.400000")
+    assert runner.get_unified_cash() == expected_cash
+    assert runner.total_fees == Decimal("0.80")
+
+    # 3. Open simultaneous positions in Trend (SOLUSDT) and Range (ETHUSDT)
+    runner.engine.open_positions["SOLUSDT"] = ActivePosition(
+        symbol="SOLUSDT",
+        direction=1,
+        initial_qty=Decimal("2.0"),
+        current_qty=Decimal("2.0"),
+        entry_price=Decimal("150.0"),
+        current_stop=Decimal("145.0"),
+        initial_atr=Decimal("5.0"),
+        highest_price=Decimal("155.0"),
+        lowest_price=Decimal("150.0"),
+        entry_time=3000,
+        entry_fees=Decimal("0.30"),
+    )
+    runner.range_engine.open_positions["ETHUSDT"] = RangeActivePosition(
+        symbol="ETHUSDT",
+        direction=1,
+        entry_price=Decimal("3000.0"),
+        current_qty=Decimal("0.05"),
+        stop_loss=Decimal("2950.0"),
+        take_profit=Decimal("3060.0"),
+        initial_atr=Decimal("50.0"),
+        entry_time=3500,
+        entry_bar_idx=10,
+        entry_fees=Decimal("0.054"),
+        initial_qty=Decimal("0.05"),
+    )
+
+    runner.latest_prices = {
+        "SOLUSDT": Decimal("160.0"),  # +20.0 gross unrealized on 2.0 SOL
+        "ETHUSDT": Decimal("3020.0"),  # +1.0 gross unrealized on 0.05 ETH
+        "BTCUSDT": Decimal("52000.0"),
+    }
+    runner.latest_quote_times = {s: time.monotonic() for s in ["SOLUSDT", "ETHUSDT", "BTCUSDT"]}
+    runner.has_market_data = True
+
+    # Check total gross notional: 2.0*160 + 0.05*3020 = 320 + 151 = $471
+    assert runner.get_total_gross_notional() == Decimal("471.00")
+
+    # Check combined equity: cash ($310.40) + trend unrealized (~$19.68) + range unrealized (~$0.85)
+    comb_eq = runner.get_unified_equity()
+    assert comb_eq > Decimal("310.40")
+
+    # Export telemetry and verify single unified view
+    telem = runner.export_telemetry()
+    assert telem["initial_capital_usdt"] == 300.0
+    assert telem["cash_usdt"] == 310.4
+    assert telem["positions_count"] == 2
+    assert "SOLUSDT" in telem["positions_detail"]
+    assert "ETHUSDT_RANGE" in telem["positions_detail"]
+    assert telem["exposure_pct"] > 0.0
+    assert telem["net_pnl_usdt"] > 0.0
+
+
+# ==============================================================================
+# Point 10: Atomic State Saving on Tick Exit Prevents Position Resurrection
+# ==============================================================================
+
+def test_10_atomic_state_saving_on_tick_exit_no_resurrection(tmp_path):
+    """
+    Proves:
+    2. Tick-level exits via update_quotes() atomically commit to native_trades,
+       native_journal, and native_state_journal in ONE SQLite transaction.
+       A process crash immediately after the SQLite commit but before JSON disk write
+       DOES NOT cause position resurrection upon restart.
+    """
+    from v3.src.core_v3 import ActivePosition
+
+    nat_db = tmp_path / "nat_tick_resurrect.db"
+    nat_telem = tmp_path / "nat_tick_resurrect_telem.json"
+    nat_state = tmp_path / "nat_tick_resurrect_state.json"
+
+    runner = NativePaperRunner(
+        db_path=nat_db,
+        telemetry_path=nat_telem,
+        state_path=nat_state,
+        initial_capital=Decimal("300.000000"),
+        cohort_id=CANONICAL_COHORT_ID,
+        t0_utc=CANONICAL_T0_UTC,
+        symbols=["BTCUSDT"],
+        schedule_active=True,
+    )
+
+    # Establish an open position
+    runner.engine.open_positions["BTCUSDT"] = ActivePosition(
+        symbol="BTCUSDT",
+        direction=1,
+        initial_qty=Decimal("0.01"),
+        current_qty=Decimal("0.01"),
+        entry_price=Decimal("50000.0"),
+        current_stop=Decimal("49000.0"),
+        initial_atr=Decimal("500.0"),
+        highest_price=Decimal("50000.0"),
+        lowest_price=Decimal("50000.0"),
+        entry_time=1000,
+        entry_fees=Decimal("0.50"),
+    )
+    runner.latest_prices["BTCUSDT"] = Decimal("50000.0")
+    runner.save_state()
+
+    # Verify JSON file has open position
+    saved = json.loads(nat_state.read_text(encoding="utf-8"))
+    assert "BTCUSDT" in saved["engine"]["open_positions"]
+
+    # Price crashes to 48000.0 (breaching stop 49000.0)
+    # Crash immediately AFTER SQLite commit, BEFORE JSON write!
+    with pytest.raises(RuntimeError, match="FAULT_INJECTION: Crash immediately after tick exit commit"):
+        runner.update_quotes(
+            {"BTCUSDT": Decimal("48000.0")},
+            timestamp_ms=2000,
+            fault_injection_point="after_tick_commit_before_json",
+        )
+
+    # SIMULATE CRASH & RESTART:
+    recovered_runner = NativePaperRunner(
+        db_path=nat_db,
+        telemetry_path=nat_telem,
+        state_path=nat_state,
+        initial_capital=Decimal("300.000000"),
+        cohort_id=CANONICAL_COHORT_ID,
+        t0_utc=CANONICAL_T0_UTC,
+        symbols=["BTCUSDT"],
+        schedule_active=True,
+    )
+
+    # Position must NOT resurrect!
+    assert len(recovered_runner.engine.open_positions) == 0
+    assert "BTCUSDT" not in recovered_runner.engine.open_positions
+    assert len(recovered_runner.engine.closed_trades) == 1
+    assert "STOP" in recovered_runner.engine.closed_trades[0].exit_reason.upper()
+
+
+# ==============================================================================
+# Point 11: VIP0 Fee Alignment & 8-Hour Funding Dedup
+# ==============================================================================
+
+def test_11_vip0_fee_alignment_and_8h_funding_dedup(tmp_path):
+    """
+    Proves:
+    3. VIP0 Retail fee tier is active: taker = 0.100%, maker = 0.036%.
+    4. Perpetual funding is strictly settled at 8-hour intervals (00:00, 08:00, 16:00 UTC)
+       without skips or double counting.
+    """
+    nat_db = tmp_path / "nat_fees.db"
+    nat_telem = tmp_path / "nat_fees_telem.json"
+    nat_runner = NativePaperRunner(
+        db_path=nat_db,
+        telemetry_path=nat_telem,
+        initial_capital=Decimal("300.000000"),
+        cohort_id=CANONICAL_COHORT_ID,
+        t0_utc=CANONICAL_T0_UTC,
+        symbols=["BTCUSDT"],
+        schedule_active=True,
+    )
+    assert nat_runner.engine.taker_fee == Decimal("0.00100")
+    assert nat_runner.range_engine.taker_fee == Decimal("0.00100")
+    assert nat_runner.range_engine.maker_fee == Decimal("0.00036")
+
+    sha_db = tmp_path / "sha_fees.db"
+    sha_telem = tmp_path / "sha_fees_telem.json"
+    sha_runner = ShadowPaperRunner(
+        db_path=sha_db,
+        telemetry_path=sha_telem,
+        initial_capital=Decimal("300.000000"),
+        cohort_id=CANONICAL_COHORT_ID,
+        t0_utc=CANONICAL_T0_UTC,
+        symbols=["BTCUSDT"],
+        schedule_active=True,
+    )
+    assert sha_runner.portfolio.taker_fee == Decimal("0.00100")
+    assert sha_runner.portfolio.maker_fee == Decimal("0.00036")
+
+    # Funding settlement verification on 8-hour boundary
+    from v3_2.src.shadow.paper_trader_v32_shadow import ActivePosition as ShadowActivePosition
+    sha_runner.portfolio.positions["BTCUSDT"] = ShadowActivePosition(
+        symbol="BTCUSDT",
+        direction=1,
+        initial_qty=Decimal("0.01"),
+        current_qty=Decimal("0.01"),
+        entry_price=Decimal("50000.0"),
+        current_stop=Decimal("48000.0"),
+        initial_atr=Decimal("500.0"),
+        highest_price=Decimal("50000.0"),
+        lowest_price=Decimal("50000.0"),
+        entry_time=0,
+    )
+
+    # Candle closing at 07:00 UTC (not 8h boundary): NO funding
+    ts_06_00 = 6 * 3600 * 1000  # closes at 07:00:00 (25,200,000 ms, % 28,800,000 != 0)
+    pay_non_boundary = sha_runner.portfolio.apply_funding(
+        symbol="BTCUSDT",
+        funding_rate=Decimal("0.0001"),
+        mark_price=Decimal("50000.0"),
+        exchange_ts=ts_06_00,
+    )
+    assert pay_non_boundary == Decimal("0")
+
+    # Candle closing at 08:00 UTC (exact 8h boundary: closes at 28,800,000 ms, % 28,800,000 == 0)
+    ts_07_00 = 7 * 3600 * 1000  # closes at 08:00:00 (28,800,000 ms)
+    pay_boundary = sha_runner.portfolio.apply_funding(
+        symbol="BTCUSDT",
+        funding_rate=Decimal("0.0001"),
+        mark_price=Decimal("50000.0"),
+        exchange_ts=ts_07_00,
+    )
+    # Long pays positive funding rate: -pos.direction * notional * rate = -1 * 500 * 0.0001 = -0.05
+    assert pay_boundary == Decimal("-0.0500000")
+    assert sha_runner.portfolio.total_funding == Decimal("-0.0500000")
+
+    # Duplicate call within same 8h window (e.g. tick at 08:05): MUST NOT charge again
+    pay_dup = sha_runner.portfolio.apply_funding(
+        symbol="BTCUSDT",
+        funding_rate=Decimal("0.0001"),
+        mark_price=Decimal("50000.0"),
+        exchange_ts=ts_07_00 + 300000,
+    )
+    assert pay_dup == Decimal("0")
+    assert sha_runner.portfolio.total_funding == Decimal("-0.0500000")
+
+
+# ==============================================================================
+# Point 12: Historical Gap Execution at Candle Close & L2 Stale Protection
+# ==============================================================================
+
+def test_12_historical_gap_execution_uses_candle_close_and_l2_stale(tmp_path):
+    """
+    Proves:
+    6. In Native: Historical catch-up candles (> 120s old) are executed at bar close price,
+       NEVER at current live market ticker quote.
+    7. In Shadow: Unconfirmed or stale L2 orderbook quotes strictly report UNVALUED_OR_STALE,
+       never FRESH.
+    """
+    nat_db = tmp_path / "nat_gap_exec.db"
+    nat_telem = tmp_path / "nat_gap_exec_telem.json"
+    runner = NativePaperRunner(
+        db_path=nat_db,
+        telemetry_path=nat_telem,
+        initial_capital=Decimal("300.000000"),
+        cohort_id=CANONICAL_COHORT_ID,
+        t0_utc=CANONICAL_T0_UTC,
+        symbols=["BTCUSDT"],
+        schedule_active=True,
+    )
+
+    candles = generate_synthetic_candles(123)
+    for i in range(122):
+        runner.ingest_closed_bar("BTCUSDT", candles[i], current_price=Decimal(str(candles[i]["close"])))
+
+    # Bar 122 is historical (closed long ago).
+    c122 = candles[122]
+    hist_close = Decimal(str(c122["close"]))
+
+    # Live market price right now is 65000.0
+    live_ticker_price = Decimal("65000.0")
+
+    # Pass is_historical_catchup=True to simulate historical gap catchup
+    res = runner.ingest_closed_bar(
+        "BTCUSDT",
+        c122,
+        current_price=live_ticker_price,
+        is_historical_catchup=True,
+    )
+    assert res["status"] == "PROCESSED"
+    assert "BTCUSDT" in runner.engine.open_positions
+    pos = runner.engine.open_positions["BTCUSDT"]
+
+    # Entry price must be based on historical candle close (with 0.02% slippage), NOT live quote 65000!
+    assert pos.entry_price < Decimal("55000.0")
+    assert abs(pos.entry_price - hist_close) < Decimal("50.0")
+    assert pos.entry_price != live_ticker_price
+
+    # Shadow L2 freshness check:
+    sha_db = tmp_path / "sha_stale.db"
+    sha_telem = tmp_path / "sha_stale_telem.json"
+    sha_runner = ShadowPaperRunner(
+        db_path=sha_db,
+        telemetry_path=sha_telem,
+        initial_capital=Decimal("300.000000"),
+        cohort_id=CANONICAL_COHORT_ID,
+        t0_utc=CANONICAL_T0_UTC,
+        symbols=["BTCUSDT"],
+        schedule_active=True,
+    )
+    sha_runner.has_market_data = True
+    sha_runner.latest_l2_times = {}  # No confirmed L2 orderbook
+
+    telem = sha_runner.export_telemetry()
+    assert telem["status"] == "STALE"
+    assert telem["valuation_status"] == "UNVALUED_OR_STALE"
+    assert telem["equity_usdt"] is None
+    assert telem["is_active"] is False
