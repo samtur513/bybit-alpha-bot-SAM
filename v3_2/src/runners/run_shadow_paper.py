@@ -445,6 +445,22 @@ class ShadowPaperRunner:
             if quotes_to_update:
                 self.update_quotes(quotes_to_update, timestamp_ms=now_srv)
 
+            # Maintain periodic L2 orderbook freshness (every 30s) for active symbols or portfolio positions
+            now_mono = time.monotonic()
+            symbols_to_sample_ob = list(self.portfolio.positions.keys())
+            if not symbols_to_sample_ob and self.symbols:
+                primary_sym = self.symbols[0]
+                if now_mono - self.latest_l2_times.get(primary_sym, 0.0) >= 30.0:
+                    symbols_to_sample_ob.append(primary_sym)
+            for ob_sym in symbols_to_sample_ob:
+                if now_mono - self.latest_l2_times.get(ob_sym, 0.0) >= 30.0:
+                    try:
+                        ob = self.client.get_orderbook(symbol=ob_sym, limit=50)
+                        if ob.get("b") and ob.get("a"):
+                            self.latest_l2_times[ob_sym] = time.monotonic()
+                    except Exception as e:
+                        logger.debug(f"Periodic L2 orderbook sample failed for {ob_sym}: {e}")
+
             # Check BTC Trend Filter from BTC candle buffer
             btc_bullish = True
             btc_bearish = True
