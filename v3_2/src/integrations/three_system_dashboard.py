@@ -541,14 +541,19 @@ class ThreeSystemComparativeDashboard:
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="refresh" content="10">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TORG-BOT Three-System Comparative Dashboard</title>
 <style>
   body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: #0b0e14; color: #e0e6ed; margin: 0; padding: 24px; }}
   h1 {{ margin: 0 0 8px 0; font-size: 24px; color: #64b5f6; font-weight: 600; }}
-  .header-meta {{ font-size: 13px; color: #90a4ae; margin-bottom: 24px; }}
+  .header-meta {{ font-size: 13px; color: #90a4ae; margin-bottom: 16px; }}
+  .nav-bar {{ display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; }}
+  .nav-btn {{ color: #90a4ae; text-decoration: none; font-size: 13px; font-weight: 500; padding: 6px 12px; background: #151c28; border-radius: 6px; border: 1px solid #233142; transition: all 0.2s ease; }}
+  .nav-btn:hover {{ background: #1f2a3a; color: #ffffff; }}
   .banner {{ background: #151c28; border: 1px solid #233142; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; font-size: 13px; }}
   .grid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }}
+  @media (max-width: 900px) {{ .grid {{ grid-template-columns: 1fr; }} }}
   .card {{ background: #121824; border: 1px solid #1f2a3a; border-radius: 8px; padding: 18px; }}
   .card-title {{ font-size: 18px; font-weight: 600; margin: 0 0 4px 0; }}
   .card-sub {{ font-size: 12px; color: #90a4ae; margin-bottom: 16px; min-height: 32px; }}
@@ -558,6 +563,8 @@ class ThreeSystemComparativeDashboard:
   .val {{ font-weight: 500; }}
   .dim {{ color: #546e7a; }}
   .badge {{ padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; }}
+  .card-footer {{ margin-top: 14px; padding-top: 10px; border-top: 1px solid #1c2636; text-align: right; }}
+  .card-footer a {{ font-size: 12px; text-decoration: none; }}
   .footer {{ margin-top: 24px; font-size: 12px; color: #546e7a; border-top: 1px solid #1c2636; padding-top: 12px; }}
 </style>
 </head>
@@ -566,12 +573,20 @@ class ThreeSystemComparativeDashboard:
   <div class="header-meta">
     Cohort: <strong>{tc.get('cohort_id')}</strong> | Scheduled T0: <strong>{tc.get('t0_utc')}</strong> | Status: {fmt_status(tc.get('cohort_status'))}
   </div>
+  <div class="nav-bar">
+    <a href="/" class="nav-btn" style="color: #64b5f6; border-color: #64b5f6;">📊 All Systems Overview</a>
+    <a href="/api/status" target="_blank" class="nav-btn">🔌 Unified JSON API</a>
+    <a href="/api/native" target="_blank" class="nav-btn" style="color: #4fc3f7;">📄 System A: Native JSON</a>
+    <a href="/api/shadow" target="_blank" class="nav-btn" style="color: #ab47bc;">📄 System B: Shadow JSON</a>
+    <a href="/api/r2" target="_blank" class="nav-btn" style="color: #26a69a;">📄 System C: CryptoLab JSON</a>
+    <a href="http://150.241.98.70:8083/" target="_blank" class="nav-btn" style="color: #ffb74d;">🚀 Original v3.2 Bot (Port 8083)</a>
+  </div>
   <div class="banner">
     <strong>Strict Separation Invariant Enforced:</strong> Bybit Linear Perpetuals (Systems A & B) and Spot Cash (System C) are physically isolated. Under no condition may Spot and Perpetual PnL be pooled. Port 8083 (historical v3.2) remains active and untouched.
   </div>
   <div class="grid">
     <!-- System A -->
-    <div class="card">
+    <div class="card" id="system-a">
       <div class="card-title" style="color:#4fc3f7">{a.get('name')}</div>
       <div class="card-sub">{a.get('role')}</div>
       <div class="metric-row"><span class="label">Market</span><span class="val">Bybit Linear Perp</span></div>
@@ -585,9 +600,12 @@ class ThreeSystemComparativeDashboard:
       <div class="metric-row"><span class="label">Fees / Funding</span><span class="val">${fmt_val(a.get('fees_paid_usdt'))} / ${fmt_val(a.get('funding_paid_usdt'))}</span></div>
       <div class="metric-row"><span class="label">Active Positions</span><span class="val">{a.get('positions_count', 0)}</span></div>
       <div class="metric-row"><span class="label">T0 / Cohort</span><span class="val">{a.get('cohort_id')}</span></div>
+      <div class="card-footer">
+        <a href="/api/native" target="_blank" style="color:#4fc3f7;">View System A JSON &rarr;</a>
+      </div>
     </div>
     <!-- System B -->
-    <div class="card">
+    <div class="card" id="system-b">
       <div class="card-title" style="color:#ab47bc">{b.get('name')}</div>
       <div class="card-sub">{b.get('role')}</div>
       <div class="metric-row"><span class="label">Market</span><span class="val">Bybit Linear Perp</span></div>
@@ -601,9 +619,12 @@ class ThreeSystemComparativeDashboard:
       <div class="metric-row"><span class="label">Fees / Funding</span><span class="val">${fmt_val(b.get('fees_paid_usdt'))} / ${fmt_val(b.get('funding_paid_usdt'))}</span></div>
       <div class="metric-row"><span class="label">Active Positions</span><span class="val">{b.get('positions_count', 0)}</span></div>
       <div class="metric-row"><span class="label">T0 / Cohort</span><span class="val">{b.get('cohort_id')}</span></div>
+      <div class="card-footer">
+        <a href="/api/shadow" target="_blank" style="color:#ab47bc;">View System B JSON &rarr;</a>
+      </div>
     </div>
     <!-- System C -->
-    <div class="card">
+    <div class="card" id="system-c">
       <div class="card-title" style="color:#26a69a">{c.get('name')}</div>
       <div class="card-sub">{c.get('role')}</div>
       <div class="metric-row"><span class="label">Market</span><span class="val">Bybit Spot Long-Only</span></div>
@@ -617,10 +638,13 @@ class ThreeSystemComparativeDashboard:
       <div class="metric-row"><span class="label">Fees / Spread</span><span class="val">${fmt_val(c.get('fees_paid_usdt'))} / ${fmt_val(c.get('slippage_cost_usdt'))}</span></div>
       <div class="metric-row"><span class="label">Edge over T01</span><span class="val">{edge_str}</span></div>
       <div class="metric-row"><span class="label">T0 / Cohort</span><span class="val">{c.get('cohort_id')}</span></div>
+      <div class="card-footer">
+        <a href="/api/r2" target="_blank" style="color:#26a69a;">View System C JSON &rarr;</a>
+      </div>
     </div>
   </div>
   <div class="footer">
-    TORG-BOT 3-System Dashboard | Strictly Read-Only | Generated at {report.get('timestamp_iso')}
+    TORG-BOT 3-System Dashboard | Strictly Read-Only | Auto-refreshing every 10s | Generated at {report.get('timestamp_iso')}
   </div>
 </body>
 </html>"""
@@ -650,6 +674,33 @@ class ThreeSystemDashboardHTTPHandler(BaseHTTPRequestHandler):
         elif self.path in ["/status", "/api/status", "/telemetry", "/api/telemetry"]:
             report = self._get_report()
             body = json.dumps(report, indent=2).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path in ["/native", "/api/native", "/systems/native"]:
+            report = self._get_report()
+            data = report.get("systems", {}).get("native", {})
+            body = json.dumps(data, indent=2).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path in ["/shadow", "/api/shadow", "/systems/shadow"]:
+            report = self._get_report()
+            data = report.get("systems", {}).get("shadow", {})
+            body = json.dumps(data, indent=2).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path in ["/r2", "/api/r2", "/systems/r2", "/api/r2_shadow"]:
+            report = self._get_report()
+            data = report.get("systems", {}).get("r2_shadow", {})
+            body = json.dumps(data, indent=2).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
