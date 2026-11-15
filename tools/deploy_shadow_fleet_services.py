@@ -107,7 +107,7 @@ WantedBy=multi-user.target
 """,
 
     "bybit-shadow-dashboard.service": """[Unit]
-Description=TORG-BOT Three-System Comparative Dashboard (127.0.0.1:8085, Termius SSH Tunnel Protected)
+Description=TORG-BOT Three-System Comparative Dashboard (0.0.0.0:8085)
 After=network-online.target
 Wants=network-online.target
 
@@ -117,7 +117,7 @@ User=root
 WorkingDirectory=/opt/bybit-shadow/bybit-alpha-bot-SAM
 Environment="PYTHONPATH=/opt/bybit-shadow/bybit-alpha-bot-SAM:/opt/bybit-shadow/CryptoLab"
 Environment="PYTHONUNBUFFERED=1"
-ExecStart=/opt/bybit-bot/venv/bin/python v3_2/src/runners/run_three_system_dashboard.py --host 127.0.0.1 --port 8085 --native-telemetry /opt/bybit-shadow/telemetry/telemetry_native.json --shadow-telemetry /opt/bybit-shadow/telemetry/telemetry_shadow.json --r2-telemetry /opt/bybit-shadow/telemetry/telemetry_r2.json --cohort-id 20261116_000000_THREE_SYSTEM_SHADOW --t0-utc 2026-11-16T00:00:00Z
+ExecStart=/opt/bybit-bot/venv/bin/python v3_2/src/runners/run_three_system_dashboard.py --host 0.0.0.0 --port 8085 --native-telemetry /opt/bybit-shadow/telemetry/telemetry_native.json --shadow-telemetry /opt/bybit-shadow/telemetry/telemetry_shadow.json --r2-telemetry /opt/bybit-shadow/telemetry/telemetry_r2.json --cohort-id 20261116_000000_THREE_SYSTEM_SHADOW --t0-utc 2026-11-16T00:00:00Z
 Restart=always
 RestartSec=10
 LimitNOFILE=65535
