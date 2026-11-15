@@ -1,0 +1,2 @@
+# Enforce exact binary representation for frozen vendored packages
+vendor/cryptolab_r2/** -text

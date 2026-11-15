@@ -133,7 +133,23 @@ class VPSReadOnlyPreflight:
 
         if self.vps_mode and shutil.which("systemctl"):
             service_statuses = {}
-            for port, unit, required in target_services:
+            v32_active_unit = None
+            for cand in ["bybit-bot-v32.service", "bybit-v32.service"]:
+                try:
+                    p = subprocess.run(
+                        ["systemctl", "is-active", cand],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                    )
+                    state = p.stdout.strip()
+                    service_statuses[cand] = state
+                    if state == "active":
+                        v32_active_unit = cand
+                except Exception as e:
+                    service_statuses[cand] = f"error: {e}"
+
+            for port, unit, required in target_services[1:]:
                 try:
                     p = subprocess.run(
                         ["systemctl", "is-active", unit],
@@ -141,23 +157,21 @@ class VPSReadOnlyPreflight:
                         text=True,
                         timeout=5,
                     )
-                    active_state = p.stdout.strip()
-                    service_statuses[unit] = {
-                        "port": port,
-                        "active_state": active_state,
-                        "required": required,
-                    }
+                    service_statuses[unit] = p.stdout.strip()
                 except Exception as e:
-                    service_statuses[unit] = {"error": str(e), "required": required}
+                    service_statuses[unit] = f"error: {e}"
 
+            port_8083_listening = self._is_port_listening("127.0.0.1", 8083)
             details["services"] = service_statuses
-            v32_state = service_statuses.get("bybit-v32.service", {}).get("active_state")
-            if v32_state == "active":
+            details["port_8083_listening"] = port_8083_listening
+
+            if v32_active_unit or port_8083_listening:
                 status = "PASS"
-                msg = "bybit-v32.service (port 8083) is ACTIVE and RUNNING. Fleet services audited."
+                active_desc = v32_active_unit or "port 8083 listening"
+                msg = f"Original v3.2 ({active_desc}) is ACTIVE and RUNNING. Fleet services audited."
             else:
-                status = "FAIL" if target_services[0][2] else "WARN"
-                msg = f"bybit-v32.service state is '{v32_state}' (expected active)."
+                status = "FAIL"
+                msg = f"Original v3.2 is NOT active (probed bybit-bot-v32, bybit-v32, port 8083)."
         else:
             # Simulated / Local mode: Check if port 8083 is listening
             details["simulated_mode"] = True
