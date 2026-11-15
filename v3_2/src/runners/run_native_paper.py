@@ -104,6 +104,10 @@ class NativePaperRunner:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.telemetry_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # Strict Paper Security: scrub any trading credentials from process environment
+        for k in ["BYBIT_API_KEY", "BYBIT_API_SECRET", "BYBIT_TESTNET_API_KEY", "BYBIT_TESTNET_API_SECRET"]:
+            os.environ.pop(k, None)
+
         # 1. Initialize Bybit Public Client (Read-Only)
         self.client = BybitClient(timeout=10, max_retries=5)
         self.instrument_rules: Dict[str, Dict[str, Decimal]] = self._build_default_rules()

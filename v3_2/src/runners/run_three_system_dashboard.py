@@ -44,7 +44,7 @@ logging.basicConfig(
 logger = logging.getLogger("ThreeSystemDashboard")
 
 DEFAULT_PORT = 8085
-DEFAULT_HOST = "0.0.0.0"
+DEFAULT_HOST = "127.0.0.1"
 DEFAULT_NATIVE_FILE = REPO_ROOT / "reports" / "telemetry_native.json"
 DEFAULT_SHADOW_FILE = REPO_ROOT / "reports" / "telemetry_shadow.json"
 DEFAULT_R2_FILE = REPO_ROOT / "docs" / "integrations" / "r2_shadow" / "telemetry.json"

@@ -36,10 +36,19 @@ def main():
     data_dir = Path("/opt/bybit-shadow/data/cryptolab")
     print(f"Initializing CryptoLab R2 at: {data_dir}")
 
-    # runtime.prepare requires that the destination directory does NOT exist prior to creation
+    # Strict fail-closed guard: NEVER delete existing operational data directory
     if data_dir.exists():
-        print(f"Cleaning existing directory {data_dir}...")
-        shutil.rmtree(data_dir)
+        if (data_dir / "observer.sqlite").exists() or (data_dir / "AUTHORIZATION.json").exists():
+            raise RuntimeError(
+                f"[FAIL_CLOSED_GUARD] Operational CryptoLab data directory already exists at {data_dir}. "
+                f"Destructive re-initialization is forbidden to protect live data."
+            )
+        if any(data_dir.iterdir()):
+            raise RuntimeError(
+                f"[FAIL_CLOSED_GUARD] Non-empty directory exists at {data_dir}. "
+                f"Destructive re-initialization is forbidden."
+            )
+        data_dir.rmdir()
 
     cohort = {
         "status": "PLANNED",

@@ -32,11 +32,14 @@ Wants=network-online.target
 Type=simple
 User=root
 WorkingDirectory=/opt/bybit-shadow/bybit-alpha-bot-SAM
-EnvironmentFile=-/opt/bybit-shadow/bybit-alpha-bot-SAM/.env
 Environment="PYTHONPATH=/opt/bybit-shadow/bybit-alpha-bot-SAM"
 Environment="PYTHONUNBUFFERED=1"
 Environment="PAPER_TRADING=true"
 Environment="EQUITY_USDT=300"
+Environment="BYBIT_API_KEY="
+Environment="BYBIT_API_SECRET="
+Environment="BYBIT_TESTNET_API_KEY="
+Environment="BYBIT_TESTNET_API_SECRET="
 ExecStart=/opt/bybit-bot/venv/bin/python v3_2/src/runners/run_native_paper.py --db-path /opt/bybit-shadow/data/native_ledger.db --telemetry-file /opt/bybit-shadow/telemetry/telemetry_native.json --state-path /opt/bybit-shadow/data/native_state.json --cohort-id 20261116_000000_THREE_SYSTEM_SHADOW --t0-utc 2026-11-16T00:00:00Z --schedule-active
 Restart=always
 RestartSec=10
@@ -57,11 +60,14 @@ Wants=network-online.target
 Type=simple
 User=root
 WorkingDirectory=/opt/bybit-shadow/bybit-alpha-bot-SAM
-EnvironmentFile=-/opt/bybit-shadow/bybit-alpha-bot-SAM/.env
 Environment="PYTHONPATH=/opt/bybit-shadow/bybit-alpha-bot-SAM"
 Environment="PYTHONUNBUFFERED=1"
 Environment="PAPER_TRADING=true"
 Environment="EQUITY_USDT=300"
+Environment="BYBIT_API_KEY="
+Environment="BYBIT_API_SECRET="
+Environment="BYBIT_TESTNET_API_KEY="
+Environment="BYBIT_TESTNET_API_SECRET="
 ExecStart=/opt/bybit-bot/venv/bin/python v3_2/src/runners/run_shadow_paper.py --db-path /opt/bybit-shadow/data/shadow_ledger.db --telemetry-file /opt/bybit-shadow/telemetry/telemetry_shadow.json --state-path /opt/bybit-shadow/data/shadow_state.json --cohort-id 20261116_000000_THREE_SYSTEM_SHADOW --t0-utc 2026-11-16T00:00:00Z --schedule-active
 Restart=always
 RestartSec=10
@@ -82,12 +88,13 @@ Wants=network-online.target
 Type=simple
 User=root
 WorkingDirectory=/opt/bybit-shadow/CryptoLab/research/hunter001_dg001/r2_shadow
-EnvironmentFile=-/opt/bybit-shadow/bybit-alpha-bot-SAM/.env
 Environment="PYTHONPATH=/opt/bybit-shadow/CryptoLab/research/hunter001_dg001/r2_shadow:/opt/bybit-shadow/CryptoLab/research/hunter001_dg001/r2_validation:/opt/bybit-shadow/CryptoLab/research/hunter001_dg001/t01_profit_rank"
 Environment="PYTHONUNBUFFERED=1"
 Environment="OPENBLAS_NUM_THREADS=1"
 Environment="OMP_NUM_THREADS=1"
 Environment="MKL_NUM_THREADS=1"
+Environment="BYBIT_API_KEY="
+Environment="BYBIT_API_SECRET="
 ExecStart=/opt/bybit-bot/venv/bin/python runtime.py run --data-dir /opt/bybit-shadow/data/cryptolab --policy /opt/bybit-shadow/data/cryptolab/AUTHORIZATION.json
 Restart=always
 RestartSec=15
@@ -100,7 +107,7 @@ WantedBy=multi-user.target
 """,
 
     "bybit-shadow-dashboard.service": """[Unit]
-Description=TORG-BOT Three-System Comparative Dashboard (0.0.0.0:8085)
+Description=TORG-BOT Three-System Comparative Dashboard (127.0.0.1:8085, Termius SSH Tunnel Protected)
 After=network-online.target
 Wants=network-online.target
 
@@ -108,10 +115,9 @@ Wants=network-online.target
 Type=simple
 User=root
 WorkingDirectory=/opt/bybit-shadow/bybit-alpha-bot-SAM
-EnvironmentFile=-/opt/bybit-shadow/bybit-alpha-bot-SAM/.env
 Environment="PYTHONPATH=/opt/bybit-shadow/bybit-alpha-bot-SAM:/opt/bybit-shadow/CryptoLab"
 Environment="PYTHONUNBUFFERED=1"
-ExecStart=/opt/bybit-bot/venv/bin/python v3_2/src/runners/run_three_system_dashboard.py --host 0.0.0.0 --port 8085 --native-telemetry /opt/bybit-shadow/telemetry/telemetry_native.json --shadow-telemetry /opt/bybit-shadow/telemetry/telemetry_shadow.json --r2-telemetry /opt/bybit-shadow/telemetry/telemetry_r2.json --cohort-id 20261116_000000_THREE_SYSTEM_SHADOW --t0-utc 2026-11-16T00:00:00Z
+ExecStart=/opt/bybit-bot/venv/bin/python v3_2/src/runners/run_three_system_dashboard.py --host 127.0.0.1 --port 8085 --native-telemetry /opt/bybit-shadow/telemetry/telemetry_native.json --shadow-telemetry /opt/bybit-shadow/telemetry/telemetry_shadow.json --r2-telemetry /opt/bybit-shadow/telemetry/telemetry_r2.json --cohort-id 20261116_000000_THREE_SYSTEM_SHADOW --t0-utc 2026-11-16T00:00:00Z
 Restart=always
 RestartSec=10
 LimitNOFILE=65535
