@@ -101,7 +101,13 @@ class ThreeSystemComparativeDashboard:
         Supports real PortfolioInstance, PaperTraderV32, or mock objects without attribute mismatch.
         If portfolio is None or not started, returns unverified/NOT_STARTED state with None values.
         """
-        if portfolio is None or not is_started:
+        # Check if portfolio is not started or has no equity valuation yet
+        raw_eq = getattr(portfolio, "realized_equity", None)
+        port_is_started = getattr(portfolio, "is_started", True)
+        port_status = getattr(portfolio, "status", None)
+
+        if portfolio is None or not is_started or not port_is_started or raw_eq is None or port_status in ("NOT_STARTED", "NO_DATA"):
+            status_val = port_status or "NOT_STARTED"
             return SystemMetrics(
                 name=name,
                 role=role,
@@ -119,11 +125,11 @@ class ThreeSystemComparativeDashboard:
                 funding_paid_usdt=None,
                 positions_count=0,
                 positions_detail={},
-                data_freshness_status="NOT_STARTED",
-                valuation_status="NOT_STARTED",
+                data_freshness_status=status_val,
+                valuation_status=status_val,
                 error_count=0,
-                last_update_iso=None,
-                notes=f"{name} not started / awaiting verified telemetry at T0",
+                last_update_iso=getattr(portfolio, "last_update_iso", None),
+                notes=f"{name}: {status_val} (Awaiting verified telemetry)",
                 is_active=False,
                 cohort_id=cohort_id or self.expected_cohort_id,
                 t0_utc=t0_utc or self.expected_t0_utc,
@@ -131,7 +137,7 @@ class ThreeSystemComparativeDashboard:
 
         # 1. Equity & Capital
         init_cap = float(getattr(portfolio, "initial_capital", 300.0))
-        eq = float(getattr(portfolio, "realized_equity", init_cap))
+        eq = float(raw_eq)
         pnl = eq - init_cap
         ret = (pnl / init_cap) * 100.0 if init_cap > 0 else 0.0
 

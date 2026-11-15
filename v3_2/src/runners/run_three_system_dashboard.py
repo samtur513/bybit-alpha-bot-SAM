@@ -44,7 +44,7 @@ logging.basicConfig(
 logger = logging.getLogger("ThreeSystemDashboard")
 
 DEFAULT_PORT = 8099
-DEFAULT_HOST = "0.0.0.0"
+DEFAULT_HOST = "127.0.0.1"
 DEFAULT_NATIVE_FILE = REPO_ROOT / "reports" / "telemetry_native.json"
 DEFAULT_SHADOW_FILE = REPO_ROOT / "reports" / "telemetry_shadow.json"
 DEFAULT_R2_FILE = REPO_ROOT / "docs" / "integrations" / "r2_shadow" / "telemetry.json"
@@ -102,6 +102,9 @@ class FileBackedDashboardSupplier:
                 self.positions = d.get("positions_detail", {})
                 self.cohort_id = d.get("cohort_id")
                 self.t0_utc = d.get("t0_utc")
+                self.status = d.get("status", "NOT_STARTED")
+                self.last_update_iso = d.get("timestamp_utc") or d.get("last_update_iso")
+                self.is_started = d.get("status") not in ("NOT_STARTED", "NO_DATA") and self.realized_equity is not None
 
         native_port = FilePortfolioProxy(native_raw) if native_raw else None
         shadow_port = FilePortfolioProxy(shadow_raw) if shadow_raw else None

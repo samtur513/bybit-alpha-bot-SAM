@@ -1,0 +1,63 @@
+{
+  "protocol": "TORG-BOT \u2014 REAL-RUNTIME-WIRING-007",
+  "timestamp_utc": "2026-11-15T11:43:00Z",
+  "base_commit": "d7e6ca2ca5657b93b5978d7f451ab0a48ee5c206",
+  "branch": "feature/real-runtime-wiring-007",
+  "deleted_files": [
+    "v3_2/src/runners/run_r2_observer.py"
+  ],
+  "files": {
+    "reports/real_runtime_wiring_007/REAL_ENGINE_WIRING_PROOF.md": {
+      "sha256": "28c39856c856e0bb31acb8031938e68245113c4c5cd1fd065aad833c00f4115b",
+      "size_bytes": 11911
+    },
+    "reports/real_runtime_wiring_007/SAFE_VPS_PREFLIGHT_PLAN.md": {
+      "sha256": "755614a798e76d8ce8b73393eb902a2ce6f5625064b0992d35075466ae2c543d",
+      "size_bytes": 7898
+    },
+    "reports/real_runtime_wiring_007/THREE_SYSTEM_END_TO_END_TEST.md": {
+      "sha256": "38cb9c503b1349ce3b810de2c35e3016b13687e17ca318bcb1f714dc328e9657",
+      "size_bytes": 9703
+    },
+    "tests/test_r2_telemetry_consumer.py": {
+      "sha256": "ff85a60dffe0df287407d064e71ff13fee729dde37fd28075dfd12a879925b4f",
+      "size_bytes": 8279
+    },
+    "tests/test_real_engine_wiring_007.py": {
+      "sha256": "505dc7c6651d9d4de539d81afa76884bfd76f0753da09d8463d59e426df7e6b3",
+      "size_bytes": 16200
+    },
+    "tests/test_three_system_dashboard.py": {
+      "sha256": "6847faaeafc03f228f0bf2235c3b5d9459faadafacd2740aaf7eed5a85e4ee31",
+      "size_bytes": 9484
+    },
+    "v3_2/src/integrations/r2_consumer.py": {
+      "sha256": "ab4b7e0a75c7597db5f072809315f5fca30cfc922405b0732a9e83459ac03e82",
+      "size_bytes": 21647
+    },
+    "v3_2/src/integrations/three_system_dashboard.py": {
+      "sha256": "82f4b194710416d4c4dc70a3aebd7cb4b8374c999eb0f12c96b74478a9d2e116",
+      "size_bytes": 31814
+    },
+    "v3_2/src/runners/__init__.py": {
+      "sha256": "9315fea794088a95eff8791bb65520d0979419ca14a845e6da9bb2ee3309570a",
+      "size_bytes": 639
+    },
+    "v3_2/src/runners/run_native_paper.py": {
+      "sha256": "5904d5e5f6fbb9a2d652327cf8bc1222be2bbd7ea7461a0ccd19c3ae30561613",
+      "size_bytes": 25215
+    },
+    "v3_2/src/runners/run_shadow_paper.py": {
+      "sha256": "97e97d055e334ccfb05c38fd91a86c9693ca65a09fdaa066eed43589623d5f6b",
+      "size_bytes": 17771
+    },
+    "v3_2/src/runners/run_three_system_dashboard.py": {
+      "sha256": "42c2ff8d9ab2ca2f01e222bb5fe5d874595b84a35f074b952f3fcf8fa60afd47",
+      "size_bytes": 8101
+    },
+    "v3_2/src/shadow/paper_trader_v32_shadow.py": {
+      "sha256": "b9ea2044fba677195dbc536fd089990adf93a1e506ee8bebeb494088d86a2fd2",
+      "size_bytes": 90381
+    }
+  }
+}

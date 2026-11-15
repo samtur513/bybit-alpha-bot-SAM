@@ -46,6 +46,7 @@ import numpy as np
 import pandas as pd
 
 from v3.src.core_v3 import CoreV3Engine, ActivePosition, ClosedTrade, PortfolioSnapshot
+from v3.src.persistence import atomic_json
 from v3.src.kelly_sizing import KellyRiskManager
 from v3.src.multi_scanner import MultiCoinScanner, CoinCandidate
 from v3.src.news_core.news_config import NewsConfig
@@ -1636,14 +1637,10 @@ class V32LegacyShadowEngine:
         }
 
     def save_json_snapshot(self, filepath: Optional[str] = None) -> None:
-        """Atomically saves JSON state checkpoint."""
+        """Atomically saves JSON state checkpoint with retry backoff."""
         target_file = Path(filepath or self.state_file)
-        temp_file = target_file.with_suffix(".tmp")
         data = self._export_state_dict()
-
-        with open(temp_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-        os.replace(temp_file, target_file)
+        atomic_json(target_file, data)
 
     def save_state(self, filepath: Optional[str] = None) -> None:
         """Saves state to JSON file and journals to SQLite."""
