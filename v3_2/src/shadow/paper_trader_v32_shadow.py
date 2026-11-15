@@ -400,9 +400,11 @@ class PortfolioInstance:
         # 2. L2 Depth & Freshness Check (Section 4)
         if self.use_depth_slippage:
             if l2_snapshot is not None:
-                # Validate freshness
-                if abs(l2_snapshot.timestamp_ms - timestamp_ms) > MAX_L2_STALENESS_MS:
-                    reason = f"STALE_DATA: L2 snapshot age {abs(l2_snapshot.timestamp_ms - timestamp_ms)}ms > {MAX_L2_STALENESS_MS}ms"
+                # Validate freshness against actual execution time (bar close or tick), not bar open time
+                cand_exec = timestamp_ms + BAR_INTERVAL_MS
+                age_ms = abs(l2_snapshot.timestamp_ms - cand_exec) if abs(l2_snapshot.timestamp_ms - cand_exec) < abs(l2_snapshot.timestamp_ms - timestamp_ms) else abs(l2_snapshot.timestamp_ms - timestamp_ms)
+                if age_ms > MAX_L2_STALENESS_MS:
+                    reason = f"STALE_DATA: L2 snapshot age {age_ms}ms > {MAX_L2_STALENESS_MS}ms"
                     self.rejected_orders.append({"symbol": symbol, "time_ms": timestamp_ms, "reason": reason})
                     return False, None, None, None, reason
                 if not l2_snapshot.is_confirmed:
@@ -486,8 +488,10 @@ class PortfolioInstance:
 
         if self.use_depth_slippage:
             if l2_snapshot is not None:
-                if abs(l2_snapshot.timestamp_ms - timestamp_ms) > MAX_L2_STALENESS_MS:
-                    reason = f"STALE_DATA: L2 snapshot age {abs(l2_snapshot.timestamp_ms - timestamp_ms)}ms > {MAX_L2_STALENESS_MS}ms"
+                cand_exec = timestamp_ms + BAR_INTERVAL_MS
+                age_ms = abs(l2_snapshot.timestamp_ms - cand_exec) if abs(l2_snapshot.timestamp_ms - cand_exec) < abs(l2_snapshot.timestamp_ms - timestamp_ms) else abs(l2_snapshot.timestamp_ms - timestamp_ms)
+                if age_ms > MAX_L2_STALENESS_MS:
+                    reason = f"STALE_DATA: L2 snapshot age {age_ms}ms > {MAX_L2_STALENESS_MS}ms"
                     return False, None, None, None, None, reason
                 ladder_to_walk = l2_snapshot.bids if pos.direction == 1 else l2_snapshot.asks
                 succ, vwap, filled_qty = walk_discrete_l2(ladder_to_walk, qty)

@@ -78,6 +78,7 @@ class ShadowPaperRunner:
         cohort_id: str = DEFAULT_COHORT_ID,
         t0_utc: str = DEFAULT_T0_UTC,
         symbols: Optional[List[str]] = None,
+        schedule_active: bool = False,
     ):
         self.db_path = Path(db_path).resolve()
         self.telemetry_path = Path(telemetry_path).resolve()
@@ -85,8 +86,17 @@ class ShadowPaperRunner:
         self.initial_capital = initial_capital
         self.cohort_id = cohort_id
         self.t0_utc = t0_utc
+        self.schedule_active = schedule_active
         self.symbols = list(symbols) if symbols else list(DEFAULT_SYMBOLS)
         self._running = False
+
+        # Parse T0 timestamp
+        try:
+            self.t0_dt = datetime.fromisoformat(self.t0_utc.replace("Z", "+00:00"))
+            self.t0_ms = int(self.t0_dt.timestamp() * 1000)
+        except Exception:
+            self.t0_dt = datetime.now(timezone.utc)
+            self.t0_ms = int(self.t0_dt.timestamp() * 1000)
 
         # Ensure parent directories exist
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -144,19 +154,88 @@ class ShadowPaperRunner:
         funding_rate: Optional[Decimal] = None,
         btc_bullish: bool = True,
         btc_bearish: bool = True,
+        is_historical_catchup: bool = False,
     ) -> Dict[str, Any]:
         """
         Processes a closed bar with discrete L2 orderbook quotes:
-        1. Validates real L2 orderbook data: strictly forbids artificial calculation from close
+        1. Protect T0 at engine level (Section P0.1): zero trades/fees before authorized T0.
+        2. Strictly forbids substituting current live orderbook for historical missed candles (Section P0.4).
+        3. Validates real L2 orderbook data: strictly forbids artificial calculation from close
            or arbitrary 50,000 USDT depth (Section P1).
-        2. Checks spread gate (rejects if spread > 0.08%).
-        3. Steps V32LegacyShadowEngine.process_closed_bar_event inside single SQLite transaction.
-        4. Updates candle buffers, positions, fees, and funding.
-        5. Writes atomic state and telemetry.
+        4. Checks spread gate (rejects if spread > 0.08%).
+        5. Steps V32LegacyShadowEngine.process_closed_bar_event inside single SQLite transaction.
+        6. Updates candle buffers, positions, fees, and funding.
+        7. Writes atomic state and telemetry.
         """
         ts = int(bar["timestamp"])
+        bar_close_ms = ts + BAR_INTERVAL_MS
+
+        # 1. Protect T0 at engine level (Section P0.1)
+        if not self.schedule_active or bar_close_ms < self.t0_ms:
+            record = {
+                "timestamp": ts,
+                "open": float(bar["open"]),
+                "high": float(bar["high"]),
+                "low": float(bar["low"]),
+                "close": float(bar["close"]),
+                "volume": float(bar.get("volume", 0.0)),
+                "turnover": float(bar.get("turnover", 0.0)),
+            }
+            prev_df = self.engine.candle_buffers.get(symbol)
+            if prev_df is None or len(prev_df) == 0:
+                df = pd.DataFrame([record])
+            else:
+                df = pd.concat([prev_df, pd.DataFrame([record])], ignore_index=True).tail(500)
+            if len(df) >= min(DONCHIAN_WINDOW, 50):
+                df = prepare_dual_regime_indicators(df, self.classifier, lookback=DONCHIAN_WINDOW)
+            self.engine.candle_buffers[symbol] = df
+            self.engine.last_processed_bar_ts[symbol] = ts
+            self.latest_prices[symbol] = Decimal(str(bar["close"]))
+            self.latest_quote_times[symbol] = time.monotonic()
+            self.has_market_data = True
+            return {
+                "status": "PRE_T0_WARMUP",
+                "symbol": symbol,
+                "ts": ts,
+                "positions_count": 0,
+                "realized_equity": float(self.initial_capital),
+                "reason": f"Pre-T0 warm-up (schedule_active={self.schedule_active}, t0={self.t0_utc})",
+            }
+
+        # 2. Historical catch-up check: strictly forbid current live orderbook for historical past bars (Section P0.4)
+        is_historical = is_historical_catchup or ((time.time() * 1000 - bar_close_ms) > 120000)
+        if is_historical and (best_bid is None or best_ask is None):
+            reason = "REJECTED_HISTORICAL_NO_L2_ORDERBOOK: Forbid substituting current live book for historical catch-up"
+            self.portfolio.rejected_orders.append({"symbol": symbol, "time_ms": ts, "reason": reason})
+            record = {
+                "timestamp": ts,
+                "open": float(bar["open"]),
+                "high": float(bar["high"]),
+                "low": float(bar["low"]),
+                "close": float(bar["close"]),
+                "volume": float(bar.get("volume", 0.0)),
+                "turnover": float(bar.get("turnover", 0.0)),
+            }
+            prev_df = self.engine.candle_buffers.get(symbol)
+            if prev_df is None or len(prev_df) == 0:
+                df = pd.DataFrame([record])
+            else:
+                df = pd.concat([prev_df, pd.DataFrame([record])], ignore_index=True).tail(500)
+            if len(df) >= min(DONCHIAN_WINDOW, 50):
+                df = prepare_dual_regime_indicators(df, self.classifier, lookback=DONCHIAN_WINDOW)
+            self.engine.candle_buffers[symbol] = df
+            self.engine.last_processed_bar_ts[symbol] = ts
+            self.engine.save_state()
+            self.export_telemetry()
+            return {
+                "status": "REJECTED_HISTORICAL_NO_L2_ORDERBOOK",
+                "symbol": symbol,
+                "ts": ts,
+                "reason": reason,
+            }
 
         # P1 Invariant: Only attempt Bybit REST fetch if caller did NOT supply valid best_bid and best_ask
+        # and bar is freshly closed (not historical)
         if best_bid is None or best_ask is None:
             try:
                 ob = self.client.get_orderbook(symbol=symbol, limit=50)
@@ -169,7 +248,7 @@ class ShadowPaperRunner:
                     l2_ladder_asks = [(Decimal(str(p)), Decimal(str(s))) for p, s in asks]
                     depth_bid_usdt = sum(Decimal(str(p)) * Decimal(str(s)) for p, s in bids)
                     depth_ask_usdt = sum(Decimal(str(p)) * Decimal(str(s)) for p, s in asks)
-                    ob_ts = int(ob.get("ts", ts))
+                    ob_ts = int(ob.get("ts", bar_close_ms))
                     l2_snapshot = L2OrderbookSnapshot(
                         timestamp_ms=ob_ts,
                         symbol=symbol,
@@ -366,13 +445,15 @@ class ShadowPaperRunner:
             processed_count = 0
             for sym in self.symbols:
                 try:
-                    raw = self.client.get_kline(sym, interval=CANDLE_INTERVAL, limit=3)
+                    # limit=50 allows catching up on network gaps > 3 hours chronologically (Section P0.4)
+                    raw = self.client.get_kline(sym, interval=CANDLE_INTERVAL, limit=50)
                     if not raw:
                         continue
                     closed_bars = [k for k in raw if int(k[0]) + BAR_INTERVAL_MS <= now_srv]
                     closed_bars.sort(key=lambda k: int(k[0]))
                     for k in closed_bars:
                         bar_ts = int(k[0])
+                        bar_close_ms = bar_ts + BAR_INTERVAL_MS
                         if bar_ts > self.engine.last_processed_bar_ts.get(sym, 0):
                             bar_dict = {
                                 "timestamp": bar_ts,
@@ -383,7 +464,11 @@ class ShadowPaperRunner:
                                 "volume": float(k[5]),
                                 "turnover": float(k[6]),
                             }
-                            # Fetch authentic L2 orderbook snapshot for Shadow execution
+                            # Check if bar is historical past bar (> 120s ago)
+                            is_hist = (now_srv - bar_close_ms) > 120000
+
+                            # Fetch authentic L2 orderbook snapshot ONLY for fresh live bars.
+                            # For past historical catch-up bars, FORBID substituting current live orderbook (Section P0.4)!
                             best_bid = None
                             best_ask = None
                             depth_bid_usdt = None
@@ -391,28 +476,29 @@ class ShadowPaperRunner:
                             l2_ladder_bids = None
                             l2_ladder_asks = None
                             l2_snap = None
-                            try:
-                                ob = self.client.get_orderbook(symbol=sym, limit=50)
-                                bids = ob.get("b", [])
-                                asks = ob.get("a", [])
-                                if bids and asks:
-                                    best_bid = Decimal(str(bids[0][0]))
-                                    best_ask = Decimal(str(asks[0][0]))
-                                    l2_ladder_bids = [(Decimal(str(p)), Decimal(str(s))) for p, s in bids]
-                                    l2_ladder_asks = [(Decimal(str(p)), Decimal(str(s))) for p, s in asks]
-                                    depth_bid_usdt = sum(Decimal(str(p)) * Decimal(str(s)) for p, s in bids)
-                                    depth_ask_usdt = sum(Decimal(str(p)) * Decimal(str(s)) for p, s in asks)
-                                    ob_ts = int(ob.get("ts", bar_ts))
-                                    l2_snap = L2OrderbookSnapshot(
-                                        timestamp_ms=ob_ts,
-                                        symbol=sym,
-                                        bids=l2_ladder_bids,
-                                        asks=l2_ladder_asks,
-                                        is_confirmed=True,
-                                    )
-                                    self.latest_l2_times[sym] = time.monotonic()
-                            except Exception as ob_err:
-                                logger.debug(f"Orderbook fetch failed for {sym}: {ob_err}")
+                            if not is_hist:
+                                try:
+                                    ob = self.client.get_orderbook(symbol=sym, limit=50)
+                                    bids = ob.get("b", [])
+                                    asks = ob.get("a", [])
+                                    if bids and asks:
+                                        best_bid = Decimal(str(bids[0][0]))
+                                        best_ask = Decimal(str(asks[0][0]))
+                                        l2_ladder_bids = [(Decimal(str(p)), Decimal(str(s))) for p, s in bids]
+                                        l2_ladder_asks = [(Decimal(str(p)), Decimal(str(s))) for p, s in asks]
+                                        depth_bid_usdt = sum(Decimal(str(p)) * Decimal(str(s)) for p, s in bids)
+                                        depth_ask_usdt = sum(Decimal(str(p)) * Decimal(str(s)) for p, s in asks)
+                                        ob_ts = int(ob.get("ts", bar_close_ms))
+                                        l2_snap = L2OrderbookSnapshot(
+                                            timestamp_ms=ob_ts,
+                                            symbol=sym,
+                                            bids=l2_ladder_bids,
+                                            asks=l2_ladder_asks,
+                                            is_confirmed=True,
+                                        )
+                                        self.latest_l2_times[sym] = time.monotonic()
+                                except Exception as ob_err:
+                                    logger.debug(f"Orderbook fetch failed for {sym}: {ob_err}")
 
                             f_rate = funding_map.get(sym)
                             res = self.ingest_closed_bar(
@@ -428,6 +514,7 @@ class ShadowPaperRunner:
                                 funding_rate=f_rate,
                                 btc_bullish=btc_bullish,
                                 btc_bearish=btc_bearish,
+                                is_historical_catchup=is_hist,
                             )
                             if res.get("status") in ["FULL", "PROCESSED", "NO_SIGNAL"]:
                                 processed_count += 1
@@ -489,7 +576,7 @@ class ShadowPaperRunner:
                 "last_update_iso": now_dt.isoformat(),
                 "notes": f"Realistic Shadow Execution: {status} (Awaiting confirmed L2 orderbook depth)",
                 "is_active": is_fresh,
-                "schedule_active": False,  # Protocol 007 Invariant: T0 candidate only!
+                "schedule_active": bool(self.schedule_active),  # Protocol 009 Invariant
             }
         else:
             eq = float(self.portfolio.realized_equity)
@@ -538,7 +625,7 @@ class ShadowPaperRunner:
                 "last_update_iso": now_dt.isoformat(),
                 "notes": "Linear Perpetuals, Discrete L2 depth walking, 0.10% VIP0 retail fee tier, active engine",
                 "is_active": True,
-                "schedule_active": False,
+                "schedule_active": bool(self.schedule_active),
             }
 
         atomic_json(self.telemetry_path, telemetry)
@@ -588,20 +675,25 @@ def main():
     parser.add_argument("--interval", type=int, default=5, help="Telemetry heartbeat interval in seconds")
     parser.add_argument("--db-path", type=str, default=None, help="Path to isolated SQLite database")
     parser.add_argument("--telemetry-file", type=str, default=None, help="Path to telemetry output JSON")
+    parser.add_argument("--state-path", type=str, default=None, help="Path to state JSON")
     parser.add_argument("--cohort-id", type=str, default=DEFAULT_COHORT_ID, help="Canonical cohort ID")
     parser.add_argument("--t0-utc", type=str, default=DEFAULT_T0_UTC, help="Scheduled T0 UTC")
+    parser.add_argument("--schedule-active", action="store_true", default=False, help="Explicitly activate study schedule at T0")
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parents[3]
     db_path = Path(args.db_path) if args.db_path else repo_root / "reports" / DEFAULT_DB_NAME
     telemetry_path = Path(args.telemetry_file) if args.telemetry_file else repo_root / "reports" / DEFAULT_TELEMETRY_NAME
+    state_path = Path(args.state_path) if args.state_path else None
 
     runner = ShadowPaperRunner(
         db_path=db_path,
         telemetry_path=telemetry_path,
+        state_path=state_path,
         initial_capital=Decimal("300.000000"),
         cohort_id=args.cohort_id,
         t0_utc=args.t0_utc,
+        schedule_active=args.schedule_active,
     )
 
     if args.dry_run:

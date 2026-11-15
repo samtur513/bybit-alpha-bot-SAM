@@ -44,6 +44,12 @@ from v3.src.persistence import atomic_json
 from v3_2.src.config import DEFAULT_SYMBOLS, DONCHIAN_WINDOW, CANDLE_INTERVAL, BAR_INTERVAL_MS
 from v3_2.src.regime_classifier import MarketRegimeClassifier
 from v3_2.src.paper_trader_v32 import prepare_dual_regime_indicators
+from v3_2.src.range_engine import (
+    RangeMeanReversionEngine,
+    RangeActivePosition,
+    RangeClosedTrade,
+    RangeLimitOrder,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -72,6 +78,7 @@ class NativePaperRunner:
         cohort_id: str = DEFAULT_COHORT_ID,
         t0_utc: str = DEFAULT_T0_UTC,
         symbols: Optional[List[str]] = None,
+        schedule_active: bool = False,
     ):
         self.db_path = Path(db_path).resolve()
         self.telemetry_path = Path(telemetry_path).resolve()
@@ -79,8 +86,17 @@ class NativePaperRunner:
         self.initial_capital = initial_capital
         self.cohort_id = cohort_id
         self.t0_utc = t0_utc
+        self.schedule_active = schedule_active
         self.symbols = list(symbols) if symbols else list(DEFAULT_SYMBOLS)
         self._running = False
+
+        # Parse T0 timestamp
+        try:
+            self.t0_dt = datetime.fromisoformat(self.t0_utc.replace("Z", "+00:00"))
+            self.t0_ms = int(self.t0_dt.timestamp() * 1000)
+        except Exception:
+            self.t0_dt = datetime.now(timezone.utc)
+            self.t0_ms = int(self.t0_dt.timestamp() * 1000)
 
         # Ensure parent directories exist
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -90,7 +106,7 @@ class NativePaperRunner:
         self.client = BybitClient(timeout=10, max_retries=5)
         self.instrument_rules: Dict[str, Dict[str, Decimal]] = self._build_default_rules()
 
-        # 2. Initialize Real Quantitative CoreV3 Engine
+        # 2. Initialize Real Quantitative Dual-Regime Engines (Trend + Range)
         self.engine = CoreV3Engine(
             initial_capital=self.initial_capital,
             instrument_rules=self.instrument_rules,
@@ -110,12 +126,26 @@ class NativePaperRunner:
         )
         self.engine.scanner.min_volume_ratio = 1.2
 
+        # Range Mean-Reversion Submodule (Original v3.2 Dual-Regime Maker Engine)
+        self.range_engine = RangeMeanReversionEngine(
+            initial_capital=self.initial_capital,
+            instrument_rules=self.instrument_rules,
+            risk_per_trade_pct=Decimal("0.01"),
+            max_concurrent_positions=2,
+            max_portfolio_leverage=Decimal("3.5"),
+            maker_fee=Decimal("0.000324"),
+            taker_fee=Decimal("0.00090"),
+            slippage=Decimal("0.0002"),
+        )
+
         # 3. Indicator Buffers & State Tracking
         self.classifier = MarketRegimeClassifier()
         self.candle_buffers: Dict[str, pd.DataFrame] = {}
         self.last_processed_bar_ts: Dict[str, int] = {s: 0 for s in self.symbols}
         self.latest_prices: Dict[str, Decimal] = {}
         self.latest_quote_times: Dict[str, float] = {}
+        self.latest_regimes: Dict[str, Any] = {}
+        self.settled_funding_windows: Set[Tuple[str, int]] = set()
         self.has_market_data = False
         self.btc_trend_status = "NEUTRAL"
 
@@ -202,27 +232,74 @@ class NativePaperRunner:
                         processed_at_ms INTEGER NOT NULL
                     );
                 """)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS native_state_journal (
+                        journal_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        saved_at_ms INTEGER NOT NULL,
+                        saved_at_utc TEXT NOT NULL,
+                        event_key TEXT NOT NULL,
+                        realized_equity REAL NOT NULL,
+                        peak_equity REAL NOT NULL,
+                        state_json TEXT NOT NULL
+                    );
+                """)
         finally:
             conn.close()
 
     def load_state(self) -> None:
-        """Restores state from state_file and synchronizes with SQLite."""
-        if self.state_path.exists():
+        """
+        Authoritatively recovers state from SQLite native_state_journal first (Section P0.3),
+        falling back to disk JSON only if the SQLite journal is empty.
+        """
+        recovered_from_sqlite = False
+        if self.db_path.exists():
+            try:
+                conn = sqlite3.connect(str(self.db_path), timeout=30.0)
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        SELECT state_json FROM native_state_journal
+                        ORDER BY journal_id DESC LIMIT 1;
+                    """)
+                    row = cursor.fetchone()
+                    if row and row[0]:
+                        data = json.loads(row[0])
+                        self.engine.load_from_dict(data.get("engine", {}))
+                        if "range_engine" in data and hasattr(self.range_engine, "load_dict"):
+                            self.range_engine.load_dict(data["range_engine"])
+                        self.last_processed_bar_ts = data.get("last_processed_bar_ts", self.last_processed_bar_ts)
+                        recovered_from_sqlite = True
+                        logger.info(
+                            f"Authoritatively restored Native state from SQLite native_state_journal: "
+                            f"Realized Equity={self.engine.realized_equity:.4f}, Positions={len(self.engine.open_positions)}"
+                        )
+                finally:
+                    conn.close()
+            except Exception as e:
+                logger.warning(f"Authoritative SQLite state load fallback: {e}")
+
+        if not recovered_from_sqlite and self.state_path.exists():
             try:
                 data = json.loads(self.state_path.read_text(encoding="utf-8"))
                 self.engine.load_from_dict(data.get("engine", {}))
+                if "range_engine" in data and hasattr(self.range_engine, "load_dict"):
+                    self.range_engine.load_dict(data["range_engine"])
                 self.last_processed_bar_ts = data.get("last_processed_bar_ts", self.last_processed_bar_ts)
-                logger.info(f"Restored Native state: Realized Equity={self.engine.realized_equity:.4f}, Positions={len(self.engine.open_positions)}")
+                logger.info(
+                    f"Restored Native state from JSON {self.state_path}: "
+                    f"Realized Equity={self.engine.realized_equity:.4f}, Positions={len(self.engine.open_positions)}"
+                )
             except Exception as e:
                 logger.warning(f"Failed to load state from {self.state_path}: {e}")
 
     def save_state(self) -> None:
         """Atomically saves state snapshot to JSON."""
         state_data = {
-            "version": "3.2-NATIVE",
+            "version": "3.2-NATIVE-DUAL-REGIME",
             "saved_at_iso": datetime.now(timezone.utc).isoformat(),
             "cohort_id": self.cohort_id,
             "engine": self.engine.to_dict(),
+            "range_engine": self.range_engine.to_dict() if hasattr(self.range_engine, "to_dict") else {},
             "last_processed_bar_ts": self.last_processed_bar_ts,
         }
         atomic_json(self.state_path, state_data)
@@ -239,16 +316,54 @@ class NativePaperRunner:
     ) -> Dict[str, Any]:
         """
         Processes a closed bar through the real Donchian quantitative cycle:
-        1. Authoritative SQLite Dedup check (Read-Only).
-        2. Indicator computation with zero-lookahead shift(1).
-        3. Signal generation & Half-Kelly position sizing.
-        4. Position entry / stop / trailing / cascade TP / fast scratch management.
-        5. Single atomic commit to native_journal, native_trades, AND native_dedup (Section P2).
+        1. Protect T0 at engine level (Section P0.1): zero trades/fees before authorized T0.
+        2. Authoritative SQLite Dedup check (Read-Only).
+        3. Dual-Regime Indicator computation with zero-lookahead shift(1) (Section P0.2).
+        4. Regime classification & stepping of Range Mean-Reversion vs Trend Breakout.
+        5. Single atomic commit to native_journal, native_trades, native_state_journal, AND native_dedup (Section P0.3 & P2).
+        6. Crash recovery after commit without JSON desynchronization.
         """
         ts = int(bar["timestamp"])
+        bar_close_ms = ts + BAR_INTERVAL_MS
         event_key = f"{symbol}_{ts}"
 
-        # 1. Authoritative SQLite Dedup Check (Read-Only)
+        # 1. Protect T0 at engine level (Section P0.1)
+        # Until explicit authorization (schedule_active=True) and arrival of T0,
+        # ONLY data warm-up is permitted. Zero trades, zero fees, zero equity change.
+        if not self.schedule_active or bar_close_ms < self.t0_ms:
+            record = {
+                "timestamp": ts,
+                "open": float(bar["open"]),
+                "high": float(bar["high"]),
+                "low": float(bar["low"]),
+                "close": float(bar["close"]),
+                "volume": float(bar.get("volume", 1500.0)),
+                "turnover": float(bar.get("turnover", float(bar["close"]) * 1500.0)),
+            }
+            prev_df = self.candle_buffers.get(symbol)
+            if prev_df is None or len(prev_df) == 0:
+                df = pd.DataFrame([record])
+            else:
+                df = pd.concat([prev_df, pd.DataFrame([record])], ignore_index=True).tail(500)
+
+            if len(df) >= min(DONCHIAN_WINDOW, 50):
+                df = prepare_dual_regime_indicators(df, self.classifier, lookback=DONCHIAN_WINDOW)
+            self.candle_buffers[symbol] = df
+            self.last_processed_bar_ts[symbol] = ts
+            self.latest_prices[symbol] = current_price or Decimal(str(bar["close"]))
+            self.latest_quote_times[symbol] = time.monotonic()
+            self.has_market_data = True
+
+            return {
+                "status": "PRE_T0_WARMUP",
+                "symbol": symbol,
+                "ts": ts,
+                "positions_count": 0,
+                "realized_equity": float(self.initial_capital),
+                "reason": f"Pre-T0 warm-up (schedule_active={self.schedule_active}, t0={self.t0_utc})",
+            }
+
+        # 2. Authoritative SQLite Dedup Check (Read-Only)
         conn = sqlite3.connect(str(self.db_path), timeout=30.0)
         try:
             cursor = conn.cursor()
@@ -290,27 +405,61 @@ class NativePaperRunner:
         if funding_rate is not None and funding_rate != Decimal("0"):
             self.engine.process_funding_event(symbol, funding_rate, ts, price)
 
-        # Step quantitative engine
+        # 3. Dual-Regime indicator preparation and classification (Section P0.2)
         bar_dict = df.iloc[-1].to_dict() if len(df) > 0 else record
         price_map = {symbol: price}
-        prev_trades_count = len(self.engine.closed_trades)
 
-        self.engine.process_bar_event(
-            timestamp=ts,
-            bars={symbol: bar_dict},
-            next_open_prices=price_map,
-            manage_positions=True,
-            btc_bullish=btc_bullish,
-            btc_bearish=btc_bearish,
+        reg = self.classifier.classify_bar(
+            symbol=symbol,
+            adx=float(bar_dict.get("adx", 0)),
+            bb_mid=float(bar_dict.get("bb_mid", 0)),
+            bb_upper=float(bar_dict.get("bb_upper", 0)),
+            bb_lower=float(bar_dict.get("bb_lower", 0)),
+            bb_width_pctl=float(bar_dict.get("bb_width_pctl", 0.5)),
+            kc_upper=float(bar_dict.get("kc_upper", 0)),
+            kc_lower=float(bar_dict.get("kc_lower", 0)),
+            rsi=float(bar_dict.get("rsi", 50.0)),
+            atr=float(bar_dict.get("atr", 0)),
+            volume=float(bar_dict.get("volume", 0)),
+            volume_sma=float(bar_dict.get("volume_sma", 1.0)),
         )
+        self.latest_regimes[symbol] = reg
 
+        # 4. Step Range Mean-Reversion Engine (Chop / Range)
+        is_chop = reg.regime.value in ["CHOP", "COMPRESSION", "RANGE"]
+        prev_range_trades = len(self.range_engine.closed_trades) if hasattr(self, "range_engine") else 0
+        if is_chop and hasattr(self, "range_engine"):
+            active_trend_syms = list(self.engine.open_positions.keys())
+            self.range_engine.step_bar(
+                timestamp=ts,
+                bars={symbol: bar_dict},
+                next_bars={symbol: record},
+                next_open_prices=price_map,
+                regimes={symbol: reg},
+                btc_bullish=btc_bullish,
+                btc_bearish=btc_bearish,
+                active_trend_symbols=active_trend_syms,
+            )
+        new_range_trades = self.range_engine.closed_trades[prev_range_trades:] if hasattr(self, "range_engine") else []
+
+        # 5. Step Trend Engine on symbols not held by Range
+        prev_trades_count = len(self.engine.closed_trades)
+        if not hasattr(self, "range_engine") or symbol not in self.range_engine.open_positions:
+            self.engine.process_bar_event(
+                timestamp=ts,
+                bars={symbol: bar_dict},
+                next_open_prices=price_map,
+                manage_positions=True,
+                btc_bullish=btc_bullish,
+                btc_bearish=btc_bearish,
+            )
         new_closed_trades = self.engine.closed_trades[prev_trades_count:]
 
         # Fault Injection Point (Before Commit) - Section P2 verification
         if fault_injection_point == "before_commit":
             raise RuntimeError("FAULT_INJECTION: Crash immediately before commit in NativePaperRunner")
 
-        # 2. Single Atomic Transaction: Trades + Journal + Dedup Key
+        # 6. Single Atomic Transaction: Trades + Journal + State Journal + Dedup Key (Section P0.3)
         conn = sqlite3.connect(str(self.db_path), timeout=30.0)
         try:
             with conn:  # BEGIN ... COMMIT
@@ -338,13 +487,39 @@ class NativePaperRunner:
                         float(fees),
                         float(funding),
                         float(trade.net_pnl),
-                        trade.exit_reason,
+                        f"TREND_{trade.exit_reason}",
+                    ))
+
+                for r_trade in new_range_trades:
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO native_trades (
+                            trade_id, symbol, direction, entry_time_ms, exit_time_ms,
+                            entry_price, exit_price, qty, gross_pnl, fees_paid,
+                            funding_pnl, net_pnl, exit_reason
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    """, (
+                        f"R_{r_trade.symbol}_{r_trade.entry_time}",
+                        r_trade.symbol,
+                        r_trade.direction,
+                        r_trade.entry_time,
+                        r_trade.exit_time,
+                        float(r_trade.entry_price),
+                        float(r_trade.exit_price),
+                        float(r_trade.qty),
+                        float(r_trade.net_pnl + r_trade.fees_paid),
+                        float(r_trade.fees_paid),
+                        float(r_trade.funding_pnl),
+                        float(r_trade.net_pnl),
+                        f"RANGE_{r_trade.exit_reason}",
                     ))
 
                 # Checkpoint journal
                 now_dt = datetime.now(timezone.utc)
                 snap = self.engine.get_portfolio_snapshot(self.latest_prices)
-                unrealized = float(snap.equity - self.engine.realized_equity)
+                range_net = (self.range_engine.get_equity(self.latest_prices) - self.range_engine.initial_capital) if hasattr(self, "range_engine") else Decimal("0")
+                comb_equity = float(snap.equity + range_net)
+                unrealized = float(comb_equity - float(self.initial_capital))
+
                 cursor.execute("""
                     INSERT INTO native_journal (
                         timestamp_ms, iso_time, cohort_id, realized_equity,
@@ -357,15 +532,42 @@ class NativePaperRunner:
                     self.cohort_id,
                     float(self.engine.realized_equity),
                     unrealized,
-                    float(snap.equity),
+                    comb_equity,
                     float(self.engine.realized_equity),
                     float(self.total_fees),
                     float(self.total_funding),
                     float(self.engine.peak_equity),
-                    len(self.engine.open_positions),
+                    len(self.engine.open_positions) + (len(self.range_engine.open_positions) if hasattr(self, "range_engine") else 0),
                     3,
                     f"closed_bar_{symbol}",
                 ))
+
+                # Insert authoritative state snapshot in the SAME transaction! (Section P0.3)
+                state_dict = {
+                    "version": "3.2-NATIVE-DUAL-REGIME",
+                    "saved_at_iso": now_dt.isoformat(),
+                    "cohort_id": self.cohort_id,
+                    "engine": self.engine.to_dict(),
+                    "range_engine": self.range_engine.to_dict() if hasattr(self.range_engine, "to_dict") else {},
+                    "last_processed_bar_ts": self.last_processed_bar_ts,
+                }
+                cursor.execute("""
+                    INSERT INTO native_state_journal (
+                        saved_at_ms, saved_at_utc, event_key, realized_equity,
+                        peak_equity, state_json
+                    ) VALUES (?, ?, ?, ?, ?, ?);
+                """, (
+                    int(now_dt.timestamp() * 1000),
+                    now_dt.isoformat(),
+                    event_key,
+                    float(self.engine.realized_equity),
+                    float(self.engine.peak_equity),
+                    json.dumps(state_dict, default=str),
+                ))
+
+                # Fault Injection Point (Before Commit)
+                if fault_injection_point == "before_commit":
+                    raise RuntimeError("FAULT_INJECTION: Crash immediately before commit")
 
                 # Atomically commit dedup key inside the SAME transaction!
                 cursor.execute("""
@@ -375,6 +577,10 @@ class NativePaperRunner:
         finally:
             conn.close()
 
+        # Fault Injection Point (After Commit Before JSON) - Section P0.3 verification
+        if fault_injection_point == "after_commit_before_json":
+            raise RuntimeError("FAULT_INJECTION: Crash after SQLite commit but before JSON write in NativePaperRunner")
+
         self.save_state()
         self.export_telemetry()
 
@@ -382,7 +588,7 @@ class NativePaperRunner:
             "status": "PROCESSED",
             "symbol": symbol,
             "ts": ts,
-            "positions_count": len(self.engine.open_positions),
+            "positions_count": len(self.engine.open_positions) + (len(self.range_engine.open_positions) if hasattr(self, "range_engine") else 0),
             "realized_equity": float(self.engine.realized_equity),
         }
 
@@ -497,17 +703,22 @@ class NativePaperRunner:
             tickers = self.client.get_tickers_detail(category="linear")
             ticker_map = {t["symbol"]: t for t in tickers if "symbol" in t}
 
-            # 1. Update live quotes for all symbols in universe
+            # 1. Update live quotes for all symbols in universe and settle instrument-specific funding
             quotes_to_update = {}
-            funding_map = {}
             for sym in self.symbols:
                 t = ticker_map.get(sym)
                 if t and t.get("lastPrice"):
                     try:
                         p = Decimal(str(t["lastPrice"]))
                         quotes_to_update[sym] = p
-                        if t.get("fundingRate"):
-                            funding_map[sym] = Decimal(str(t["fundingRate"]))
+                        if t.get("fundingRate") and t.get("nextFundingTime"):
+                            f_rate = Decimal(str(t["fundingRate"]))
+                            next_f_ts = int(t["nextFundingTime"])
+                            settlement_key = (sym, next_f_ts)
+                            if settlement_key not in self.settled_funding_windows and now_srv >= next_f_ts:
+                                if sym in self.engine.open_positions:
+                                    self.engine.process_funding_event(sym, f_rate, now_srv, p)
+                                self.settled_funding_windows.add(settlement_key)
                     except Exception:
                         pass
 
@@ -524,11 +735,11 @@ class NativePaperRunner:
                 btc_bullish = bool(btc_close >= btc_ema50)
                 btc_bearish = bool(btc_close <= btc_ema50)
 
-            # 3. Poll for newly closed 1h bars
+            # 3. Poll for newly closed 1h bars (limit=50 catches up on network gaps > 3 hours without loss)
             processed_count = 0
             for sym in self.symbols:
                 try:
-                    raw = self.client.get_kline(sym, interval=CANDLE_INTERVAL, limit=3)
+                    raw = self.client.get_kline(sym, interval=CANDLE_INTERVAL, limit=50)
                     if not raw:
                         continue
                     # Filter only strictly closed bars: open_ts + 3600000 <= now_srv
@@ -547,12 +758,11 @@ class NativePaperRunner:
                                 "volume": float(k[5]),
                                 "turnover": float(k[6]),
                             }
-                            f_rate = funding_map.get(sym)
                             res = self.ingest_closed_bar(
                                 symbol=sym,
                                 bar=bar_dict,
                                 current_price=quotes_to_update.get(sym),
-                                funding_rate=f_rate,
+                                funding_rate=None,
                                 btc_bullish=btc_bullish,
                                 btc_bearish=btc_bearish,
                             )
@@ -616,7 +826,7 @@ class NativePaperRunner:
                 "last_update_iso": now_dt.isoformat(),
                 "notes": f"Native Quantitative Cycle: {status} (Awaiting verified market data)",
                 "is_active": is_fresh,
-                "schedule_active": False,  # Protocol 007 Invariant: T0 is candidate only!
+                "schedule_active": bool(self.schedule_active),  # Protocol 009 Invariant
             }
         else:
             snap = self.engine.get_portfolio_snapshot(self.latest_prices)
@@ -668,7 +878,7 @@ class NativePaperRunner:
                 "last_update_iso": now_dt.isoformat(),
                 "notes": "Linear Perpetuals, Half-Kelly sizing, 0.09% MNT taker fee tier, active engine",
                 "is_active": True,
-                "schedule_active": False,
+                "schedule_active": bool(self.schedule_active),
             }
 
         atomic_json(self.telemetry_path, telemetry)
@@ -718,20 +928,25 @@ def main():
     parser.add_argument("--interval", type=int, default=5, help="Telemetry heartbeat interval in seconds")
     parser.add_argument("--db-path", type=str, default=None, help="Path to isolated SQLite database")
     parser.add_argument("--telemetry-file", type=str, default=None, help="Path to telemetry output JSON")
+    parser.add_argument("--state-path", type=str, default=None, help="Path to state JSON")
     parser.add_argument("--cohort-id", type=str, default=DEFAULT_COHORT_ID, help="Canonical cohort ID")
     parser.add_argument("--t0-utc", type=str, default=DEFAULT_T0_UTC, help="Scheduled T0 UTC")
+    parser.add_argument("--schedule-active", action="store_true", default=False, help="Explicitly activate study schedule at T0")
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parents[3]
     db_path = Path(args.db_path) if args.db_path else repo_root / "reports" / DEFAULT_DB_NAME
     telemetry_path = Path(args.telemetry_file) if args.telemetry_file else repo_root / "reports" / DEFAULT_TELEMETRY_NAME
+    state_path = Path(args.state_path) if args.state_path else None
 
     runner = NativePaperRunner(
         db_path=db_path,
         telemetry_path=telemetry_path,
+        state_path=state_path,
         initial_capital=Decimal("300.000000"),
         cohort_id=args.cohort_id,
         t0_utc=args.t0_utc,
+        schedule_active=args.schedule_active,
     )
 
     if args.dry_run:

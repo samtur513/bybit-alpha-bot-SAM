@@ -47,7 +47,7 @@ CANONICAL_T0_UTC = "2026-11-17T00:00:00+00:00"
 # Marked: [SYNTHETIC TEST DATASET - ISOLATED OFFLINE HARNESS]
 # ==============================================================================
 
-def generate_synthetic_candles(n: int = 130, base_price: float = 50000.0) -> List[Dict[str, Any]]:
+def generate_synthetic_candles(n: int = 130, base_price: float = 50000.0, t0: int = 1794873600000) -> List[Dict[str, Any]]:
     """
     [SYNTHETIC TEST DATASET]
     Generates synthetic 1h candles:
@@ -56,7 +56,6 @@ def generate_synthetic_candles(n: int = 130, base_price: float = 50000.0) -> Lis
     - 122..129: Explosive breakout above Donchian upper channel with volume surge (>= 1.2 * SMA20)
     """
     candles = []
-    t0 = 1700000000000  # Fixed synthetic epoch ms
     p = base_price
     for i in range(n):
         if i < 120:
@@ -114,6 +113,7 @@ def test_p0_continuous_stream_new_candle_triggers_auto_decisions(tmp_path):
         cohort_id=CANONICAL_COHORT_ID,
         t0_utc=CANONICAL_T0_UTC,
         symbols=["BTCUSDT"],
+        schedule_active=True,
     )
 
     # 2. Setup Shadow Runner
@@ -126,6 +126,7 @@ def test_p0_continuous_stream_new_candle_triggers_auto_decisions(tmp_path):
         cohort_id=CANONICAL_COHORT_ID,
         t0_utc=CANONICAL_T0_UTC,
         symbols=["BTCUSDT"],
+        schedule_active=True,
     )
 
     # Warm up with bars 0..121 (consolidation and pre-breakout trend)
@@ -200,6 +201,7 @@ def test_p0_p4_position_accompanying_and_mtm_equity(tmp_path):
         cohort_id=CANONICAL_COHORT_ID,
         t0_utc=CANONICAL_T0_UTC,
         symbols=["BTCUSDT"],
+        schedule_active=True,
     )
 
     # Ingest up to and including breakout bar 122
@@ -262,6 +264,7 @@ def test_p1_p4_missing_l2_zero_fictitious_fill_and_position_preservation(tmp_pat
         cohort_id=CANONICAL_COHORT_ID,
         t0_utc=CANONICAL_T0_UTC,
         symbols=["BTCUSDT"],
+        schedule_active=True,
     )
 
     # Ingest consolidation bars 0..121
@@ -337,6 +340,7 @@ def test_p2_p4_native_atomicity_and_process_fault_injection(tmp_path):
         cohort_id=CANONICAL_COHORT_ID,
         t0_utc=CANONICAL_T0_UTC,
         symbols=["BTCUSDT"],
+        schedule_active=True,
     )
 
     # Ingest consolidation 0..121
@@ -378,6 +382,7 @@ def test_p2_p4_native_atomicity_and_process_fault_injection(tmp_path):
         cohort_id=CANONICAL_COHORT_ID,
         t0_utc=CANONICAL_T0_UTC,
         symbols=["BTCUSDT"],
+        schedule_active=True,
     )
     recovered_runner.candle_buffers = pre_crash_buffers
 
