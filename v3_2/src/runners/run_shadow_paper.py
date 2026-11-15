@@ -268,7 +268,7 @@ class ShadowPaperRunner:
         # P1 Strict Invariant: Zero fictitious execution data
         # If orderbook is missing, record unconfirmed depth / rejection without losing positions.
         if best_bid is None or best_ask is None or best_bid <= Decimal("0") or best_ask <= Decimal("0"):
-            reason = "MISSING_L2_ORDERBOOK: No confirmed L2 orderbook or verified bids/asks available"
+            reason = "HISTORICAL_GAP_RECOVERY: Retroactive order placement forbidden (no L2 depth at past timestamp)" if is_historical_catchup else "MISSING_L2_ORDERBOOK: No confirmed L2 orderbook or verified bids/asks available"
             self.portfolio.rejected_orders.append({"symbol": symbol, "time_ms": ts, "reason": reason})
             # Advance candle buffer so indicator continuity is maintained
             record = {
@@ -292,10 +292,11 @@ class ShadowPaperRunner:
             self.engine.save_state()
             self.export_telemetry()
             return {
-                "status": "REJECTED_MISSING_L2_ORDERBOOK",
+                "status": "HISTORICAL_RECOVERED" if is_historical_catchup else "REJECTED_MISSING_L2_ORDERBOOK",
                 "symbol": symbol,
                 "ts": ts,
                 "reason": reason,
+                "missed_opportunity": bool(is_historical_catchup),
             }
 
         mid = (best_bid + best_ask) / Decimal("2.0")
@@ -423,9 +424,21 @@ class ShadowPaperRunner:
                 t = ticker_map.get(sym)
                 if t and t.get("lastPrice"):
                     try:
-                        quotes_to_update[sym] = Decimal(str(t["lastPrice"]))
+                        p = Decimal(str(t["lastPrice"]))
+                        quotes_to_update[sym] = p
                         if t.get("fundingRate"):
-                            funding_map[sym] = Decimal(str(t["fundingRate"]))
+                            f_rate = Decimal(str(t["fundingRate"]))
+                            funding_map[sym] = f_rate
+                            if t.get("nextFundingTime"):
+                                next_f_ts = int(t["nextFundingTime"])
+                                if now_srv >= next_f_ts:
+                                    self.portfolio.apply_funding(
+                                        symbol=sym,
+                                        funding_rate=f_rate,
+                                        mark_price=p,
+                                        exchange_ts=next_f_ts,
+                                        explicit_settlement_ts=next_f_ts,
+                                    )
                     except Exception:
                         pass
 
@@ -613,6 +626,7 @@ class ShadowPaperRunner:
                 "net_pnl_usdt": round(pnl, 4),
                 "net_return_pct": round(ret_pct, 3),
                 "mdd_pct": mdd,
+                "peak_equity_usdt": round(peak, 4),
                 "cash_usdt": round(float(getattr(self.portfolio, "balance", eq)), 4),
                 "exposure_pct": exposure_pct,
                 "turnover_usdt": float(getattr(self.portfolio, "total_turnover", 0.0)),

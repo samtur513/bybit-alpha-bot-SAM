@@ -89,20 +89,26 @@ class FileBackedDashboardSupplier:
         native_raw = self._read_json_file(self.native_file)
         shadow_raw = self._read_json_file(self.shadow_file)
 
-        # Build mock-like wrapper if raw JSON exists
+        # Build proxy wrapper preserving confirmed telemetry fields directly (Section P0.4)
         class FilePortfolioProxy:
             def __init__(self, d: Dict[str, Any]):
                 self.realized_equity = d.get("equity_usdt")
                 self.balance = d.get("cash_usdt")
                 self.initial_capital = d.get("initial_capital_usdt", 300.0)
+                self.net_pnl = d.get("net_pnl_usdt")
+                self.net_return_pct = d.get("net_return_pct")
+                self.mdd_pct = d.get("mdd_pct") if d.get("mdd_pct") is not None else d.get("max_drawdown_pct")
+                self.peak_equity = d.get("peak_equity_usdt") or d.get("peak_equity") or d.get("equity_usdt", 300.0)
+                self.exposure_pct = d.get("exposure_pct")
+                self.slippage_cost = d.get("slippage_cost_usdt", 0.0)
                 self.total_fees = d.get("fees_paid_usdt", 0.0)
                 self.total_funding = d.get("funding_paid_usdt", 0.0)
                 self.total_turnover = d.get("turnover_usdt", 0.0)
-                self.peak_equity = d.get("equity_usdt", 300.0)
+                self.positions_count = d.get("positions_count", 0)
                 self.positions = d.get("positions_detail", {})
                 self.cohort_id = d.get("cohort_id")
                 self.t0_utc = d.get("t0_utc")
-                self.status = d.get("status", "NOT_STARTED")
+                self.status = d.get("status") or d.get("data_freshness_status", "NOT_STARTED")
                 self.last_update_iso = d.get("timestamp_utc") or d.get("last_update_iso")
                 self.is_started = d.get("status") not in ("NOT_STARTED", "NO_DATA") and self.realized_equity is not None
 

@@ -163,8 +163,12 @@ class VPSReadOnlyPreflight:
             details["simulated_mode"] = True
             is_listening_8083 = self._is_port_listening("127.0.0.1", 8083)
             details["port_8083_listening"] = is_listening_8083
-            status = "PASS"
-            msg = f"Local simulation: port 8083 check completed (listening={is_listening_8083})."
+            if is_listening_8083:
+                status = "PASS"
+                msg = "Local simulation: port 8083 is listening."
+            else:
+                status = "WARN"
+                msg = "Local simulation: port 8083 (bybit-v32.service) is NOT listening locally. Strict PASS requires verified systemctl on VPS 150.241.98.70."
 
         res = PreflightCheckResult(
             check_name="running_services",
@@ -433,6 +437,8 @@ class VPSReadOnlyPreflight:
         runtime_py = list(found_path.glob("**/runtime.py"))
         if runtime_py:
             try:
+                if str(found_path) not in sys.path:
+                    sys.path.insert(0, str(found_path))
                 import importlib.util
                 spec = importlib.util.spec_from_file_location("cryptolab_runtime", str(runtime_py[0]))
                 if spec and spec.loader:
@@ -448,12 +454,13 @@ class VPSReadOnlyPreflight:
             except Exception as e:
                 details["verify_frozen_error"] = str(e)
 
-        if missing_files:
+        vf_status = details.get("verify_frozen", {}).get("status")
+        if missing_files or vf_status != "PASS":
             status = "FAIL"
-            msg = f"CryptoLab missing critical contract files: {missing_files}"
+            msg = f"CryptoLab verification failed: missing_files={missing_files}, verify_frozen={vf_status}"
         else:
             status = "PASS"
-            msg = f"CryptoLab confirmed intact at {found_path} ({len(file_hashes)} contract files verified)."
+            msg = f"CryptoLab confirmed intact at {found_path} ({len(file_hashes)} contract files verified, verify_frozen=PASS)."
 
         res = PreflightCheckResult(
             check_name="cryptolab_immutability",
@@ -485,12 +492,15 @@ class VPSReadOnlyPreflight:
         warn_checks = [r for r in self.results if r.status == "WARN"]
         pass_checks = [r for r in self.results if r.status == "PASS"]
 
-        if failed_checks:
+        # Crucial Condition: Local Windows simulation cannot issue operational "GO"
+        if not self.vps_mode or platform.system().lower() != "linux":
+            overall_verdict = "SIMULATION_LOCAL_AWAITING_VPS_EXECUTION"
+        elif failed_checks:
             overall_verdict = "NO-GO"
         elif warn_checks:
             overall_verdict = "GO-WITH-WARNINGS"
         else:
-            overall_verdict = "GO"
+            overall_verdict = "GO_FOR_VPS_PREFLIGHT"
 
         summary = {
             "timestamp_utc": self.timestamp,
@@ -527,16 +537,29 @@ class VPSReadOnlyPreflight:
 
 
 def main():
-    preflight = VPSReadOnlyPreflight()
+    import argparse
+    parser = argparse.ArgumentParser(description="Read-Only VPS Preflight Audit")
+    parser.add_argument("--output", type=str, default=None, help="Path for preflight JSON evidence output")
+    parser.add_argument("--vps-mode", action="store_true", help="Force VPS mode for testing on Linux")
+    args = parser.parse_args()
+
+    preflight = VPSReadOnlyPreflight(vps_mode=args.vps_mode)
     summary = preflight.run_all_checks()
 
-    # Save read-only audit report to artifacts / reports if dir exists
-    out_dir = Path("reports/final_start_blockers_009")
-    if out_dir.exists():
-        out_file = out_dir / "vps_preflight_audit.json"
-        with open(out_file, "w", encoding="utf-8") as f:
-            json.dump(summary, f, indent=2)
-        logger.info(f"Saved preflight report to {out_file}")
+    # Determine destination: separate local simulation from real VPS evidence
+    if args.output:
+        out_file = Path(args.output).resolve()
+    else:
+        out_dir = Path("reports/final_start_blockers_009")
+        if preflight.vps_mode and platform.system().lower() == "linux":
+            out_file = out_dir / "evidence" / "vps_evidence.json"
+        else:
+            out_file = out_dir / "local_simulation_preflight.json"
+
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_file, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2)
+    logger.info(f"Saved preflight report to {out_file}")
 
     if summary["overall_verdict"] == "NO-GO":
         sys.exit(1)

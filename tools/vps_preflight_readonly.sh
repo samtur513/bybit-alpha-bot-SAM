@@ -65,7 +65,9 @@ if ! command -v python3 >/dev/null 2>&1; then
     PYTHON_EXEC="python"
 fi
 
-$PYTHON_EXEC "${SCRIPT_DIR}/vps_preflight_readonly_check.py"
+OUTPUT_FILE="${1:-reports/final_start_blockers_009/evidence/vps_evidence.json}"
+mkdir -p "$(dirname "$OUTPUT_FILE")"
+$PYTHON_EXEC "${SCRIPT_DIR}/vps_preflight_readonly_check.py" --output "$OUTPUT_FILE" --vps-mode
 
 echo ""
 echo "=============================================================================="

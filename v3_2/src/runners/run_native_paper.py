@@ -31,6 +31,8 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+import math
+import numpy as np
 import pandas as pd
 
 # Ensure repository root is on sys.path
@@ -149,8 +151,12 @@ class NativePaperRunner:
         self.latest_quote_times: Dict[str, float] = {}
         self.latest_regimes: Dict[str, Any] = {}
         self.settled_funding_windows: Set[Tuple[str, int]] = set()
+        self.missed_opportunities: List[Dict[str, Any]] = []
         self.has_market_data = False
         self.btc_trend_status = "NEUTRAL"
+
+        # Wire unified pre-execution capacity checks into both engines (P0.2)
+        self._wire_unified_capacity_checks()
 
         # 4. Initialize Database & Recover State
         self._init_sqlite_schema()
@@ -218,6 +224,172 @@ class NativePaperRunner:
             Decimal("0"),
         ) if hasattr(self, "range_engine") else Decimal("0")
         return trend_notional + range_notional
+
+    def _wire_unified_capacity_checks(self) -> None:
+        """
+        P0.2: Enforces that BEFORE EVERY VIRTUAL EXECUTION:
+        1. Unified equity & available capital are positive.
+        2. Proposed gross exposure does not exceed the 3.5x leverage cap.
+        3. Total open risk does not exceed portfolio risk budget (10%).
+        4. Mutual exclusion prevents both engines from holding the same symbol concurrently.
+        """
+        def trend_capacity_check(sym: str, price: Decimal, qty: Decimal, prices: Dict[str, Decimal]) -> bool:
+            if not self.schedule_active:
+                return False
+            # Check mutual exclusion
+            if hasattr(self, "range_engine") and (sym in self.range_engine.open_positions or sym in self.range_engine.pending_orders):
+                logger.info(f"CAPACITY_REJECTED: Symbol {sym} already active in Range module")
+                return False
+            # Check unified equity
+            unified_eq = self.get_unified_equity()
+            if unified_eq <= Decimal("0"):
+                logger.warning(f"CAPACITY_REJECTED: Unified equity {unified_eq} <= 0")
+                return False
+            # Check proposed cumulative gross notional
+            current_gross = self.get_total_gross_notional()
+            new_notional = qty * price
+            proposed_gross = current_gross + new_notional
+            max_notional = unified_eq * Decimal("3.5")
+            if proposed_gross > max_notional:
+                logger.warning(f"LEVERAGE_CAP_EXCEEDED: proposed {proposed_gross:.2f} > cap {max_notional:.2f}")
+                return False
+            # Check portfolio risk budget (sum of open stop risks)
+            current_open_risk = sum(
+                (p.current_qty * abs(p.entry_price - p.current_stop) for p in self.engine.open_positions.values()),
+                Decimal("0"),
+            ) + (
+                sum(
+                    (getattr(p, "current_qty", getattr(p, "qty", Decimal("0"))) * abs(p.entry_price - getattr(p, "stop_loss", p.entry_price))
+                     for p in self.range_engine.open_positions.values()),
+                    Decimal("0"),
+                ) if hasattr(self, "range_engine") else Decimal("0")
+            )
+            # 10% maximum portfolio stop loss risk
+            if (current_open_risk + (qty * price * Decimal("0.02"))) > (unified_eq * Decimal("0.10")):
+                logger.warning("PORTFOLIO_RISK_BUDGET_EXCEEDED: New position would exceed 10% risk budget")
+                return False
+            return True
+
+        def range_capacity_check(sym: str, notional: Decimal, prices: Dict[str, Decimal]) -> bool:
+            if not self.schedule_active:
+                return False
+            # Mutual exclusion
+            if sym in self.engine.open_positions:
+                logger.info(f"CAPACITY_REJECTED: Symbol {sym} already active in Trend module")
+                return False
+            unified_eq = self.get_unified_equity()
+            if unified_eq <= Decimal("0"):
+                return False
+            current_gross = self.get_total_gross_notional()
+            proposed_gross = current_gross + notional
+            max_notional = unified_eq * Decimal("3.5")
+            if proposed_gross > max_notional:
+                logger.warning(f"LEVERAGE_CAP_EXCEEDED: proposed {proposed_gross:.2f} > cap {max_notional:.2f}")
+                return False
+            return True
+
+        self.engine._capacity = trend_capacity_check
+        if hasattr(self, "range_engine"):
+            self.range_engine._capacity_check = range_capacity_check
+
+    def _record_missed_opportunity(
+        self,
+        symbol: str,
+        timestamp_ms: int,
+        strategy: str,
+        direction: int,
+        intended_price: Decimal,
+        reason: str,
+    ) -> None:
+        """P0.1: Records a missed trade opportunity during historical catchup / gap recovery."""
+        record = {
+            "symbol": symbol,
+            "timestamp_ms": timestamp_ms,
+            "strategy": strategy,
+            "direction": direction,
+            "intended_price": float(intended_price),
+            "reason": reason,
+        }
+        self.missed_opportunities.append(record)
+        logger.info(f"MISSED_OPPORTUNITY recorded for {symbol} at {timestamp_ms}: {reason}")
+        try:
+            conn = sqlite3.connect(str(self.db_path), timeout=10.0)
+            with conn:
+                conn.execute("""
+                    INSERT INTO native_missed_opportunities (
+                        symbol, timestamp_ms, strategy, direction, intended_price, reason
+                    ) VALUES (?, ?, ?, ?, ?, ?);
+                """, (symbol, timestamp_ms, strategy, direction, float(intended_price), reason))
+            conn.close()
+        except Exception as e:
+            logger.warning(f"Failed to record missed opportunity in SQLite: {e}")
+
+    def process_funding_settlement(
+        self,
+        symbol: str,
+        mark_price: Decimal,
+        funding_rate: Optional[Decimal],
+        settlement_time_ms: int,
+        funding_interval_ms: Optional[int] = None,
+    ) -> Decimal:
+        """
+        P0.3: Settles funding based on actual instrument schedule:
+        1. Refuses accrual when funding_rate is unknown/unconfirmed/NaN.
+        2. Ensures no duplicate charges via settlement_key (symbol, settlement_time_ms).
+        3. Verifies position ownership at settlement moment (entry_time <= settlement_time_ms).
+        4. Saves settlement record to SQLite table native_funding_settlements.
+        """
+        if funding_rate is None:
+            logger.warning(f"REJECTED_UNKNOWN_FUNDING_RATE: Symbol {symbol} has None funding rate at {settlement_time_ms}")
+            return Decimal("0")
+        try:
+            f_rate_float = float(funding_rate)
+            if not np.isfinite(f_rate_float):
+                logger.warning(f"REJECTED_UNKNOWN_FUNDING_RATE: Symbol {symbol} rate {funding_rate} is not finite")
+                return Decimal("0")
+        except Exception:
+            return Decimal("0")
+
+        settlement_key = (symbol, settlement_time_ms)
+        if settlement_key in self.settled_funding_windows:
+            return Decimal("0")  # Already settled
+
+        # Position ownership check in Trend engine
+        pos = self.engine.open_positions.get(symbol)
+        if pos is None or pos.entry_time > settlement_time_ms:
+            return Decimal("0")  # Not holding position at settlement moment
+
+        # Calculate payment: pos.current_qty * mark_price * funding_rate * (-pos.direction)
+        payment = pos.current_qty * mark_price * funding_rate * (-Decimal(str(pos.direction)))
+        pos.funding_pnl += payment
+        self.engine.realized_equity += payment
+
+        # Record settlement in memory and SQLite
+        self.settled_funding_windows.add(settlement_key)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        try:
+            conn = sqlite3.connect(str(self.db_path), timeout=10.0)
+            with conn:
+                conn.execute("""
+                    INSERT OR REPLACE INTO native_funding_settlements (
+                        symbol, settlement_time_ms, funding_rate, mark_price,
+                        position_qty, payment, created_at_utc
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?);
+                """, (
+                    symbol,
+                    settlement_time_ms,
+                    float(funding_rate),
+                    float(mark_price),
+                    float(pos.current_qty),
+                    float(payment),
+                    now_iso,
+                ))
+            conn.close()
+        except Exception as e:
+            logger.warning(f"Failed to record funding settlement in SQLite: {e}")
+
+        logger.info(f"FUNDING_SETTLED: {symbol} at {settlement_time_ms}: payment={payment:.6f} USDT")
+        return payment
 
     def _build_default_rules(self) -> Dict[str, Dict[str, Decimal]]:
         rules = {}
@@ -290,6 +462,29 @@ class NativePaperRunner:
                         state_json TEXT NOT NULL
                     );
                 """)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS native_missed_opportunities (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        symbol TEXT NOT NULL,
+                        timestamp_ms INTEGER NOT NULL,
+                        strategy TEXT NOT NULL,
+                        direction INTEGER NOT NULL,
+                        intended_price REAL NOT NULL,
+                        reason TEXT NOT NULL
+                    );
+                """)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS native_funding_settlements (
+                        symbol TEXT NOT NULL,
+                        settlement_time_ms INTEGER NOT NULL,
+                        funding_rate REAL NOT NULL,
+                        mark_price REAL NOT NULL,
+                        position_qty REAL NOT NULL,
+                        payment REAL NOT NULL,
+                        created_at_utc TEXT NOT NULL,
+                        PRIMARY KEY(symbol, settlement_time_ms)
+                    );
+                """)
         finally:
             conn.close()
 
@@ -304,6 +499,23 @@ class NativePaperRunner:
                 conn = sqlite3.connect(str(self.db_path), timeout=30.0)
                 try:
                     cursor = conn.cursor()
+                    # Authoritatively recover funding settlements and missed opportunities from their own tables
+                    try:
+                        cursor.execute("SELECT symbol, settlement_time_ms FROM native_funding_settlements;")
+                        for f_sym, f_ts in cursor.fetchall():
+                            self.settled_funding_windows.add((f_sym, int(f_ts)))
+                    except Exception:
+                        pass
+                    try:
+                        cursor.execute("SELECT symbol, timestamp_ms, strategy, direction, intended_price, reason FROM native_missed_opportunities;")
+                        for r in cursor.fetchall():
+                            self.missed_opportunities.append({
+                                "symbol": r[0], "timestamp_ms": r[1], "strategy": r[2],
+                                "direction": r[3], "intended_price": r[4], "reason": r[5]
+                            })
+                    except Exception:
+                        pass
+
                     cursor.execute("""
                         SELECT state_json FROM native_state_journal
                         ORDER BY journal_id DESC LIMIT 1;
@@ -318,7 +530,7 @@ class NativePaperRunner:
                         if "peak_equity" in data:
                             self.peak_equity = Decimal(str(data["peak_equity"]))
                         if "settled_funding_windows" in data:
-                            self.settled_funding_windows = set(tuple(x) for x in data["settled_funding_windows"])
+                            self.settled_funding_windows.update(tuple(x) for x in data["settled_funding_windows"])
                         recovered_from_sqlite = True
                         logger.info(
                             f"Authoritatively restored Native state from SQLite native_state_journal: "
@@ -464,19 +676,22 @@ class NativePaperRunner:
         self.latest_quote_times[symbol] = time.monotonic()
         self.has_market_data = True
 
-        # Process Funding Payment strictly on 8-hour boundary (00:00, 08:00, 16:00 UTC)
-        if bar_close_ms % 28_800_000 == 0:
-            funding_window_id = bar_close_ms
-            settlement_key = (symbol, funding_window_id)
-            if settlement_key not in self.settled_funding_windows:
-                if funding_rate is not None and funding_rate != Decimal("0"):
-                    if symbol in self.engine.open_positions:
-                        self.engine.process_funding_event(
-                            timestamp=funding_window_id,
-                            funding_rates={symbol: funding_rate},
-                            current_prices={symbol: price},
-                        )
-                    self.settled_funding_windows.add(settlement_key)
+        # Process Funding Payment based on confirmed schedule and rates (Section P0.3)
+        funding_interval_ms = 8 * 3600 * 1000
+        is_funding_boundary = (bar_close_ms % funding_interval_ms == 0)
+        if funding_rate is not None:
+            if is_funding_boundary or ((bar_close_ms % 3600000 == 0) and funding_rate != Decimal("0")):
+                self.process_funding_settlement(
+                    symbol=symbol,
+                    mark_price=price,
+                    funding_rate=funding_rate,
+                    settlement_time_ms=bar_close_ms,
+                    funding_interval_ms=funding_interval_ms,
+                )
+        elif is_funding_boundary:
+            logger.warning(
+                f"REJECTED_UNKNOWN_FUNDING_RATE: Symbol {symbol} reached boundary {bar_close_ms} but funding_rate is None"
+            )
 
         # 3. Dual-Regime indicator preparation and classification (Section P0.2)
         bar_dict = df.iloc[-1].to_dict() if len(df) > 0 else record
@@ -515,8 +730,8 @@ class NativePaperRunner:
         prev_range_trades = len(self.range_engine.closed_trades) if hasattr(self, "range_engine") else 0
         if is_chop and hasattr(self, "range_engine"):
             active_trend_syms = list(self.engine.open_positions.keys())
-            if not can_open_new:
-                # Max leverage reached: manage existing positions only, forbid new orders
+            if is_historical or not can_open_new:
+                # Historical gap or max leverage reached: manage existing positions only, forbid new orders
                 self.range_engine.manage_positions_on_bar(ts, {symbol: bar_dict}, {symbol: reg})
             else:
                 self.range_engine.step_bar(
@@ -535,14 +750,48 @@ class NativePaperRunner:
         prev_trades_count = len(self.engine.closed_trades)
         range_held = hasattr(self, "range_engine") and (symbol in self.range_engine.open_positions or symbol in self.range_engine.pending_orders)
         if not range_held:
-            self.engine.process_bar_event(
-                timestamp=ts,
-                bars={symbol: bar_dict},
-                next_open_prices=price_map,
-                manage_positions=True,
-                btc_bullish=btc_bullish,
-                btc_bearish=btc_bearish,
-            )
+            if is_historical:
+                # P0.1: Check if breakout signal triggers during historical gap, record MISSED_OPPORTUNITY
+                cand = self.engine.scanner.evaluate_symbol_bar(
+                    symbol=symbol,
+                    close=float(bar_dict["close"]),
+                    upper_channel=float(bar_dict.get("upper", np.nan)),
+                    lower_channel=float(bar_dict.get("lower", np.nan)),
+                    ema_fast=float(bar_dict.get("ema_fast", np.nan)),
+                    ema_slow=float(bar_dict.get("ema_slow", np.nan)),
+                    atr=float(bar_dict.get("atr", np.nan)),
+                    adx=float(bar_dict.get("adx", np.nan)),
+                    volume=float(bar_dict.get("volume", 0)),
+                    volume_sma=float(bar_dict.get("volume_sma", 1)),
+                )
+                if cand is not None and ((cand.direction == 1 and btc_bullish) or (cand.direction == -1 and btc_bearish)) and symbol not in self.engine.open_positions:
+                    self._record_missed_opportunity(
+                        symbol=symbol,
+                        timestamp_ms=ts,
+                        strategy="TREND_BREAKOUT",
+                        direction=cand.direction,
+                        intended_price=price,
+                        reason="HISTORICAL_GAP_RECOVERY: Retroactive order placement forbidden",
+                    )
+                # Manage existing open positions only, block new entries
+                self.engine.process_bar_event(
+                    timestamp=ts,
+                    bars={symbol: bar_dict},
+                    next_open_prices=price_map,
+                    manage_positions=True,
+                    btc_bullish=btc_bullish,
+                    btc_bearish=btc_bearish,
+                    blocked_symbols=list(self.symbols),
+                )
+            else:
+                self.engine.process_bar_event(
+                    timestamp=ts,
+                    bars={symbol: bar_dict},
+                    next_open_prices=price_map,
+                    manage_positions=True,
+                    btc_bullish=btc_bullish,
+                    btc_bearish=btc_bearish,
+                )
         new_closed_trades = self.engine.closed_trades[prev_trades_count:]
 
         # Fault Injection Point (Before Commit) - Section P2 verification
@@ -678,11 +927,12 @@ class NativePaperRunner:
         self.export_telemetry()
 
         return {
-            "status": "PROCESSED",
+            "status": "HISTORICAL_RECOVERED" if is_historical else "PROCESSED",
             "symbol": symbol,
             "ts": ts,
             "positions_count": len(self.engine.open_positions) + (len(self.range_engine.open_positions) if hasattr(self, "range_engine") else 0),
             "realized_equity": float(cash),
+            "missed_opportunities_count": len(self.missed_opportunities),
         }
 
     def update_quotes(
@@ -724,7 +974,9 @@ class NativePaperRunner:
                 pos = self.range_engine.open_positions.pop(sym)
                 exit_fee = pos.qty * price * self.range_engine.taker_fee
                 gross_pnl = (price - pos.entry_price) * pos.qty * Decimal(str(pos.direction))
+                p_qty = getattr(pos, "current_qty", getattr(pos, "qty", Decimal("0")))
                 net_pnl = gross_pnl - pos.entry_fees - exit_fee
+                hold_hrs = max(0.1, (ts - pos.entry_time) / 3600000.0) if ts > pos.entry_time else 1.0
                 trade = RangeClosedTrade(
                     symbol=sym,
                     direction=pos.direction,
@@ -732,9 +984,10 @@ class NativePaperRunner:
                     exit_time=ts,
                     entry_price=pos.entry_price,
                     exit_price=price,
-                    qty=pos.qty,
+                    qty=p_qty,
                     net_pnl=net_pnl,
                     exit_reason="STOP_LOSS_TICK",
+                    hold_hours=hold_hrs,
                     fees_paid=pos.entry_fees + exit_fee,
                     funding_pnl=Decimal("0"),
                 )
@@ -929,15 +1182,13 @@ class NativePaperRunner:
                         if t.get("fundingRate") and t.get("nextFundingTime"):
                             f_rate = Decimal(str(t["fundingRate"]))
                             next_f_ts = int(t["nextFundingTime"])
-                            settlement_key = (sym, next_f_ts)
-                            if settlement_key not in self.settled_funding_windows and now_srv >= next_f_ts:
-                                if sym in self.engine.open_positions:
-                                    self.engine.process_funding_event(
-                                        timestamp=next_f_ts,
-                                        funding_rates={sym: f_rate},
-                                        current_prices={sym: p},
-                                    )
-                                self.settled_funding_windows.add(settlement_key)
+                            if now_srv >= next_f_ts:
+                                self.process_funding_settlement(
+                                    symbol=sym,
+                                    mark_price=p,
+                                    funding_rate=f_rate,
+                                    settlement_time_ms=next_f_ts,
+                                )
                     except Exception:
                         pass
 
@@ -1099,6 +1350,7 @@ class NativePaperRunner:
                 "net_pnl_usdt": round(pnl, 4),
                 "net_return_pct": round(ret_pct, 3),
                 "mdd_pct": mdd,
+                "peak_equity_usdt": round(float(self.peak_equity), 4),
                 "cash_usdt": round(cash, 4),
                 "exposure_pct": exposure_pct,
                 "turnover_usdt": float(self.total_turnover),
@@ -1107,6 +1359,7 @@ class NativePaperRunner:
                 "funding_paid_usdt": round(float(self.total_funding), 4),
                 "positions_count": len(self.engine.open_positions) + (len(self.range_engine.open_positions) if hasattr(self, "range_engine") else 0),
                 "positions_detail": pos_detail,
+                "missed_opportunities_count": len(self.missed_opportunities),
                 "data_freshness_status": "FRESH",
                 "valuation_status": "FRESH",
                 "error_count": 0,

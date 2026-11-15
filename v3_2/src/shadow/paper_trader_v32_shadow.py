@@ -570,28 +570,59 @@ class PortfolioInstance:
 
         return True, fill_price, qty, fee, net_trade_pnl, f"Closed {exit_reason} net: {net_trade_pnl:.2f}"
 
-    def apply_funding(self, symbol: str, funding_rate: Decimal, mark_price: Decimal, exchange_ts: int) -> Decimal:
+    def apply_funding(
+        self,
+        symbol: str,
+        funding_rate: Optional[Decimal],
+        mark_price: Decimal,
+        exchange_ts: int,
+        funding_interval_ms: int = 8 * 3600 * 1000,
+        explicit_settlement_ts: Optional[int] = None,
+    ) -> Decimal:
         """
-        Accrues 8-hour perpetual funding payment strictly once per 8-hour interval (00:00, 08:00, 16:00 UTC)
-        based on actual position hold time.
+        P0.3: Accrues perpetual funding payment based on actual instrument schedule:
+        1. Refuses accrual when funding_rate is unknown/unconfirmed/NaN.
+        2. Strictly checks instrument boundary or explicit settlement timestamp.
+        3. Verifies position ownership at settlement moment (entry_time <= boundary_ts).
+        4. Deduplicates via settled_funding_windows to prevent duplicate accrual.
         """
-        if symbol not in self.positions or funding_rate == Decimal("0"):
+        if symbol not in self.positions:
             return Decimal("0")
 
-        # In Bybit Linear Perpetuals, funding is settled at 00:00, 08:00, 16:00 UTC.
-        # Check whether exchange_ts or candle close time aligns with an 8h funding boundary.
-        is_exact_boundary = (exchange_ts % FUNDING_INTERVAL_MS == 0)
-        bar_close_ms = exchange_ts + BAR_INTERVAL_MS
-        is_bar_close_boundary = (bar_close_ms % FUNDING_INTERVAL_MS == 0)
-
-        if not (is_exact_boundary or is_bar_close_boundary):
+        if funding_rate is None:
+            reason = f"REJECTED_UNKNOWN_FUNDING_RATE: Symbol {symbol} has None funding rate at {exchange_ts}"
+            self.rejected_orders.append({"symbol": symbol, "time_ms": exchange_ts, "reason": reason})
             return Decimal("0")
 
-        boundary_ts = bar_close_ms if is_bar_close_boundary else exchange_ts
-        window_id = boundary_ts // FUNDING_INTERVAL_MS
+        try:
+            f_float = float(funding_rate)
+            if not np.isfinite(f_float):
+                reason = f"REJECTED_UNKNOWN_FUNDING_RATE: Symbol {symbol} funding rate {funding_rate} is not finite"
+                self.rejected_orders.append({"symbol": symbol, "time_ms": exchange_ts, "reason": reason})
+                return Decimal("0")
+        except Exception:
+            return Decimal("0")
+
+        if funding_rate == Decimal("0"):
+            return Decimal("0")
+
+        if explicit_settlement_ts is not None:
+            boundary_ts = explicit_settlement_ts
+            window_id = boundary_ts // funding_interval_ms
+        else:
+            is_exact_boundary = (exchange_ts % funding_interval_ms == 0)
+            bar_close_ms = exchange_ts + BAR_INTERVAL_MS
+            is_bar_close_boundary = (bar_close_ms % funding_interval_ms == 0)
+
+            if not (is_exact_boundary or is_bar_close_boundary):
+                return Decimal("0")
+
+            boundary_ts = bar_close_ms if is_bar_close_boundary else exchange_ts
+            window_id = boundary_ts // funding_interval_ms
+
         settlement_key = (symbol, window_id)
         if settlement_key in self.settled_funding_windows:
-            return Decimal("0")  # Already settled this 8h window
+            return Decimal("0")  # Already settled
 
         pos = self.positions[symbol]
         # Only positions open at or prior to the settlement timestamp are eligible
@@ -874,6 +905,19 @@ class V32LegacyShadowEngine:
                 cursor.execute("""
                     CREATE INDEX IF NOT EXISTS idx_shadow_journal_ts
                     ON shadow_state_journal (saved_at_ms);
+                """)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS shadow_funding_settlements (
+                        portfolio TEXT NOT NULL,
+                        symbol TEXT NOT NULL,
+                        settlement_time_ms INTEGER NOT NULL,
+                        funding_rate REAL NOT NULL,
+                        mark_price REAL NOT NULL,
+                        position_qty REAL NOT NULL,
+                        payment REAL NOT NULL,
+                        created_at_utc TEXT NOT NULL,
+                        PRIMARY KEY(portfolio, symbol, settlement_time_ms)
+                    );
                 """)
         finally:
             conn.close()
@@ -1693,6 +1737,18 @@ class V32LegacyShadowEngine:
                 dedup_rows = cursor.fetchall()
                 if dedup_rows:
                     self.processed_event_ids.update(r[0] for r in dedup_rows)
+
+                # Also restore settled funding keys from shadow_funding_settlements
+                try:
+                    cursor.execute("SELECT portfolio, symbol, settlement_time_ms FROM shadow_funding_settlements;")
+                    for p_name, s_sym, s_ts in cursor.fetchall():
+                        window_id = s_ts // (8 * 3600 * 1000)
+                        if p_name == "NATIVE":
+                            self.native_portfolio.settled_funding_windows.add((s_sym, window_id))
+                        elif p_name == "SHADOW":
+                            self.shadow_portfolio.settled_funding_windows.add((s_sym, window_id))
+                except Exception:
+                    pass
             except Exception as e:
                 logger.warning(f"Error querying SQLite state journal: {e}")
             finally:
@@ -1728,9 +1784,9 @@ class V32LegacyShadowEngine:
         self.native_portfolio.closed_trades = [
             TradeRecord.from_dict(t) for t in nat_data.get("closed_trades", [])
         ]
-        self.native_portfolio.settled_funding_windows = {
+        self.native_portfolio.settled_funding_windows.update(
             tuple(x) for x in nat_data.get("settled_funding_windows", [])
-        }
+        )
         self.native_portfolio.cooldown_tracker = dict(nat_data.get("cooldowns", {}))
 
         # Restore Shadow
@@ -1747,9 +1803,9 @@ class V32LegacyShadowEngine:
         self.shadow_portfolio.closed_trades = [
             TradeRecord.from_dict(t) for t in sha_data.get("closed_trades", [])
         ]
-        self.shadow_portfolio.settled_funding_windows = {
+        self.shadow_portfolio.settled_funding_windows.update(
             tuple(x) for x in sha_data.get("settled_funding_windows", [])
-        }
+        )
         self.shadow_portfolio.cooldown_tracker = dict(sha_data.get("cooldowns", {}))
 
         return True

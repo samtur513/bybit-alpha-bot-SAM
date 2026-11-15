@@ -138,8 +138,8 @@ class ThreeSystemComparativeDashboard:
         # 1. Equity & Capital
         init_cap = float(getattr(portfolio, "initial_capital", 300.0))
         eq = float(raw_eq)
-        pnl = eq - init_cap
-        ret = (pnl / init_cap) * 100.0 if init_cap > 0 else 0.0
+        pnl = float(portfolio.net_pnl) if hasattr(portfolio, "net_pnl") and portfolio.net_pnl is not None else (eq - init_cap)
+        ret = float(portfolio.net_return_pct) if hasattr(portfolio, "net_return_pct") and portfolio.net_return_pct is not None else ((pnl / init_cap) * 100.0 if init_cap > 0 else 0.0)
 
         # 2. Accounting fields compatibility: total_fees vs total_fees_paid
         if hasattr(portfolio, "total_fees"):
@@ -157,42 +157,71 @@ class ThreeSystemComparativeDashboard:
         else:
             funding = 0.0
 
+        # Slippage cost compatibility
+        slippage = float(getattr(portfolio, "slippage_cost", getattr(portfolio, "slippage_cost_usdt", 0.0)))
+
         # 3. Cash balance compatibility
-        # If portfolio has .balance, use it; else calculate free cash from equity and margin
-        if hasattr(portfolio, "balance"):
+        if hasattr(portfolio, "balance") and portfolio.balance is not None:
             cash = float(portfolio.balance)
+        elif hasattr(portfolio, "cash") and portfolio.cash is not None:
+            cash = float(portfolio.cash)
         else:
             positions_map = getattr(portfolio, "positions", {})
-            used_margin = sum(
-                float(p.current_qty) * float(p.entry_price) / 3.5
-                for p in positions_map.values()
-                if hasattr(p, "current_qty") and hasattr(p, "entry_price")
-            )
+            used_margin = 0.0
+            for p in positions_map.values():
+                if isinstance(p, dict):
+                    q = float(p.get("current_qty", p.get("qty", 0.0)))
+                    e = float(p.get("entry_price", 0.0))
+                else:
+                    q = float(getattr(p, "current_qty", getattr(p, "qty", 0.0)))
+                    e = float(getattr(p, "entry_price", 0.0))
+                used_margin += (q * e) / 3.5
             cash = max(0.0, eq - used_margin)
 
-        # 4. Positions & Exposure
+        # 4. Positions & Exposure (Supporting both object positions and serialized dicts)
         positions_map = getattr(portfolio, "positions", {})
         pos_detail = {}
         total_notional = 0.0
         for sym, p in positions_map.items():
-            qty = float(getattr(p, "current_qty", 0.0))
-            ep = float(getattr(p, "entry_price", 0.0))
-            pos_detail[sym] = {
-                "direction": "LONG" if getattr(p, "direction", 1) == 1 else "SHORT",
-                "qty": qty,
-                "entry_price": ep,
-                "current_stop": float(getattr(p, "current_stop", 0.0)),
-                "tp1_taken": getattr(p, "tp1_taken", False),
-                "tp2_taken": getattr(p, "tp2_taken", False),
-            }
+            if isinstance(p, dict):
+                qty = float(p.get("current_qty", p.get("qty", 0.0)))
+                ep = float(p.get("entry_price", 0.0))
+                dir_val = p.get("direction", "LONG")
+                pos_detail[sym] = {
+                    "direction": "LONG" if dir_val in (1, "LONG", "long") else "SHORT",
+                    "qty": qty,
+                    "entry_price": ep,
+                    "current_stop": float(p.get("current_stop", p.get("stop_loss", 0.0))),
+                    "tp1_taken": p.get("tp1_taken", False),
+                    "tp2_taken": p.get("tp2_taken", False),
+                }
+            else:
+                qty = float(getattr(p, "current_qty", getattr(p, "qty", 0.0)))
+                ep = float(getattr(p, "entry_price", 0.0))
+                dir_val = getattr(p, "direction", 1)
+                pos_detail[sym] = {
+                    "direction": "LONG" if dir_val in (1, "LONG", "long") else "SHORT",
+                    "qty": qty,
+                    "entry_price": ep,
+                    "current_stop": float(getattr(p, "current_stop", getattr(p, "stop_loss", 0.0))),
+                    "tp1_taken": getattr(p, "tp1_taken", False),
+                    "tp2_taken": getattr(p, "tp2_taken", False),
+                }
             total_notional += qty * ep
 
         pos_cnt = len(pos_detail)
-        exposure = round((total_notional / eq) * 100.0, 2) if eq > 0 else 0.0
+        if hasattr(portfolio, "exposure_pct") and portfolio.exposure_pct is not None:
+            exposure = float(portfolio.exposure_pct)
+        else:
+            exposure = round((total_notional / eq) * 100.0, 2) if eq > 0 else 0.0
 
-        # 5. Peak Equity & Drawdown
+        # 5. Peak Equity & Drawdown (Preserving confirmed metrics)
         peak = float(getattr(portfolio, "peak_equity", eq))
-        if peak > 0 and peak >= eq:
+        if hasattr(portfolio, "mdd_pct") and portfolio.mdd_pct is not None:
+            mdd = float(portfolio.mdd_pct)
+        elif hasattr(portfolio, "max_drawdown_pct") and portfolio.max_drawdown_pct is not None:
+            mdd = float(portfolio.max_drawdown_pct)
+        elif peak > 0 and peak >= eq:
             mdd = round(((eq - peak) / peak) * 100.0, 2)
             mdd = min(0.0, mdd)
         else:
@@ -210,6 +239,8 @@ class ThreeSystemComparativeDashboard:
                 xp = float(getattr(t, "exit_price", 0.0))
                 turnover += (iq * ep) + (fq * xp)
             turnover += total_notional
+        elif total_notional > 0:
+            turnover = total_notional
 
         # 7. Cohort verification
         c_id = cohort_id or getattr(portfolio, "cohort_id", self.expected_cohort_id)
@@ -231,14 +262,14 @@ class ThreeSystemComparativeDashboard:
             exposure_pct=exposure,
             turnover_usdt=round(turnover, 2),
             fees_paid_usdt=round(fees, 4),
-            slippage_cost_usdt=0.0,
+            slippage_cost_usdt=round(slippage, 4),
             funding_paid_usdt=round(funding, 4),
             positions_count=pos_cnt,
             positions_detail=pos_detail,
-            data_freshness_status="FRESH" if cohort_match else "COHORT_MISMATCH",
-            valuation_status="FRESH",
+            data_freshness_status=getattr(portfolio, "status", getattr(portfolio, "data_freshness_status", "FRESH")) if cohort_match else "COHORT_MISMATCH",
+            valuation_status=getattr(portfolio, "status", getattr(portfolio, "data_freshness_status", "FRESH")),
             error_count=0 if cohort_match else 1,
-            last_update_iso=now_str,
+            last_update_iso=getattr(portfolio, "last_update_iso", now_str) or now_str,
             notes=fee_tier_note if cohort_match else f"COHORT MISMATCH: expected {self.expected_cohort_id}, got {c_id}",
             is_active=True,
             cohort_id=c_id,

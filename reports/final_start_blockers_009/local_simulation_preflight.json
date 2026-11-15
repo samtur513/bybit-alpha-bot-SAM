@@ -1,10 +1,10 @@
 {
-  "timestamp_utc": "2026-11-15T11:23:30.258382+00:00",
-  "overall_verdict": "GO-WITH-WARNINGS",
+  "timestamp_utc": "2026-11-15T12:18:43.648226+00:00",
+  "overall_verdict": "SIMULATION_LOCAL_AWAITING_VPS_EXECUTION",
   "counts": {
     "total": 6,
-    "pass": 5,
-    "warn": 1,
+    "pass": 4,
+    "warn": 2,
     "fail": 0
   },
   "checks": [
@@ -17,22 +17,22 @@
         "release": "11",
         "cpu_count": 16,
         "disk_total_gb": 475.7,
-        "disk_used_gb": 430.84,
-        "disk_free_gb": 44.86,
-        "disk_free_pct": 9.4
+        "disk_used_gb": 431.56,
+        "disk_free_gb": 44.14,
+        "disk_free_pct": 9.3
       },
       "message": "System resources healthy."
     },
     {
       "check_name": "running_services",
       "category": "SERVICES",
-      "status": "PASS",
+      "status": "WARN",
       "details": {
         "vps_linux": false,
         "simulated_mode": true,
         "port_8083_listening": false
       },
-      "message": "Local simulation: port 8083 check completed (listening=False)."
+      "message": "Local simulation: port 8083 (bybit-v32.service) is NOT listening locally. Strict PASS requires verified systemctl on VPS 150.241.98.70."
     },
     {
       "check_name": "network_latency",
@@ -42,11 +42,11 @@
         "Bybit Public Server Time": {
           "url": "https://api.bybit.com/v5/market/time",
           "latencies_ms": [
-            753.65,
-            614.21,
-            767.96
+            886.78,
+            637.99,
+            596.02
           ],
-          "avg_latency_ms": 711.94,
+          "avg_latency_ms": 706.93,
           "status_codes": [
             200,
             200,
@@ -56,11 +56,11 @@
         "OKX Public System Status": {
           "url": "https://www.okx.com/api/v5/public/status",
           "latencies_ms": [
-            624.35,
-            661.9,
-            618.55
+            606.21,
+            681.84,
+            966.74
           ],
-          "avg_latency_ms": 634.93,
+          "avg_latency_ms": 751.6,
           "status_codes": [
             404,
             404,
@@ -68,7 +68,7 @@
           ]
         }
       },
-      "message": "Bybit Public Server Time HIGH LATENCY: 711.94ms; OKX Public System Status HIGH LATENCY: 634.93ms"
+      "message": "Bybit Public Server Time HIGH LATENCY: 706.93ms; OKX Public System Status HIGH LATENCY: 751.6ms"
     },
     {
       "check_name": "telemetry_ports",
@@ -208,9 +208,13 @@
           "telemetry.py": "e0e54d5dee17061b6b0f7f5248056bdff54067d8528941d48490733dac55ed50"
         },
         "missing_files": [],
-        "verify_frozen_error": "No module named 'raw_store'"
+        "verify_frozen": {
+          "status": "PASS",
+          "source_commit": "815d6884980791309cb37770ac96a9a93a2c48c0",
+          "files_verified": 9
+        }
       },
-      "message": "CryptoLab confirmed intact at C:\\projects\\Torg_Bot_3 -Antigraviti\\.scratch\\cryptolab_ref\\research\\hunter001_dg001\\r2_shadow (3 contract files verified)."
+      "message": "CryptoLab confirmed intact at C:\\projects\\Torg_Bot_3 -Antigraviti\\.scratch\\cryptolab_ref\\research\\hunter001_dg001\\r2_shadow (3 contract files verified, verify_frozen=PASS)."
     }
   ]
 }
