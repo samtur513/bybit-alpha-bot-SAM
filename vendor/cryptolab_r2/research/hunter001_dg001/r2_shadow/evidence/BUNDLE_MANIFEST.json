@@ -1,0 +1,25 @@
+{
+  "source_commit": "815d6884980791309cb37770ac96a9a93a2c48c0",
+  "archive": "R2_SHADOW_RUNTIME.zip",
+  "sha256": "48bbd097a6d7c973856aaf66ce2fe7feb54a62b330f56683ccda4994e70bd961",
+  "members": {
+    "research/hunter001_dg001/r2_shadow/AUTHORIZATION.json": "5e0b36a59c602d6c10a95abeb99358ed83eec31e6597e1bb212de7d91ba8df33",
+    "research/hunter001_dg001/r2_shadow/COHORT_PLAN.json": "69c14a9e8e7d1847d342e047571f05af4b9970d61abcfebf86c28aae9f373ce4",
+    "research/hunter001_dg001/r2_shadow/FROZEN_MANIFEST.json": "e39d0541329965d57bd5a0b5c95642aaa1662bfbea9bcf677fb33b337f42e7b8",
+    "research/hunter001_dg001/r2_shadow/collect_readiness.py": "7773e56ebb20f592a3b0e397bce382dd485e23d1dfbdf83b1ff32482fb524a17",
+    "research/hunter001_dg001/r2_shadow/marks.py": "86071694db27fabe8c5dfacd3fb6ce6f8d82622719fadec7bd82832aabeec3df",
+    "research/hunter001_dg001/r2_shadow/raw_store.py": "8795b9fbe21c3739fc473550e73f08ef859aa609603b3ed61571bde6226f7989",
+    "research/hunter001_dg001/r2_shadow/readiness.py": "915b1f3b4bdb3c390200be89dcda50f1b0453aa8ae47ba7b2dcefaa107d8d8b1",
+    "research/hunter001_dg001/r2_shadow/runtime.py": "3a9c85f53896779aa9202f87e9b496f8abbb64fea5a6ccc7f457052b3ded5f62",
+    "research/hunter001_dg001/r2_shadow/telemetry.py": "e0e54d5dee17061b6b0f7f5248056bdff54067d8528941d48490733dac55ed50",
+    "research/hunter001_dg001/r2_validation/DEPLOYMENT_STATUS.json": "6d1322c1e559a38337b4ac16717ab4b8ddc6a115a7939b85e759ca107dc9761b",
+    "research/hunter001_dg001/r2_validation/PREREGISTRATION.json": "f913d359f13ac94340b3192c92f78745cc5428b61788adf58671d9b4ffd73c69",
+    "research/hunter001_dg001/r2_validation/core.py": "78ba2278d752e6f0e604ee99d3fff07c145e3aa1c9fdd9730713efad01239768",
+    "research/hunter001_dg001/r2_validation/execution.py": "d84952900ff33d8f8c573106b1701832619415969bcba856d02a5324edaecd42",
+    "research/hunter001_dg001/r2_validation/observer.py": "19a807c85f85690f67e11fb82a4fa720450f367f85d3c17a0e7fe54a18aed161",
+    "research/hunter001_dg001/r2_validation/public_data.py": "5c2e90814cddd4bac4c4873cfb81723e33fb3cbf4ede1de0ffaf79c4529524fb",
+    "research/hunter001_dg001/r2_validation/runtime_requirements.txt": "d5074a05bcc216d1e3adeeed5a6717cd820474ee7aea02fdc888260ae48e4f0e",
+    "research/hunter001_dg001/t01_profit_rank/PREREGISTRATION.json": "9e4856dddde75eb981a403053ddb40392ca7e6b6f09456efce319ba1377f8f0c",
+    "research/hunter001_dg001/t01_profit_rank/profit_rank.py": "8f1a56444dafbb848e930dff16d16bf02c640567b8e72a9b3a1d553088260447"
+  }
+}

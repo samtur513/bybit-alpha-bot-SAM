@@ -1,0 +1,10 @@
+{
+  "at": "2026-11-14T17:29:49.282851+00:00",
+  "archive_sha256": "7644de85a89a229bc8c9d820856fa31fec1efc175e0a2ce45aa482b985bacbbb",
+  "deterministic_rebuild": "PASS",
+  "isolated_import_and_manifest": "PASS",
+  "unauthorized_daemon_refusal_before_runtime_creation": "PASS",
+  "stdout": "ISOLATED_BUNDLE_AND_PERMISSION_GUARD_PASS",
+  "network_requests": 0,
+  "server_actions": 0
+}

@@ -1,0 +1,16 @@
+{
+  "kind": "SYNTHETIC_OFFLINE_NOT_VPS_MEASUREMENT",
+  "responses": 4410,
+  "original_body_bytes": 6791400,
+  "stored_bytes": 6246400,
+  "files_after_commit": 1,
+  "elapsed_seconds": 175.74541780003347,
+  "python_peak_allocated_bytes": 1435352,
+  "includes_numpy_rss": false,
+  "estimated_184_days_bytes_same_fixture": 1149337600,
+  "quota_raw_bytes": 8589934592,
+  "quota_daily_bytes": 268435456,
+  "quota_total_runtime_bytes": 10737418240,
+  "min_free_disk_bytes": 536870912,
+  "retention_deletion": false
+}

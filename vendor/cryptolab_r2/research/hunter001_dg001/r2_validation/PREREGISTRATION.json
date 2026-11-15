@@ -1,0 +1,116 @@
+{
+  "study": "R2-VALIDATION-001",
+  "base_commit": "0efacb4b13912c8a7b9da24963ef84e7a472be88",
+  "branch": "research/r2-validation-001-20261114",
+  "research_only": true,
+  "candidate": {
+    "venue": "Bybit Spot",
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "SOLUSDT"
+    ],
+    "eligibility": "strict C[d-1]>C[d-29] on completed UTC daily closes",
+    "R2": "log(C[d-1]/C[d-29])/(std(ddof1) of 28 completed log daily returns * sqrt28)",
+    "zero_volatility": "undefined, never infinite",
+    "selection": "only when all3 eligible choose top2; lexicographic ties; undefined slot left cash",
+    "weights": "3 eligible: .5 per selected;2:1/3 each;1:1/3;0:cash",
+    "review": "daily decision no earlier than00:00:05 UTC, execution01:00 UTC",
+    "costs": {
+      "BASE": {
+        "fee": 0.001,
+        "adverse_slippage": 0.0002
+      },
+      "STRESS": {
+        "fee": 0.001,
+        "adverse_slippage": 0.0005
+      }
+    },
+    "capitals": [
+      300,
+      1000,
+      10000
+    ],
+    "leverage": 0,
+    "short": false,
+    "lookback_tuning": false
+  },
+  "historical": {
+    "period": [
+      "2022-01-01T00:00:00Z",
+      "2024-01-01T00:00:00Z"
+    ],
+    "warmup": [
+      "2021-12-01T00:00:00Z",
+      "2022-01-01T00:00:00Z"
+    ],
+    "source": "official Bybit v5 spot kline interval60 only",
+    "availability": "probe first/last/warmup for each coin; fetch only bounded 3*18264 hourly bars if all probes available; <=72 requests, <=20MiB total; gaps stop whole historical experiment, never substitute venue or subset",
+    "accounting": "continuous two-year cash, initialcash once, no January2023 reset;01:00open;terminal2023-12-31 23:00open; fees, minimums and retained dust; separate annual attribution",
+    "constraints": "C5 and parent current spot precision MODELED historically; not historical acceptance proof",
+    "comparators": [
+      "same-engine T01 BASELINE",
+      "fixed-initial-quantity equal-weight BUY_HOLD",
+      "persistent random with same eligible pool and R2 switch calendar"
+    ],
+    "interpretation": "retrospective temporal extension, NOT prospective OOS; all results including negative retained",
+    "passes": "both years and BASE/STRESS net and incremental returns positive, MDD<=30%, paired CI positive; otherwise no historical validation claim"
+  },
+  "forward": {
+    "not_before": "2026-11-15T00:00:00Z",
+    "earliest_decision": "2026-11-15T00:00:05Z",
+    "earliest_execution": "2026-11-15T01:00:00Z",
+    "minimum_months": 6,
+    "late_start": "if setup completes after start, freeze new next future UTC day before forward observations; never backfill missed decisions; six calendar months from actual start",
+    "launch": "publish protocol and pass functional public-data checks before daemon; use suitable existing VPS if actually accessible, else transparent local hidden process with availability caveat; no Docker, no account or trading core",
+    "control_samples": "before forward start CONTROLS_ONLY, not forward profit observations",
+    "public_only": true,
+    "signal_history": "fetch latest29 completed UTC daily bars, continuous; forbid any 2026-01-01..2026-09-30 market-price requests; request window after2026-10-01 only for livewarmup",
+    "availability": "save source event/end and server timestamp, HTTP request started/finished UTC, monotonic latency, ingested_at, raw bytes SHA256; do not label modeled availability as observed",
+    "decision": "collect after00:00:05; source final day must be yesterday, all3 complete;5min deadline else missed",
+    "execution": "collect all three public orderbook50 + instruments-info at01:00, max60s late, maxbook age5s and intersymbol skew5s; failure rejects whole scheduled account step; no backdated fills",
+    "books": "strictly ordered positive bids/asks and noncrossed BBO; server-time freshness; sweep depth independently per virtual account; insufficient requested depth rejects leg; no actual orders or guaranteed fill claim",
+    "accounting": "independent BASELINE/R2 *3 capitals*2 costs*2 execution assumptions; shared no-borrowing execution functions",
+    "paths": {
+      "MODEL_C5": "observed midpoint reference with frozen C5 precision and +/-2/5bp buffer; modeled fills only",
+      "OBSERVED_BOOK": "current observed spot limits/precision/status and available depth; quote budget buy, base quantity sell, buy fee acquired base and sell fee quote; sweep-book VWAP plus same2/5bp adverse buffer; quote snapshot estimate not proof"
+    },
+    "marking": "daily decision and execution snapshot bid/ask mid; unresolved data => unvalued/partial rather than carry convenient prices; balances preserved; mark-to-market vs fee/minimum-aware liquidatable cash/dust separately",
+    "persistence": "append-only raw receipts and event ledger; atomically checkpoint balances and processed decision/execution ids; restart idempotent; missed slots explicitly recorded, no replay into earlier time",
+    "risk": "MDD>30% permanently disqualifies real capital for that observation run, observer may continue research; no automatic liquidation/parameter changes",
+    "minimum_observation": "no confirmation before six complete calendar months and full data-quality review; early results provisional"
+  },
+  "random": {
+    "draws": 1000,
+    "seed": 6111501,
+    "method": "persistent random omitted coin when all3 eligible. At known current R2 omitted-leader change, force random omission to change uniformly to one of other2. Eligible-set transitions handled by same weights. No daily independent reshuffling. Same current R2 event schedule is known at decision, no future info.",
+    "comparison": "report turnover normalized by pretrade NAV, switching count, exposure and costs; random comparisons meaningful only if >=90% of paths turnover within +/-20% of R2 and average exposure within2 percentage points; report all paths regardless, no selection by returns"
+  },
+  "statistics": {
+    "primary": "paired R2 minus same-engine BASELINE net whole-capital return; dollars and percentage points",
+    "inference": "paired circular calendar blocks7/30 days,5000 resamples,seed6111502; CI daily mean paired netreturn difference and paired compounded-return delta; centered-null daily p; Holm across6 capital/cost comparisons per block; no independent-coin sampling",
+    "forward": "minimum6calendar months, daily checkpoints; no parameter changes on interim results; baseline tests and risk thresholds frozen",
+    "leader_costs": "all turnover, fee and buffer cost on both legs, reason-coded leader switches",
+    "three_eligible": "report fraction of daily decisions with3 eligible",
+    "benchmarks": "equal fixed-quantity buy/hold same fees/constraints; cash; random as above",
+    "capital_gate": "NO AUTOMATIC LIVE GO; separately evaluated only if positive BASE/STRESS incremental and net, MDD<=30%, data/execution audit pass and bothblock corrected tests pass; historical result alone never authorizes real capital"
+  },
+  "immutable_oos": {
+    "original_protocol": "1f4866071e8df87e8dd3d47f09f6b83336708535",
+    "closed": [
+      "2026-01-01",
+      "2026-10-01"
+    ],
+    "reads_allowed": false
+  },
+  "prohibitions": [
+    "orders",
+    "private account APIs",
+    "trading keys",
+    "data purchases",
+    "2026 closed OOS",
+    "leverage",
+    "parameter optimization",
+    "main or prior study/core modifications"
+  ]
+}

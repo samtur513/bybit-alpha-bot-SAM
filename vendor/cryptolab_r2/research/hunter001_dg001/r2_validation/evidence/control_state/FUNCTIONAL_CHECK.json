@@ -1,0 +1,224 @@
+{
+  "status": "PASS",
+  "at": "2026-11-14T17:15:37.081764+00:00",
+  "control_id": "CONTROL:f6b0800734044c4db65f1e5bb1b5f532",
+  "accounts": [
+    {
+      "strategy": "BASELINE",
+      "capital": 300,
+      "cost": "BASE",
+      "policy": "MODEL_C5",
+      "test_orders": 0,
+      "estimated_cost": 0.0,
+      "status": "CONTROL_ONLY_NOT_FORWARD_RESULT"
+    },
+    {
+      "strategy": "BASELINE",
+      "capital": 1000,
+      "cost": "BASE",
+      "policy": "MODEL_C5",
+      "test_orders": 0,
+      "estimated_cost": 0.0,
+      "status": "CONTROL_ONLY_NOT_FORWARD_RESULT"
+    },
+    {
+      "strategy": "BASELINE",
+      "capital": 10000,
+      "cost": "BASE",
+      "policy": "MODEL_C5",
+      "test_orders": 0,
+      "estimated_cost": 0.0,
+      "status": "CONTROL_ONLY_NOT_FORWARD_RESULT"
+    },
+    {
+      "strategy": "BASELINE",
+      "capital": 300,
+      "cost": "BASE",
+      "policy": "OBSERVED_BOOK",
+      "test_orders": 0,
+      "estimated_cost": 0.0,
+      "status": "CONTROL_ONLY_NOT_FORWARD_RESULT"
+    },
+    {
+      "strategy": "BASELINE",
+      "capital": 1000,
+      "cost": "BASE",
+      "policy": "OBSERVED_BOOK",
+      "test_orders": 0,
+      "estimated_cost": 0.0,
+      "status": "CONTROL_ONLY_NOT_FORWARD_RESULT"
+    },
+    {
+      "strategy": "BASELINE",
+      "capital": 10000,
+      "cost": "BASE",
+      "policy": "OBSERVED_BOOK",
+      "test_orders": 0,
+      "estimated_cost": 0.0,
+      "status": "CONTROL_ONLY_NOT_FORWARD_RESULT"
+    },
+    {
+      "strategy": "BASELINE",
+      "capital": 300,
+      "cost": "STRESS",
+      "policy": "MODEL_C5",
+      "test_orders": 0,
+      "estimated_cost": 0.0,
+      "status": "CONTROL_ONLY_NOT_FORWARD_RESULT"
+    },
+    {
+      "strategy": "BASELINE",
+      "capital": 1000,
+      "cost": "STRESS",
+      "policy": "MODEL_C5",
+      "test_orders": 0,
+      "estimated_cost": 0.0,
+      "status": "CONTROL_ONLY_NOT_FORWARD_RESULT"
+    },
+    {
+      "strategy": "BASELINE",
+      "capital": 10000,
+      "cost": "STRESS",
+      "policy": "MODEL_C5",
+      "test_orders": 0,
+      "estimated_cost": 0.0,
+      "status": "CONTROL_ONLY_NOT_FORWARD_RESULT"
+    },
+    {
+      "strategy": "BASELINE",
+      "capital": 300,
+      "cost": "STRESS",
+      "policy": "OBSERVED_BOOK",
+      "test_orders": 0,
+      "estimated_cost": 0.0,
+      "status": "CONTROL_ONLY_NOT_FORWARD_RESULT"
+    },
+    {
+      "strategy": "BASELINE",
+      "capital": 1000,
+      "cost": "STRESS",
+      "policy": "OBSERVED_BOOK",
+      "test_orders": 0,
+      "estimated_cost": 0.0,
+      "status": "CONTROL_ONLY_NOT_FORWARD_RESULT"
+    },
+    {
+      "strategy": "BASELINE",
+      "capital": 10000,
+      "cost": "STRESS",
+      "policy": "OBSERVED_BOOK",
+      "test_orders": 0,
+      "estimated_cost": 0.0,
+      "status": "CONTROL_ONLY_NOT_FORWARD_RESULT"
+    },
+    {
+      "strategy": "R2",
+      "capital": 300,
+      "cost": "BASE",
+      "policy": "MODEL_C5",
+      "test_orders": 0,
+      "estimated_cost": 0.0,
+      "status": "CONTROL_ONLY_NOT_FORWARD_RESULT"
+    },
+    {
+      "strategy": "R2",
+      "capital": 1000,
+      "cost": "BASE",
+      "policy": "MODEL_C5",
+      "test_orders": 0,
+      "estimated_cost": 0.0,
+      "status": "CONTROL_ONLY_NOT_FORWARD_RESULT"
+    },
+    {
+      "strategy": "R2",
+      "capital": 10000,
+      "cost": "BASE",
+      "policy": "MODEL_C5",
+      "test_orders": 0,
+      "estimated_cost": 0.0,
+      "status": "CONTROL_ONLY_NOT_FORWARD_RESULT"
+    },
+    {
+      "strategy": "R2",
+      "capital": 300,
+      "cost": "BASE",
+      "policy": "OBSERVED_BOOK",
+      "test_orders": 0,
+      "estimated_cost": 0.0,
+      "status": "CONTROL_ONLY_NOT_FORWARD_RESULT"
+    },
+    {
+      "strategy": "R2",
+      "capital": 1000,
+      "cost": "BASE",
+      "policy": "OBSERVED_BOOK",
+      "test_orders": 0,
+      "estimated_cost": 0.0,
+      "status": "CONTROL_ONLY_NOT_FORWARD_RESULT"
+    },
+    {
+      "strategy": "R2",
+      "capital": 10000,
+      "cost": "BASE",
+      "policy": "OBSERVED_BOOK",
+      "test_orders": 0,
+      "estimated_cost": 0.0,
+      "status": "CONTROL_ONLY_NOT_FORWARD_RESULT"
+    },
+    {
+      "strategy": "R2",
+      "capital": 300,
+      "cost": "STRESS",
+      "policy": "MODEL_C5",
+      "test_orders": 0,
+      "estimated_cost": 0.0,
+      "status": "CONTROL_ONLY_NOT_FORWARD_RESULT"
+    },
+    {
+      "strategy": "R2",
+      "capital": 1000,
+      "cost": "STRESS",
+      "policy": "MODEL_C5",
+      "test_orders": 0,
+      "estimated_cost": 0.0,
+      "status": "CONTROL_ONLY_NOT_FORWARD_RESULT"
+    },
+    {
+      "strategy": "R2",
+      "capital": 10000,
+      "cost": "STRESS",
+      "policy": "MODEL_C5",
+      "test_orders": 0,
+      "estimated_cost": 0.0,
+      "status": "CONTROL_ONLY_NOT_FORWARD_RESULT"
+    },
+    {
+      "strategy": "R2",
+      "capital": 300,
+      "cost": "STRESS",
+      "policy": "OBSERVED_BOOK",
+      "test_orders": 0,
+      "estimated_cost": 0.0,
+      "status": "CONTROL_ONLY_NOT_FORWARD_RESULT"
+    },
+    {
+      "strategy": "R2",
+      "capital": 1000,
+      "cost": "STRESS",
+      "policy": "OBSERVED_BOOK",
+      "test_orders": 0,
+      "estimated_cost": 0.0,
+      "status": "CONTROL_ONLY_NOT_FORWARD_RESULT"
+    },
+    {
+      "strategy": "R2",
+      "capital": 10000,
+      "cost": "STRESS",
+      "policy": "OBSERVED_BOOK",
+      "test_orders": 0,
+      "estimated_cost": 0.0,
+      "status": "CONTROL_ONLY_NOT_FORWARD_RESULT"
+    }
+  ],
+  "forward_orders": 0
+}

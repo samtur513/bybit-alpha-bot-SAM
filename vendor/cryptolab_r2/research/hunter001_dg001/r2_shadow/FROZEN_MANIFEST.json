@@ -1,0 +1,50 @@
+{
+  "source_commit": "815d6884980791309cb37770ac96a9a93a2c48c0",
+  "files": {
+    "research/hunter001_dg001/r2_validation/core.py": {
+      "git_blob_sha": "04e37595f0609603edcf14afaf97ad87fb781b57",
+      "sha256": "78ba2278d752e6f0e604ee99d3fff07c145e3aa1c9fdd9730713efad01239768",
+      "bytes": 1482
+    },
+    "research/hunter001_dg001/r2_validation/execution.py": {
+      "git_blob_sha": "354ef3cc2b1949ee11ded5c03e0944fb6ecf537e",
+      "sha256": "d84952900ff33d8f8c573106b1701832619415969bcba856d02a5324edaecd42",
+      "bytes": 6357
+    },
+    "research/hunter001_dg001/r2_validation/observer.py": {
+      "git_blob_sha": "57b7583b984409a115198dc2c4e661b60be1fff0",
+      "sha256": "19a807c85f85690f67e11fb82a4fa720450f367f85d3c17a0e7fe54a18aed161",
+      "bytes": 15314
+    },
+    "research/hunter001_dg001/r2_validation/public_data.py": {
+      "git_blob_sha": "b9d88603c828ed85f588255c8d50b62b538981d0",
+      "sha256": "5c2e90814cddd4bac4c4873cfb81723e33fb3cbf4ede1de0ffaf79c4529524fb",
+      "bytes": 3168
+    },
+    "research/hunter001_dg001/r2_validation/PREREGISTRATION.json": {
+      "git_blob_sha": "dd5f94e8af24bec7f1f5d4ceceaacf2ef2f5bb45",
+      "sha256": "f913d359f13ac94340b3192c92f78745cc5428b61788adf58671d9b4ffd73c69",
+      "bytes": 7373
+    },
+    "research/hunter001_dg001/r2_validation/runtime_requirements.txt": {
+      "git_blob_sha": "083e41a6459270310234798f084da0b81a781889",
+      "sha256": "d5074a05bcc216d1e3adeeed5a6717cd820474ee7aea02fdc888260ae48e4f0e",
+      "bytes": 14
+    },
+    "research/hunter001_dg001/t01_profit_rank/profit_rank.py": {
+      "git_blob_sha": "4391da82ab26aa3cb849a504efa7fd5f702f3f7a",
+      "sha256": "8f1a56444dafbb848e930dff16d16bf02c640567b8e72a9b3a1d553088260447",
+      "bytes": 10593
+    },
+    "research/hunter001_dg001/t01_profit_rank/PREREGISTRATION.json": {
+      "git_blob_sha": "c03233e9bafba73b04d31f5c13d955d885d7a15d",
+      "sha256": "9e4856dddde75eb981a403053ddb40392ca7e6b6f09456efce319ba1377f8f0c",
+      "bytes": 4077
+    },
+    "research/hunter001_dg001/r2_validation/DEPLOYMENT_STATUS.json": {
+      "git_blob_sha": "5526dec81f495cb5f9b7c7907277795f2d030bb1",
+      "sha256": "6d1322c1e559a38337b4ac16717ab4b8ddc6a115a7939b85e759ca107dc9761b",
+      "bytes": 649
+    }
+  }
+}

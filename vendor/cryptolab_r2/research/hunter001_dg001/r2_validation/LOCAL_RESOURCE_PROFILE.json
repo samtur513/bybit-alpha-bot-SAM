@@ -1,0 +1,32 @@
+{
+  "kind": "OFFLINE_CONTROL_RESOURCE_PROBE_NOT_VPS_OR_SUSTAINED_LOAD_TEST",
+  "host": "Windows",
+  "python": "3.12.10",
+  "iterations": 250,
+  "virtual_account_evaluations": 6000,
+  "wall_seconds": 1.9257202999433503,
+  "cpu_seconds": 1.875,
+  "cpu_seconds_per_24_account_batch": 0.0075,
+  "peak_rss_bytes": 36139008,
+  "observed_control_signals": [
+    false,
+    false,
+    false
+  ],
+  "raw_control_responses": 39,
+  "gzip_max_bytes": 1222,
+  "gzip_median_bytes": 749,
+  "receipt_max_bytes": 642,
+  "planning_requests_per_day": 4410,
+  "planning_raw_files_183_days": 807030,
+  "filesystem_allocation_assumed_bytes": 4096,
+  "raw_plus_receipt_daily_estimate_bytes": 20894580,
+  "raw_plus_receipt_183day_estimate_bytes": 3823708140,
+  "exclusions": [
+    "no network latency/TLS CPU",
+    "no sustained daemon or Linux test",
+    "SQLite/WAL/CSV/logs/backups not included in disk estimate",
+    "flat control signals are not an active rebalance stress benchmark",
+    "filesystem inode overhead and outage error storms are not bounded"
+  ]
+}

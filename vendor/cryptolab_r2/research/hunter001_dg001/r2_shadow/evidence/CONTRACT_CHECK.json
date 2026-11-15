@@ -1,0 +1,7 @@
+{
+  "status": "PASS",
+  "valid_examples": 2,
+  "invalid_examples_rejected": 6,
+  "validator": "LOCAL_FIXED_KEYWORD_SUBSET; not a complete Draft202012 implementation",
+  "receiver_integration": "PENDING"
+}

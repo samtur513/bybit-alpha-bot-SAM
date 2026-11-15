@@ -1,0 +1,17 @@
+{
+  "at": "2026-11-14T17:31:51.048521+00:00",
+  "prospective_start": null,
+  "minimum_end": null,
+  "elapsed_six_months": false,
+  "executions": 0,
+  "data_errors_or_misses": 0,
+  "risk_breaches": 0,
+  "verdict": "NOT_DEPLOYED",
+  "real_capital": "NOT_AUTHORIZED",
+  "original_oos2026": "CLOSED",
+  "economic_results": "NOT_ESTIMATED",
+  "turnover_matched_random": "PRIMARY_HISTORICAL_COMPARABILITY_FAILED; NO CONFIRMATORY_RANDOM_CLAIM",
+  "deployment_status": "NOT_DEPLOYED",
+  "schedule_active": false,
+  "archived_planned_start": "2026-11-15T00:00:00+00:00"
+}

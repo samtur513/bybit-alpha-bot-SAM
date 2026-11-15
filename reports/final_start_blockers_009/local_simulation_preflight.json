@@ -1,5 +1,5 @@
 {
-  "timestamp_utc": "2026-11-15T12:18:43.648226+00:00",
+  "timestamp_utc": "2026-11-15T13:25:54.636160+00:00",
   "overall_verdict": "SIMULATION_LOCAL_AWAITING_VPS_EXECUTION",
   "counts": {
     "total": 6,
@@ -17,9 +17,9 @@
         "release": "11",
         "cpu_count": 16,
         "disk_total_gb": 475.7,
-        "disk_used_gb": 431.56,
-        "disk_free_gb": 44.14,
-        "disk_free_pct": 9.3
+        "disk_used_gb": 431.98,
+        "disk_free_gb": 43.72,
+        "disk_free_pct": 9.2
       },
       "message": "System resources healthy."
     },
@@ -42,11 +42,11 @@
         "Bybit Public Server Time": {
           "url": "https://api.bybit.com/v5/market/time",
           "latencies_ms": [
-            886.78,
-            637.99,
-            596.02
+            895.56,
+            825.24,
+            726.53
           ],
-          "avg_latency_ms": 706.93,
+          "avg_latency_ms": 815.78,
           "status_codes": [
             200,
             200,
@@ -56,11 +56,11 @@
         "OKX Public System Status": {
           "url": "https://www.okx.com/api/v5/public/status",
           "latencies_ms": [
-            606.21,
-            681.84,
-            966.74
+            665.79,
+            622.13,
+            574.34
           ],
-          "avg_latency_ms": 751.6,
+          "avg_latency_ms": 620.75,
           "status_codes": [
             404,
             404,
@@ -68,7 +68,7 @@
           ]
         }
       },
-      "message": "Bybit Public Server Time HIGH LATENCY: 706.93ms; OKX Public System Status HIGH LATENCY: 751.6ms"
+      "message": "Bybit Public Server Time HIGH LATENCY: 815.78ms; OKX Public System Status HIGH LATENCY: 620.75ms"
     },
     {
       "check_name": "telemetry_ports",
@@ -200,8 +200,8 @@
       "category": "CODEBASE",
       "status": "PASS",
       "details": {
-        "path": "C:\\projects\\Torg_Bot_3 -Antigraviti\\.scratch\\cryptolab_ref\\research\\hunter001_dg001\\r2_shadow",
-        "git_head": "313a908782271a6e1fffaee83be7ea1a616337cb",
+        "path": "C:\\projects\\Torg_Bot_3 -Antigraviti\\vendor\\cryptolab_r2\\research\\hunter001_dg001\\r2_shadow",
+        "git_head": "57f036edef45eb0a0c77f2cbd72c49f042284063",
         "file_hashes": {
           "telemetry.schema.json": "5f78bb6fed230489104a0d58b9793404509ffb0f93f1a726d3f32735b23340d9",
           "recovery_scenario.py": "e8282627edbdcff5c2dbb87bf6abcc50d05d0ccfd4da6569ab0e35202b4aae90",
@@ -214,7 +214,7 @@
           "files_verified": 9
         }
       },
-      "message": "CryptoLab confirmed intact at C:\\projects\\Torg_Bot_3 -Antigraviti\\.scratch\\cryptolab_ref\\research\\hunter001_dg001\\r2_shadow (3 contract files verified, verify_frozen=PASS)."
+      "message": "CryptoLab confirmed intact at C:\\projects\\Torg_Bot_3 -Antigraviti\\vendor\\cryptolab_r2\\research\\hunter001_dg001\\r2_shadow (3 contract files verified, verify_frozen=PASS)."
     }
   ]
 }

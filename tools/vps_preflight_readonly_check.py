@@ -370,6 +370,9 @@ class VPSReadOnlyPreflight:
         """
         details: Dict[str, Any] = {}
         cryptolab_candidates = [
+            Path("/opt/bybit-shadow/CryptoLab/research/hunter001_dg001/r2_shadow"),
+            Path("/opt/bybit-shadow/bybit-alpha-bot-SAM/vendor/cryptolab_r2/research/hunter001_dg001/r2_shadow"),
+            self.workspace_root / "vendor" / "cryptolab_r2" / "research" / "hunter001_dg001" / "r2_shadow",
             self.workspace_root / ".scratch" / "cryptolab_ref" / "research" / "hunter001_dg001" / "r2_shadow",
             self.workspace_root / ".scratch" / "cryptolab_ref",
             self.workspace_root.parent / "CryptoLab",
@@ -412,6 +415,13 @@ class VPSReadOnlyPreflight:
                     details["git_head"] = p.stdout.strip()
             except Exception as e:
                 details["git_error"] = str(e)
+
+        if not details.get("git_head"):
+            for check_dir in [found_path, found_path.parents[2] if len(found_path.parents) >= 3 else found_path]:
+                commit_file = check_dir / "COMMIT_SHA.txt"
+                if commit_file.exists():
+                    details["git_head"] = commit_file.read_text(encoding="utf-8").splitlines()[0].strip()
+                    break
 
         # Check critical file hashes
         critical_files = [

@@ -1,0 +1,21 @@
+{
+  "code_sha256": {
+    "core.py": "78ba2278d752e6f0e604ee99d3fff07c145e3aa1c9fdd9730713efad01239768",
+    "execution.py": "d84952900ff33d8f8c573106b1701832619415969bcba856d02a5324edaecd42",
+    "observer.py": "b39f11c6bb75c1ff8984d6facc15915778fef3ab7d9a483a04d8e24e14ad1721",
+    "public_data.py": "7924984592a17b58ea5c9dd2ea5c0178ea06c09c2daef8505b90387842bbc63e",
+    "PREREGISTRATION.json": "f913d359f13ac94340b3192c92f78745cc5428b61788adf58671d9b4ffd73c69"
+  },
+  "protocol_sha256": "f913d359f13ac94340b3192c92f78745cc5428b61788adf58671d9b4ffd73c69",
+  "status": "RUNNING_ARMED",
+  "process_started_at": "2026-11-14T15:44:15.071149+00:00",
+  "prospective_start": "2026-11-15T00:00:00+00:00",
+  "minimum_end": "2027-05-15T00:00:00+00:00",
+  "pid": 36860,
+  "host_kind": "LOCAL_WINDOWS",
+  "protocol_commit": "7b6fed5ae5d72573e827f4e5c2cee419c183b445",
+  "real_orders": 0,
+  "private_api_calls": 0,
+  "control_id": "CONTROL:a7ad66f073674138b0a6a77d79688999",
+  "forward_observations": 0
+}

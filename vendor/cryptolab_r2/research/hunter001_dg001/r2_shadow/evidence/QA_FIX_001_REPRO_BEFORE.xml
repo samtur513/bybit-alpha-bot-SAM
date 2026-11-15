@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="2" time="1.037" timestamp="2026-11-15T01:10:19.157718+03:00" hostname="Asus_V_Sam"><testcase classname="test_qa_fix" name="test_minute_quote_refresh_between_hourly_marks" time="0.612"><failure message="assert None == 305.0">tmp_path = WindowsPath('C:/Users/samtu/Documents/Codex/2026-11-15/referenced-chatgpt-conversation-this-is-an/work/qa_fix_red/test_minute_quote_refresh_betw0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x000001758329B020&gt;
+
+    def test_minute_quote_refresh_between_hourly_marks(tmp_path,monkeypatch):
+        root=prepared(tmp_path)
+        ob=runtime.frozen_modules()
+        clock=[DAY+datetime.timedelta(hours=2)]
+        monkeypatch.setattr(ob,"utc",lambda:clock[0])
+        monkeypatch.setattr(ob.Observer,"markets",lambda *a,**k:quote_set(clock[0],105))
+        instance=runtime.make_observer(root)
+        with instance.store.db:
+            for key in PROFILES:
+                a=dict(instance.store.accounts())[key]
+                a.update(cash=200.,qty=[1.,0.,0.])
+                instance.store.db.execute("UPDATE accounts SET payload=? WHERE id=?",(json.dumps(a),key))
+            instance.mark_accounts("RISK:2030-01-01T02",quote_set(clock[0]),"FORWARD_HOURLY_RISK_MARK",risk_only=True)
+        clock[0]+=datetime.timedelta(minutes=3)
+        instance.markets(refresh=False,depth=1)
+        before=instance.store.db.execute("SELECT * FROM accounts ORDER BY id").fetchall()
+        data=exported(instance,root,clock[0])
+&gt;       assert data["profiles"][0]["equity_usdt"]==305.
+E       assert None == 305.0
+
+work\CryptoLab\research\hunter001_dg001\r2_shadow\test_qa_fix.py:42: AssertionError</failure></testcase><testcase classname="test_qa_fix" name="test_flags_without_readiness_results_fail_before_lock" time="0.088"><failure message="Failed: Launch reached lock without readiness evidence">tmp_path = WindowsPath('C:/Users/samtu/Documents/Codex/2026-11-15/referenced-chatgpt-conversation-this-is-an/work/qa_fix_red/test_flags_without_readiness_r0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x00000175A160E4E0&gt;
+
+    def test_flags_without_readiness_results_fail_before_lock(tmp_path,monkeypatch):
+        root=prepared(tmp_path)
+        policy=dict(deployment_authorized=True,vps_gate_passed=True,three_participants_ready=True,
+            telemetry_contract_accepted=True,local_verification_passed=True,authorized_start_utc=DAY.isoformat())
+        path=tmp_path/"policy.json"
+        path.write_text(json.dumps(policy))
+        ob=runtime.frozen_modules()
+        monkeypatch.setattr(ob,"process_lock",lambda *a:pytest.fail("Launch reached lock without readiness evidence"))
+        with pytest.raises(RuntimeError,match="READINESS"):
+&gt;           runtime.run(root,path)
+
+work\CryptoLab\research\hunter001_dg001\r2_shadow\test_qa_fix.py:57: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+work\CryptoLab\research\hunter001_dg001\r2_shadow\runtime.py:211: in run
+    with ob.process_lock(root):
+         ^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+a = (WindowsPath('C:/Users/samtu/Documents/Codex/2026-11-15/referenced-chatgpt-conversation-this-is-an/work/qa_fix_red/test_flags_without_readiness_r0/runtime'),)
+
+&gt;   monkeypatch.setattr(ob,"process_lock",lambda *a:pytest.fail("Launch reached lock without readiness evidence"))
+                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   Failed: Launch reached lock without readiness evidence
+
+work\CryptoLab\research\hunter001_dg001\r2_shadow\test_qa_fix.py:55: Failed</failure></testcase></testsuite></testsuites>

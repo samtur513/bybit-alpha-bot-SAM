@@ -1,0 +1,16 @@
+{
+  "study": "R2-VALIDATION-001",
+  "status": "NOT_DEPLOYED",
+  "deployment_authorized": false,
+  "authorized_start_utc": null,
+  "requires_separate_user_permission": true,
+  "local_state": "STOPPED_CONTROL_ONLY",
+  "vps_connected_this_update": false,
+  "server_changes": 0,
+  "prospective_observations": 0,
+  "schedule_active": false,
+  "previous_planned_start": "2026-11-15T00:00:00+00:00",
+  "previous_start_is_not_active": true,
+  "reason": "Explicit user instruction: local verification only; no VPS access or deployment before separate authorization",
+  "strategy_protocol_commit": "7b6fed5ae5d72573e827f4e5c2cee419c183b445"
+}

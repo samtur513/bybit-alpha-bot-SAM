@@ -1,0 +1,60 @@
+{
+  "status": "OFFLINE_PREPARED",
+  "deployment": "VPS_PENDING",
+  "source_commit": "815d6884980791309cb37770ac96a9a93a2c48c0",
+  "platform": "Windows-11-10.0.26300-SP0",
+  "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+  "numpy": "2.5.4",
+  "tests": {
+    "original": {
+      "tests": 37,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "shadow": {
+      "tests": 34,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "qa_fix": {
+      "tests": 49,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "commands": [
+    {
+      "suite": "original",
+      "returncode": 0,
+      "network": "DENIED_AT_SOCKET_LAYER"
+    },
+    {
+      "suite": "shadow",
+      "returncode": 0,
+      "network": "DENIED_AT_SOCKET_LAYER"
+    },
+    {
+      "suite": "qa_fix",
+      "returncode": 0,
+      "network": "DENIED_AT_SOCKET_LAYER"
+    }
+  ],
+  "source_files_verified": 9,
+  "exchange_requests": 0,
+  "real_orders": 0,
+  "demo_orders": 0,
+  "private_api_calls": 0,
+  "vps_contacts": 0,
+  "installs": 0,
+  "service_changes": 0,
+  "pending": [
+    "VPS_RESOURCE_AND_LINUX_GATE",
+    "THREE_PARTICIPANTS_READY",
+    "RECEIVER_CONTRACT_ACCEPTANCE",
+    "FUTURE_T0_AUTHORIZATION"
+  ],
+  "economic_status": "INCONCLUSIVE_REAL_CAPITAL_NO_GO"
+}

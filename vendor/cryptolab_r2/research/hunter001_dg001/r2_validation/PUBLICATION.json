@@ -1,0 +1,20 @@
+{
+  "repository": "samtur513/CryptoLab",
+  "branch": "research/r2-validation-001-20261114",
+  "base": "0efacb4b13912c8a7b9da24963ef84e7a472be88",
+  "protocol_commit": "7b6fed5ae5d72573e827f4e5c2cee419c183b445",
+  "protocol_published_at": "2026-11-14T15:23:37Z",
+  "main_before": "bba224f2965f7ac2b49aa9b51d2b8fe23b63dfdb",
+  "research_only": true,
+  "real_orders": 0,
+  "private_account_requests": 0,
+  "original_oos_2026_opened": false,
+  "history_status": "COMPLETED_FIXED_CANDIDATE",
+  "forward_status": "NOT_DEPLOYED",
+  "tests": 135,
+  "first_new_market_fetch_at": "2026-11-14T15:25:49.512398+00:00",
+  "protocol_published_before_new_prices_verified": true,
+  "technical_addendum": "Bounded in-memory receipt cache; full append-only disk receipts retained; strategy and historical outputs unchanged",
+  "vps_status": "NOT_AUTHORIZED",
+  "local_observer_state": "STOPPED_CONTROL_ONLY"
+}

@@ -1,0 +1,17 @@
+{
+  "status": "PLANNED",
+  "t0_utc": "2026-11-17T00:00:00+00:00",
+  "minimum_end_utc": "2027-05-17T00:00:00+00:00",
+  "initial_capital_usdt": 300,
+  "participants": [
+    "TORG_V32_NATIVE_NEW_COHORT",
+    "TORG_V32_REALISTIC_SHADOW",
+    "CRYPTOLAB_R2_SHADOW"
+  ],
+  "interim_days": [
+    7,
+    30
+  ],
+  "minimum_calendar_months": 6,
+  "reason": "PROPOSED_ONLY; all gates and separate authorization required; if missed publish a new future T0; existing v3.2/8083 is never reset"
+}

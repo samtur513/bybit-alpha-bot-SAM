@@ -4,11 +4,12 @@
   "v3_2/src/shadow/paper_trader_v32_shadow.py": "1b266049a242eccca7b03c03ff116cf9c62a99a87bed6fa5b18e4b5fc30bec80",
   "v3_2/src/runners/run_three_system_dashboard.py": "0c6279766aecb587da3d86003c114ee970758b0717a3e6c0aebdc0ff32c88976",
   "v3_2/src/integrations/three_system_dashboard.py": "5f893945f3f08a59714c857f5059d2366a2fad1f171be315092b99dfe7b8cd33",
-  "tools/vps_preflight_readonly_check.py": "ac42a13fe2c2fd09c3539870a1a4b1cb3481e2b76fbf3129c565eae593cddd2c",
+  "tools/vps_preflight_readonly_check.py": "663b27b142be758dc09277af353d02e3815e79868a0ba54bd64a5aac87011b5c",
   "tools/vps_preflight_readonly.sh": "6d1d544a52eefa80718c80fa92db42e242cd2b33ad5d27ff85a045469b5ac843",
   "tests/test_final_start_blockers_009.py": "3ec1f4214ac3ec41d4f59503c32b373367f335b875152867aa957bc926b054cf",
   "tests/test_forward_live_data_gate_008.py": "70c555684393a8fc4e0f96854c8bbadef26ce0941da7b545641e9583b36872d3",
   "tests/test_real_engine_wiring_007.py": "30ca7cb304556ebea88e365769765371f8a9921e23ca6c8c6dfaf41448686521",
   "reports/final_start_blockers_009/FINAL_START_BLOCKERS_009_REPORT.md": "f844afb5b46de109bb9a8708efb47ee06eb8b425ddd3546bd46c190163a83699",
-  "reports/final_start_blockers_009/local_simulation_preflight.json": "76fa0f91729ada863a2a8d2f3c6e5518823a39efbc7b60a8ff66683005b7e1f6"
+  "reports/final_start_blockers_009/local_simulation_preflight.json": "b766256fbc5dfaa8892eaa8f0a35ffaa329ff8e063a5ad443e737a701fa83433",
+  "vendor/cryptolab_r2/COMMIT_SHA.txt": "06e230ae5d1c2fa6fc8fbe5e31506506aeab23be5a0edccd5f7d5e6f821ef286"
 }

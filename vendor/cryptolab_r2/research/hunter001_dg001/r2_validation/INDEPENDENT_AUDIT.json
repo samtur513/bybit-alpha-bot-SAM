@@ -1,0 +1,23 @@
+{
+  "prior_sealed_files": 498,
+  "source": {
+    "status": "PASS",
+    "responses": 66,
+    "unique_hours_per_symbol": 18264,
+    "ohlc_values_checked": 219168,
+    "oos2026_requests": 0
+  },
+  "signals": {
+    "status": "PASS",
+    "signal_symbol_rows": 2190,
+    "formula": "independent math.log/statistics.stdev",
+    "last_input": "preceding UTC daily close"
+  },
+  "ledger": {
+    "status": "PASS",
+    "daily_balances": 8760,
+    "accounts": 12,
+    "max_cash_qty_error": 4.9221853259950876e-08
+  },
+  "closed_oos2026_opened": false
+}

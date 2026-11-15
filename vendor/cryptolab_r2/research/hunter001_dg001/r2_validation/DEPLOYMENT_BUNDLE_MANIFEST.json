@@ -1,0 +1,22 @@
+{
+  "archive": "deployment/R2_OBSERVER_RUNTIME.zip",
+  "bytes": 51411,
+  "sha256": "7644de85a89a229bc8c9d820856fa31fec1efc175e0a2ce45aa482b985bacbbb",
+  "source_files": 9,
+  "entries": 10,
+  "deployment_status": "NOT_DEPLOYED",
+  "manifest": {
+    "kind": "RESEARCH_RUNTIME_ONLY_NOT_DEPLOYMENT",
+    "files": {
+      "r2_validation/observer.py": "19a807c85f85690f67e11fb82a4fa720450f367f85d3c17a0e7fe54a18aed161",
+      "r2_validation/public_data.py": "5c2e90814cddd4bac4c4873cfb81723e33fb3cbf4ede1de0ffaf79c4529524fb",
+      "r2_validation/core.py": "78ba2278d752e6f0e604ee99d3fff07c145e3aa1c9fdd9730713efad01239768",
+      "r2_validation/execution.py": "d84952900ff33d8f8c573106b1701832619415969bcba856d02a5324edaecd42",
+      "r2_validation/PREREGISTRATION.json": "f913d359f13ac94340b3192c92f78745cc5428b61788adf58671d9b4ffd73c69",
+      "r2_validation/DEPLOYMENT_STATUS.json": "6d1322c1e559a38337b4ac16717ab4b8ddc6a115a7939b85e759ca107dc9761b",
+      "r2_validation/runtime_requirements.txt": "d5074a05bcc216d1e3adeeed5a6717cd820474ee7aea02fdc888260ae48e4f0e",
+      "t01_profit_rank/profit_rank.py": "8f1a56444dafbb848e930dff16d16bf02c640567b8e72a9b3a1d553088260447",
+      "t01_profit_rank/PREREGISTRATION.json": "9e4856dddde75eb981a403053ddb40392ca7e6b6f09456efce319ba1377f8f0c"
+    }
+  }
+}

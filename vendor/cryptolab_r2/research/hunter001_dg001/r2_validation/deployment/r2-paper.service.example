@@ -1,0 +1,31 @@
+[Unit]
+Description=CryptoLab R2 public-only paper research observer
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/cryptolab-r2/app
+ExecStart=%h/cryptolab-r2/venv/bin/python %h/cryptolab-r2/app/r2_validation/observer.py daemon --data-dir %h/cryptolab-r2/state --start REPLACE_WITH_PUBLISHED_FUTURE_UTC
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=OMP_NUM_THREADS=1
+Environment=MKL_NUM_THREADS=1
+Environment=PYTHONUNBUFFERED=1
+UMask=0077
+Nice=19
+IOSchedulingClass=idle
+CPUAccounting=yes
+CPUQuota=5%
+MemoryAccounting=yes
+MemoryHigh=128M
+MemoryMax=192M
+TasksMax=16
+NoNewPrivileges=yes
+Restart=on-failure
+RestartSec=60
+StandardOutput=journal
+StandardError=journal
+LogRateLimitIntervalSec=60
+LogRateLimitBurst=20
+
+[Install]
+WantedBy=default.target

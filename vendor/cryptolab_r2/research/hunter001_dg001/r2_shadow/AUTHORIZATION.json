@@ -1,0 +1,13 @@
+{
+  "deployment_authorized": false,
+  "vps_gate_passed": false,
+  "three_participants_ready": false,
+  "telemetry_contract_accepted": false,
+  "local_verification_passed": false,
+  "authorized_start_utc": null,
+  "status": "VPS_PENDING",
+  "readiness_manifest_sha256": null,
+  "user_authorization": null,
+  "readiness_collection_authorized": false,
+  "collection_approval_reference": null
+}

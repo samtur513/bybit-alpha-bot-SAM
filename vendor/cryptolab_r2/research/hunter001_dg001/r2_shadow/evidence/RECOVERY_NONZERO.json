@@ -1,0 +1,333 @@
+{
+  "status": "PASS",
+  "kind": "SYNTHETIC_OFFLINE_NONZERO_RECOVERY",
+  "network_requests": 0,
+  "real_orders": 0,
+  "demo_orders": 0,
+  "reference_order_events": 132,
+  "reference_nonzero_profiles": 24,
+  "scenarios": [
+    {
+      "crash": "before_commit",
+      "exit_code": 23,
+      "profiles_compared": 24,
+      "nonzero_profiles_before_crash": 24,
+      "checkpoint_matches_reference": true,
+      "retry_idempotent": true,
+      "recovered": {
+        "status": "PASS",
+        "profiles": 24,
+        "order_events": 60,
+        "raw_references": 24
+      },
+      "final_tables_sha256": "f3c83c5a4235998e2ce91254a85c36bed81034fbeb57f9be5159d330230f3984",
+      "per_profile": {
+        "BASELINE:10000:BASE:MODEL_C5": {
+          "positive_legs": 4,
+          "fees_usdt": 13.493072140280002,
+          "account_sha256": "22217acef3056dc4d6ec4c14a9dd03856febb6d6e58dc027cd3665493dc7a66c",
+          "matches_reference": true
+        },
+        "BASELINE:10000:BASE:OBSERVED_BOOK": {
+          "positive_legs": 4,
+          "fees_usdt": 13.4831922511498,
+          "account_sha256": "d9068e66cfcb117f9b1ae59e14dbcc1107f8218eee2bd3caea27a023b5bb38ac",
+          "matches_reference": true
+        },
+        "BASELINE:10000:STRESS:MODEL_C5": {
+          "positive_legs": 6,
+          "fees_usdt": 13.498413468670002,
+          "account_sha256": "c5cbf8cc083be0fd4bb7accfaba10169de4a38ab31b7a293ed2214aa1bd7ab97",
+          "matches_reference": true
+        },
+        "BASELINE:10000:STRESS:OBSERVED_BOOK": {
+          "positive_legs": 6,
+          "fees_usdt": 13.488500243584149,
+          "account_sha256": "a4ad56a3bb4968fb03ee824da4e7f280e8f3a46710daa993571c67e325e3d2b5",
+          "matches_reference": true
+        },
+        "BASELINE:1000:BASE:MODEL_C5": {
+          "positive_legs": 4,
+          "fees_usdt": 1.34928128428,
+          "account_sha256": "9b7190e21eaa11c7f1399188e8203c3552c582514176b7ca2a01e0fe38a46896",
+          "matches_reference": true
+        },
+        "BASELINE:1000:BASE:OBSERVED_BOOK": {
+          "positive_legs": 4,
+          "fees_usdt": 1.3483132963928002,
+          "account_sha256": "174c1eeb4ac393cf85c694798c41269f591219a146cfcb91fbbc423ff66e1487",
+          "matches_reference": true
+        },
+        "BASELINE:1000:STRESS:MODEL_C5": {
+          "positive_legs": 4,
+          "fees_usdt": 1.3487815632000002,
+          "account_sha256": "3620a798ca1e7cea95dbfd42da8e7d352fcddbdc5e56bfecffec8374883e557e",
+          "matches_reference": true
+        },
+        "BASELINE:1000:STRESS:OBSERVED_BOOK": {
+          "positive_legs": 4,
+          "fees_usdt": 1.347783739457,
+          "account_sha256": "c5767898299254661955aadd1ca948764085dc02648f2455bf3cb3cacb29917f",
+          "matches_reference": true
+        },
+        "BASELINE:300:BASE:MODEL_C5": {
+          "positive_legs": 4,
+          "fees_usdt": 0.4047730252,
+          "account_sha256": "b1eacb3807ef26ca8a4c5e3dc5d9422061e778375adcd28ef9b8f57de0e44a22",
+          "matches_reference": true
+        },
+        "BASELINE:300:BASE:OBSERVED_BOOK": {
+          "positive_legs": 4,
+          "fees_usdt": 0.4044749392018,
+          "account_sha256": "aa5b5a2533bd0059015bdb3f3d86c54237aff70e1a11098efae27628937fcf95",
+          "matches_reference": true
+        },
+        "BASELINE:300:STRESS:MODEL_C5": {
+          "positive_legs": 4,
+          "fees_usdt": 0.40462007875000006,
+          "account_sha256": "31918f7bb1c69131268685249a171b37dfc24583687514db04d4799033095bb0",
+          "matches_reference": true
+        },
+        "BASELINE:300:STRESS:OBSERVED_BOOK": {
+          "positive_legs": 4,
+          "fees_usdt": 0.40432204224699997,
+          "account_sha256": "385e4a852226c8a3356214647b993335bbd32d07c6d4f2e92806957ed4583ba6",
+          "matches_reference": true
+        },
+        "R2:10000:BASE:MODEL_C5": {
+          "positive_legs": 5,
+          "fees_usdt": 20.487458157699997,
+          "account_sha256": "7838df35545e8b758194a19c281ef76565fe37040983cdce0881f9d25a7719d0",
+          "matches_reference": true
+        },
+        "R2:10000:BASE:OBSERVED_BOOK": {
+          "positive_legs": 5,
+          "fees_usdt": 20.475829391086002,
+          "account_sha256": "13f9ad88c7f3bea00bde301d871135877f3ae1cb891c21abf2ad879861c85cc2",
+          "matches_reference": true
+        },
+        "R2:10000:STRESS:MODEL_C5": {
+          "positive_legs": 5,
+          "fees_usdt": 20.479227797950006,
+          "account_sha256": "b1fba28cef1d6f080f48426e2d1485c1c09f7993c17f12cca5d61420e508f77b",
+          "matches_reference": true
+        },
+        "R2:10000:STRESS:OBSERVED_BOOK": {
+          "positive_legs": 5,
+          "fees_usdt": 20.4676023526255,
+          "account_sha256": "12223fdacdbe1777f7d03008b790c8c56e24c24b7c05d3daf9f2ef25fa30cca3",
+          "matches_reference": true
+        },
+        "R2:1000:BASE:MODEL_C5": {
+          "positive_legs": 5,
+          "fees_usdt": 2.0487019417000005,
+          "account_sha256": "34f4009543be624588a8fdb771de8d1f0bfa42a97b3937be463ce24051991fe3",
+          "matches_reference": true
+        },
+        "R2:1000:BASE:OBSERVED_BOOK": {
+          "positive_legs": 5,
+          "fees_usdt": 2.0475477394370003,
+          "account_sha256": "d7e664162dfaf37f5d50247889586f6990fe3f0a30cd230b08db0872b4ea3f7c",
+          "matches_reference": true
+        },
+        "R2:1000:STRESS:MODEL_C5": {
+          "positive_legs": 5,
+          "fees_usdt": 2.0478881515000005,
+          "account_sha256": "aa314f26899f28a101df1f19a94983956aed48bbd04b125182c731e78b041579",
+          "matches_reference": true
+        },
+        "R2:1000:STRESS:OBSERVED_BOOK": {
+          "positive_legs": 5,
+          "fees_usdt": 2.0467342858150004,
+          "account_sha256": "e6e0b9d2527223f168a8683c6754c233e7fd6b5a6fc070dc3f0927daead12ef0",
+          "matches_reference": true
+        },
+        "R2:300:BASE:MODEL_C5": {
+          "positive_legs": 5,
+          "fees_usdt": 0.6146041344000001,
+          "account_sha256": "1aee8b24ed7b197f3dc068591ae2e3f9a36be8945ec34a28e2eed161dc65c928",
+          "matches_reference": true
+        },
+        "R2:300:BASE:OBSERVED_BOOK": {
+          "positive_legs": 5,
+          "fees_usdt": 0.6142158244496,
+          "account_sha256": "e5720efc3c7eb834a320f6c96d398ea940cbea19e7c9197b5e37405cf5a2562e",
+          "matches_reference": true
+        },
+        "R2:300:STRESS:MODEL_C5": {
+          "positive_legs": 5,
+          "fees_usdt": 0.6143237976500001,
+          "account_sha256": "c4e7d4453f2b74a88a2fc2d3aa25e431ad3ae911824c8aef7260987eeba8c5ed",
+          "matches_reference": true
+        },
+        "R2:300:STRESS:OBSERVED_BOOK": {
+          "positive_legs": 5,
+          "fees_usdt": 0.614001664968,
+          "account_sha256": "83034aaf3366b2ff68bc8479d1df0b5b21b3a65fc2ea9580145d7fb70a0150ea",
+          "matches_reference": true
+        }
+      }
+    },
+    {
+      "crash": "after_commit",
+      "exit_code": 24,
+      "profiles_compared": 24,
+      "nonzero_profiles_before_crash": 24,
+      "checkpoint_matches_reference": true,
+      "retry_idempotent": true,
+      "recovered": {
+        "status": "PASS",
+        "profiles": 24,
+        "order_events": 132,
+        "raw_references": 30
+      },
+      "final_tables_sha256": "f3c83c5a4235998e2ce91254a85c36bed81034fbeb57f9be5159d330230f3984",
+      "per_profile": {
+        "BASELINE:10000:BASE:MODEL_C5": {
+          "positive_legs": 4,
+          "fees_usdt": 13.493072140280002,
+          "account_sha256": "22217acef3056dc4d6ec4c14a9dd03856febb6d6e58dc027cd3665493dc7a66c",
+          "matches_reference": true
+        },
+        "BASELINE:10000:BASE:OBSERVED_BOOK": {
+          "positive_legs": 4,
+          "fees_usdt": 13.4831922511498,
+          "account_sha256": "d9068e66cfcb117f9b1ae59e14dbcc1107f8218eee2bd3caea27a023b5bb38ac",
+          "matches_reference": true
+        },
+        "BASELINE:10000:STRESS:MODEL_C5": {
+          "positive_legs": 6,
+          "fees_usdt": 13.498413468670002,
+          "account_sha256": "c5cbf8cc083be0fd4bb7accfaba10169de4a38ab31b7a293ed2214aa1bd7ab97",
+          "matches_reference": true
+        },
+        "BASELINE:10000:STRESS:OBSERVED_BOOK": {
+          "positive_legs": 6,
+          "fees_usdt": 13.488500243584149,
+          "account_sha256": "a4ad56a3bb4968fb03ee824da4e7f280e8f3a46710daa993571c67e325e3d2b5",
+          "matches_reference": true
+        },
+        "BASELINE:1000:BASE:MODEL_C5": {
+          "positive_legs": 4,
+          "fees_usdt": 1.34928128428,
+          "account_sha256": "9b7190e21eaa11c7f1399188e8203c3552c582514176b7ca2a01e0fe38a46896",
+          "matches_reference": true
+        },
+        "BASELINE:1000:BASE:OBSERVED_BOOK": {
+          "positive_legs": 4,
+          "fees_usdt": 1.3483132963928002,
+          "account_sha256": "174c1eeb4ac393cf85c694798c41269f591219a146cfcb91fbbc423ff66e1487",
+          "matches_reference": true
+        },
+        "BASELINE:1000:STRESS:MODEL_C5": {
+          "positive_legs": 4,
+          "fees_usdt": 1.3487815632000002,
+          "account_sha256": "3620a798ca1e7cea95dbfd42da8e7d352fcddbdc5e56bfecffec8374883e557e",
+          "matches_reference": true
+        },
+        "BASELINE:1000:STRESS:OBSERVED_BOOK": {
+          "positive_legs": 4,
+          "fees_usdt": 1.347783739457,
+          "account_sha256": "c5767898299254661955aadd1ca948764085dc02648f2455bf3cb3cacb29917f",
+          "matches_reference": true
+        },
+        "BASELINE:300:BASE:MODEL_C5": {
+          "positive_legs": 4,
+          "fees_usdt": 0.4047730252,
+          "account_sha256": "b1eacb3807ef26ca8a4c5e3dc5d9422061e778375adcd28ef9b8f57de0e44a22",
+          "matches_reference": true
+        },
+        "BASELINE:300:BASE:OBSERVED_BOOK": {
+          "positive_legs": 4,
+          "fees_usdt": 0.4044749392018,
+          "account_sha256": "aa5b5a2533bd0059015bdb3f3d86c54237aff70e1a11098efae27628937fcf95",
+          "matches_reference": true
+        },
+        "BASELINE:300:STRESS:MODEL_C5": {
+          "positive_legs": 4,
+          "fees_usdt": 0.40462007875000006,
+          "account_sha256": "31918f7bb1c69131268685249a171b37dfc24583687514db04d4799033095bb0",
+          "matches_reference": true
+        },
+        "BASELINE:300:STRESS:OBSERVED_BOOK": {
+          "positive_legs": 4,
+          "fees_usdt": 0.40432204224699997,
+          "account_sha256": "385e4a852226c8a3356214647b993335bbd32d07c6d4f2e92806957ed4583ba6",
+          "matches_reference": true
+        },
+        "R2:10000:BASE:MODEL_C5": {
+          "positive_legs": 5,
+          "fees_usdt": 20.487458157699997,
+          "account_sha256": "7838df35545e8b758194a19c281ef76565fe37040983cdce0881f9d25a7719d0",
+          "matches_reference": true
+        },
+        "R2:10000:BASE:OBSERVED_BOOK": {
+          "positive_legs": 5,
+          "fees_usdt": 20.475829391086002,
+          "account_sha256": "13f9ad88c7f3bea00bde301d871135877f3ae1cb891c21abf2ad879861c85cc2",
+          "matches_reference": true
+        },
+        "R2:10000:STRESS:MODEL_C5": {
+          "positive_legs": 5,
+          "fees_usdt": 20.479227797950006,
+          "account_sha256": "b1fba28cef1d6f080f48426e2d1485c1c09f7993c17f12cca5d61420e508f77b",
+          "matches_reference": true
+        },
+        "R2:10000:STRESS:OBSERVED_BOOK": {
+          "positive_legs": 5,
+          "fees_usdt": 20.4676023526255,
+          "account_sha256": "12223fdacdbe1777f7d03008b790c8c56e24c24b7c05d3daf9f2ef25fa30cca3",
+          "matches_reference": true
+        },
+        "R2:1000:BASE:MODEL_C5": {
+          "positive_legs": 5,
+          "fees_usdt": 2.0487019417000005,
+          "account_sha256": "34f4009543be624588a8fdb771de8d1f0bfa42a97b3937be463ce24051991fe3",
+          "matches_reference": true
+        },
+        "R2:1000:BASE:OBSERVED_BOOK": {
+          "positive_legs": 5,
+          "fees_usdt": 2.0475477394370003,
+          "account_sha256": "d7e664162dfaf37f5d50247889586f6990fe3f0a30cd230b08db0872b4ea3f7c",
+          "matches_reference": true
+        },
+        "R2:1000:STRESS:MODEL_C5": {
+          "positive_legs": 5,
+          "fees_usdt": 2.0478881515000005,
+          "account_sha256": "aa314f26899f28a101df1f19a94983956aed48bbd04b125182c731e78b041579",
+          "matches_reference": true
+        },
+        "R2:1000:STRESS:OBSERVED_BOOK": {
+          "positive_legs": 5,
+          "fees_usdt": 2.0467342858150004,
+          "account_sha256": "e6e0b9d2527223f168a8683c6754c233e7fd6b5a6fc070dc3f0927daead12ef0",
+          "matches_reference": true
+        },
+        "R2:300:BASE:MODEL_C5": {
+          "positive_legs": 5,
+          "fees_usdt": 0.6146041344000001,
+          "account_sha256": "1aee8b24ed7b197f3dc068591ae2e3f9a36be8945ec34a28e2eed161dc65c928",
+          "matches_reference": true
+        },
+        "R2:300:BASE:OBSERVED_BOOK": {
+          "positive_legs": 5,
+          "fees_usdt": 0.6142158244496,
+          "account_sha256": "e5720efc3c7eb834a320f6c96d398ea940cbea19e7c9197b5e37405cf5a2562e",
+          "matches_reference": true
+        },
+        "R2:300:STRESS:MODEL_C5": {
+          "positive_legs": 5,
+          "fees_usdt": 0.6143237976500001,
+          "account_sha256": "c4e7d4453f2b74a88a2fc2d3aa25e431ad3ae911824c8aef7260987eeba8c5ed",
+          "matches_reference": true
+        },
+        "R2:300:STRESS:OBSERVED_BOOK": {
+          "positive_legs": 5,
+          "fees_usdt": 0.614001664968,
+          "account_sha256": "83034aaf3366b2ff68bc8479d1df0b5b21b3a65fc2ea9580145d7fb70a0150ea",
+          "matches_reference": true
+        }
+      }
+    }
+  ]
+}

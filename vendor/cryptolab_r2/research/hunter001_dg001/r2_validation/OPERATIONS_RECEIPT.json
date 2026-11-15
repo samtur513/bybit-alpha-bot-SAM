@@ -1,0 +1,22 @@
+{
+  "verified_at_utc": "2026-11-14T17:28:10.760163+00:00",
+  "status": "NOT_DEPLOYED",
+  "observer_process_running": false,
+  "active_pid": null,
+  "local_state": "STOPPED_CONTROL_ONLY",
+  "stopped_at_utc": "2026-11-14T17:20:53.454619+00:00",
+  "stopped_test_pid": 23188,
+  "stop_receipt": "evidence/LOCAL_VERIFICATION_STOP.json",
+  "forward_executions": 0,
+  "schedule_active": false,
+  "vps_deployed": false,
+  "vps_connected_this_update": false,
+  "server_changes_this_update": 0,
+  "requires_separate_user_permission": true,
+  "previous_local_test_snapshot": {
+    "pid": 23188,
+    "heartbeat_at": "2026-11-14T20:17:08.36756+03:00",
+    "working_set_bytes": 37470208,
+    "cpu_seconds": 0.40625
+  }
+}

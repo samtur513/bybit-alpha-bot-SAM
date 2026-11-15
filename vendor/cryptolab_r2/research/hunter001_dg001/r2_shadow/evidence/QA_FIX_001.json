@@ -1,0 +1,16 @@
+{
+  "status": "OFFLINE_PREPARED",
+  "deployment": "VPS_PENDING",
+  "issue_parent_commit": "a2f1820d9b6da02c3f24cc8a5c1680016ea2b54e",
+  "telemetry": "CURRENT_QUOTE_BATCH_AND_READ_ONLY_BALANCE_SNAPSHOT; NO_EXTRA_HTTP",
+  "readiness": "HASHED_HOST_COHORT_CODE_BOUND_ARTIFACTS; ALL ACTUAL VPS RESULTS STILL MISSING",
+  "readiness_positive_tests": "SYNTHETIC_OFFLINE_FIXTURES_NOT_VPS_EVIDENCE",
+  "recovery": "132_ORDER_EVENTS_ALL24_NONZERO; HARD_EXIT_BEFORE_AND_AFTER_COMMIT",
+  "wire_format_changed": false,
+  "torg_bot_changes": 0,
+  "observer_source_changes": 0,
+  "real_orders": 0,
+  "demo_orders": 0,
+  "actual_vps_checks_run": false,
+  "launch_authorized": false
+}
