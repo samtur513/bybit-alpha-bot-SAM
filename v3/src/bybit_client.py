@@ -223,3 +223,22 @@ class BybitClient:
                     pass
         return prices
 
+    def get_tickers_detail(self, category: str = "linear", symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Fetches detailed tickers list from Bybit V5 market tickers."""
+        params = {"category": category}
+        if symbol:
+            params["symbol"] = symbol
+        res = self.request("GET", "/v5/market/tickers", params=params)
+        return res.get("result", {}).get("list", [])
+
+    def get_orderbook(self, symbol: str, limit: int = 50, category: str = "linear") -> Dict[str, Any]:
+        """
+        Fetches confirmed L2 orderbook snapshot from Bybit V5 market orderbook.
+        Returns dict with keys: 's' (symbol), 'b' (bids [[price, size], ...]),
+        'a' (asks [[price, size], ...]), 'ts' (exchange timestamp ms), 'u' (update ID).
+        """
+        params = {"category": category, "symbol": symbol, "limit": limit}
+        res = self.request("GET", "/v5/market/orderbook", params=params)
+        return res.get("result", {})
+
+

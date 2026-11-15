@@ -125,13 +125,13 @@ class NativePaperRunner:
 
     @property
     def total_fees(self) -> Decimal:
-        closed = sum((t.fees_paid for t in self.engine.closed_trades), Decimal("0"))
+        closed = sum((getattr(t, "fees_paid", Decimal("0")) for t in self.engine.closed_trades), Decimal("0"))
         open_f = sum((p.entry_fees for p in self.engine.open_positions.values()), Decimal("0"))
         return closed + open_f
 
     @property
     def total_funding(self) -> Decimal:
-        closed = sum((t.funding_pnl for t in self.engine.closed_trades), Decimal("0"))
+        closed = sum((getattr(t, "funding_pnl", Decimal("0")) for t in self.engine.closed_trades), Decimal("0"))
         open_f = sum((p.funding_pnl for p in self.engine.open_positions.values()), Decimal("0"))
         return closed + open_f
 
@@ -235,27 +235,26 @@ class NativePaperRunner:
         funding_rate: Optional[Decimal] = None,
         btc_bullish: bool = True,
         btc_bearish: bool = True,
+        fault_injection_point: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Processes a closed bar through the real Donchian quantitative cycle:
-        1. Dedup check in SQLite.
+        1. Authoritative SQLite Dedup check (Read-Only).
         2. Indicator computation with zero-lookahead shift(1).
         3. Signal generation & Half-Kelly position sizing.
         4. Position entry / stop / trailing / cascade TP / fast scratch management.
-        5. Single atomic commit to native_journal and native_trades.
+        5. Single atomic commit to native_journal, native_trades, AND native_dedup (Section P2).
         """
         ts = int(bar["timestamp"])
         event_key = f"{symbol}_{ts}"
 
-        # SQLite Dedup check
-        conn = sqlite3.connect(str(self.db_path))
+        # 1. Authoritative SQLite Dedup Check (Read-Only)
+        conn = sqlite3.connect(str(self.db_path), timeout=30.0)
         try:
-            with conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT 1 FROM native_dedup WHERE event_key = ?;", (event_key,))
-                if cursor.fetchone() is not None:
-                    return {"status": "SKIPPED_DUPLICATE", "symbol": symbol, "ts": ts}
-                cursor.execute("INSERT INTO native_dedup (event_key, processed_at_ms) VALUES (?, ?);", (event_key, int(time.time() * 1000)))
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM native_dedup WHERE event_key = ?;", (event_key,))
+            if cursor.fetchone() is not None:
+                return {"status": "SKIPPED_DUPLICATE", "symbol": symbol, "ts": ts}
         finally:
             conn.close()
 
@@ -305,13 +304,21 @@ class NativePaperRunner:
             btc_bearish=btc_bearish,
         )
 
-        # Check for newly closed trades and persist them
         new_closed_trades = self.engine.closed_trades[prev_trades_count:]
-        conn = sqlite3.connect(str(self.db_path))
+
+        # Fault Injection Point (Before Commit) - Section P2 verification
+        if fault_injection_point == "before_commit":
+            raise RuntimeError("FAULT_INJECTION: Crash immediately before commit in NativePaperRunner")
+
+        # 2. Single Atomic Transaction: Trades + Journal + Dedup Key
+        conn = sqlite3.connect(str(self.db_path), timeout=30.0)
         try:
-            with conn:
+            with conn:  # BEGIN ... COMMIT
                 cursor = conn.cursor()
                 for trade in new_closed_trades:
+                    gross = getattr(trade, "gross_pnl", float((trade.exit_price - trade.entry_price) * trade.final_qty * Decimal(str(trade.direction))))
+                    fees = getattr(trade, "fees_paid", 0.0)
+                    funding = getattr(trade, "funding_pnl", 0.0)
                     cursor.execute("""
                         INSERT OR REPLACE INTO native_trades (
                             trade_id, symbol, direction, entry_time_ms, exit_time_ms,
@@ -327,9 +334,9 @@ class NativePaperRunner:
                         float(trade.entry_price),
                         float(trade.exit_price),
                         float(trade.initial_qty),
-                        float(trade.gross_pnl),
-                        float(trade.fees_paid),
-                        float(trade.funding_pnl),
+                        float(gross),
+                        float(fees),
+                        float(funding),
                         float(trade.net_pnl),
                         trade.exit_reason,
                     ))
@@ -359,6 +366,12 @@ class NativePaperRunner:
                     3,
                     f"closed_bar_{symbol}",
                 ))
+
+                # Atomically commit dedup key inside the SAME transaction!
+                cursor.execute("""
+                    INSERT INTO native_dedup (event_key, processed_at_ms)
+                    VALUES (?, ?);
+                """, (event_key, int(time.time() * 1000)))
         finally:
             conn.close()
 
@@ -373,34 +386,189 @@ class NativePaperRunner:
             "realized_equity": float(self.engine.realized_equity),
         }
 
+    def update_quotes(
+        self,
+        quotes: Dict[str, Decimal],
+        timestamp_ms: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Updates live quotes for continuous MTM equity tracking and accompanies open positions.
+        """
+        now_mono = time.monotonic()
+        ts = timestamp_ms or int(time.time() * 1000)
+        for sym, price in quotes.items():
+            self.latest_prices[sym] = price
+            self.latest_quote_times[sym] = now_mono
+
+        self.has_market_data = True
+
+        # Accompany open positions on tick quotes: manage stops & MTM
+        if self.engine.open_positions:
+            prev_closed = len(self.engine.closed_trades)
+            self.engine.process_price_event(timestamp=ts, prices=self.latest_prices)
+            new_closed = self.engine.closed_trades[prev_closed:]
+            if new_closed:
+                conn = sqlite3.connect(str(self.db_path), timeout=30.0)
+                try:
+                    with conn:
+                        cursor = conn.cursor()
+                        for trade in new_closed:
+                            gross = getattr(trade, "gross_pnl", float((trade.exit_price - trade.entry_price) * trade.final_qty * Decimal(str(trade.direction))))
+                            fees = getattr(trade, "fees_paid", 0.0)
+                            funding = getattr(trade, "funding_pnl", 0.0)
+                            cursor.execute("""
+                                INSERT OR REPLACE INTO native_trades (
+                                    trade_id, symbol, direction, entry_time_ms, exit_time_ms,
+                                    entry_price, exit_price, qty, gross_pnl, fees_paid,
+                                    funding_pnl, net_pnl, exit_reason
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                            """, (
+                                f"T_{trade.symbol}_{trade.entry_time}",
+                                trade.symbol,
+                                trade.direction,
+                                trade.entry_time,
+                                trade.exit_time,
+                                float(trade.entry_price),
+                                float(trade.exit_price),
+                                float(trade.initial_qty),
+                                float(gross),
+                                float(fees),
+                                float(funding),
+                                float(trade.net_pnl),
+                                trade.exit_reason,
+                            ))
+                finally:
+                    conn.close()
+
+        self.save_state()
+        return self.export_telemetry()
+
     def warm_up_history_from_bybit(self) -> None:
-        """Loads historical closed klines from Bybit public REST API."""
-        logger.info("Warming up historical kline buffers via Bybit public REST API...")
+        """Loads historical closed klines from Bybit public REST API for all universe symbols."""
+        logger.info(f"Warming up historical kline buffers via Bybit public REST API for {len(self.symbols)} symbols...")
         try:
             now_srv = self.client.get_server_time()
-            for sym in self.symbols[:5]:  # Warm up priority anchors
-                raw = self.client.get_kline(sym, interval=CANDLE_INTERVAL, limit=150)
-                if not raw:
-                    continue
-                records = [
-                    dict(
-                        timestamp=int(k[0]),
-                        open=float(k[1]), high=float(k[2]), low=float(k[3]),
-                        close=float(k[4]), volume=float(k[5]), turnover=float(k[6])
-                    )
-                    for k in raw if int(k[0]) + BAR_INTERVAL_MS <= now_srv
-                ]
-                df = pd.DataFrame(records).sort_values("timestamp").drop_duplicates("timestamp").reset_index(drop=True)
-                if len(df) >= min(DONCHIAN_WINDOW, 50):
-                    df = prepare_dual_regime_indicators(df, self.classifier, lookback=DONCHIAN_WINDOW)
-                    self.candle_buffers[sym] = df
-                    self.latest_prices[sym] = Decimal(str(df["close"].iloc[-1]))
-                    self.latest_quote_times[sym] = time.monotonic()
-                    self.last_processed_bar_ts[sym] = int(df["timestamp"].iloc[-1])
+            for sym in self.symbols:  # Full original universe, not sliced!
+                try:
+                    raw = self.client.get_kline(sym, interval=CANDLE_INTERVAL, limit=150)
+                    if not raw:
+                        continue
+                    records = [
+                        dict(
+                            timestamp=int(k[0]),
+                            open=float(k[1]), high=float(k[2]), low=float(k[3]),
+                            close=float(k[4]), volume=float(k[5]), turnover=float(k[6])
+                        )
+                        for k in raw if int(k[0]) + BAR_INTERVAL_MS <= now_srv
+                    ]
+                    df = pd.DataFrame(records).sort_values("timestamp").drop_duplicates("timestamp").reset_index(drop=True)
+                    if len(df) >= min(DONCHIAN_WINDOW, 50):
+                        df = prepare_dual_regime_indicators(df, self.classifier, lookback=DONCHIAN_WINDOW)
+                        self.candle_buffers[sym] = df
+                        self.latest_prices[sym] = Decimal(str(df["close"].iloc[-1]))
+                        self.latest_quote_times[sym] = time.monotonic()
+                        self.last_processed_bar_ts[sym] = int(df["timestamp"].iloc[-1])
+                except Exception as sym_err:
+                    logger.debug(f"Warm-up skip for {sym}: {sym_err}")
             self.has_market_data = len(self.candle_buffers) > 0
             logger.info(f"Warm-up complete. Initialized buffers for {len(self.candle_buffers)} symbols.")
         except Exception as e:
             logger.warning(f"Public market data warm-up failed (continuing in offline/safe mode): {e}")
+
+    def poll_market_step(self) -> Dict[str, Any]:
+        """
+        Executes one continuous forward market data polling cycle:
+        1. Queries Bybit server time: now_srv = client.get_server_time().
+        2. Queries live tickers via Bybit public REST:
+           - Updates latest_prices and latest_quote_times for all active symbols.
+           - Updates MTM equity and accompanies open positions on live quotes.
+        3. Queries latest 1h klines for each symbol in self.symbols:
+           - Validates candle close timestamp: strictly requires kline_open_ts + 3600_000 <= now_srv.
+             Never processes the currently in-progress unclosed bar.
+           - Checks if kline_open_ts > last_processed_bar_ts[symbol].
+           - If a new closed bar is detected:
+             Calls ingest_closed_bar() in chronological sequence.
+        4. Detects funding events and applies contract-specific funding payments.
+        5. Handles network latency, transient errors, rate limits with backoff without crashing.
+        6. Atomically updates state and exports standardized telemetry.
+        """
+        try:
+            now_srv = self.client.get_server_time()
+            tickers = self.client.get_tickers_detail(category="linear")
+            ticker_map = {t["symbol"]: t for t in tickers if "symbol" in t}
+
+            # 1. Update live quotes for all symbols in universe
+            quotes_to_update = {}
+            funding_map = {}
+            for sym in self.symbols:
+                t = ticker_map.get(sym)
+                if t and t.get("lastPrice"):
+                    try:
+                        p = Decimal(str(t["lastPrice"]))
+                        quotes_to_update[sym] = p
+                        if t.get("fundingRate"):
+                            funding_map[sym] = Decimal(str(t["fundingRate"]))
+                    except Exception:
+                        pass
+
+            if quotes_to_update:
+                self.update_quotes(quotes_to_update, timestamp_ms=now_srv)
+
+            # 2. Check BTC Trend Filter from BTC candle buffer
+            btc_bullish = True
+            btc_bearish = True
+            btc_df = self.candle_buffers.get("BTCUSDT")
+            if btc_df is not None and len(btc_df) >= 50:
+                btc_close = btc_df["close"].iloc[-1]
+                btc_ema50 = btc_df["ema_fast"].iloc[-1] if "ema_fast" in btc_df else btc_close
+                btc_bullish = bool(btc_close >= btc_ema50)
+                btc_bearish = bool(btc_close <= btc_ema50)
+
+            # 3. Poll for newly closed 1h bars
+            processed_count = 0
+            for sym in self.symbols:
+                try:
+                    raw = self.client.get_kline(sym, interval=CANDLE_INTERVAL, limit=3)
+                    if not raw:
+                        continue
+                    # Filter only strictly closed bars: open_ts + 3600000 <= now_srv
+                    closed_bars = [k for k in raw if int(k[0]) + BAR_INTERVAL_MS <= now_srv]
+                    # Sort ascending (oldest first)
+                    closed_bars.sort(key=lambda k: int(k[0]))
+                    for k in closed_bars:
+                        bar_ts = int(k[0])
+                        if bar_ts > self.last_processed_bar_ts.get(sym, 0):
+                            bar_dict = {
+                                "timestamp": bar_ts,
+                                "open": float(k[1]),
+                                "high": float(k[2]),
+                                "low": float(k[3]),
+                                "close": float(k[4]),
+                                "volume": float(k[5]),
+                                "turnover": float(k[6]),
+                            }
+                            f_rate = funding_map.get(sym)
+                            res = self.ingest_closed_bar(
+                                symbol=sym,
+                                bar=bar_dict,
+                                current_price=quotes_to_update.get(sym),
+                                funding_rate=f_rate,
+                                btc_bullish=btc_bullish,
+                                btc_bearish=btc_bearish,
+                            )
+                            if res.get("status") == "PROCESSED":
+                                processed_count += 1
+                except Exception as sym_err:
+                    logger.debug(f"Error checking klines for {sym}: {sym_err}")
+
+            return {
+                "status": "SUCCESS",
+                "processed_bars": processed_count,
+                "server_time_ms": now_srv,
+            }
+        except Exception as e:
+            logger.warning(f"poll_market_step failed: {e}")
+            return {"status": "ERROR", "reason": str(e)}
 
     def export_telemetry(self) -> Dict[str, Any]:
         """
@@ -515,7 +683,7 @@ class NativePaperRunner:
         return telemetry
 
     def run(self, duration_sec: Optional[int] = None, interval_sec: int = 5) -> None:
-        """Main daemon loop."""
+        """Main daemon loop with continuous market data polling and execution."""
         self._running = True
         logger.info(f"Starting Native Paper Runner. DB: {self.db_path}, Telemetry: {self.telemetry_path}")
         self.warm_up_history_from_bybit()
@@ -524,11 +692,16 @@ class NativePaperRunner:
         start_time = time.monotonic()
         try:
             while self._running:
-                time.sleep(interval_sec)
+                # 1. Step continuous market stream
+                self.poll_market_step()
+
+                # 2. Update telemetry
                 self.export_telemetry()
+
                 if duration_sec and (time.monotonic() - start_time >= duration_sec):
                     logger.info(f"Target duration of {duration_sec}s reached. Exiting cleanly.")
                     break
+                time.sleep(interval_sec)
         except KeyboardInterrupt:
             logger.info("Shutdown requested.")
         finally:

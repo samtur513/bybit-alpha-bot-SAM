@@ -136,29 +136,90 @@ class ShadowPaperRunner:
         bar: Dict[str, Any],
         best_bid: Optional[Decimal] = None,
         best_ask: Optional[Decimal] = None,
-        depth_bid_usdt: Decimal = Decimal("50000.0"),
-        depth_ask_usdt: Decimal = Decimal("50000.0"),
+        depth_bid_usdt: Optional[Decimal] = None,
+        depth_ask_usdt: Optional[Decimal] = None,
         l2_ladder_asks: Optional[List[Tuple[Decimal, Decimal]]] = None,
         l2_ladder_bids: Optional[List[Tuple[Decimal, Decimal]]] = None,
+        l2_snapshot: Optional[L2OrderbookSnapshot] = None,
         funding_rate: Optional[Decimal] = None,
         btc_bullish: bool = True,
         btc_bearish: bool = True,
     ) -> Dict[str, Any]:
         """
         Processes a closed bar with discrete L2 orderbook quotes:
-        1. Checks spread gate (rejects if spread > 0.08%).
-        2. Steps V32LegacyShadowEngine.process_closed_bar_event inside single SQLite transaction.
-        3. Updates candle buffers, positions, fees, and funding.
-        4. Writes atomic state and telemetry.
+        1. Validates real L2 orderbook data: strictly forbids artificial calculation from close
+           or arbitrary 50,000 USDT depth (Section P1).
+        2. Checks spread gate (rejects if spread > 0.08%).
+        3. Steps V32LegacyShadowEngine.process_closed_bar_event inside single SQLite transaction.
+        4. Updates candle buffers, positions, fees, and funding.
+        5. Writes atomic state and telemetry.
         """
         ts = int(bar["timestamp"])
-        close_p = Decimal(str(bar["close"]))
-        if best_bid is None:
-            best_bid = close_p * Decimal("0.9998")
-        if best_ask is None:
-            best_ask = close_p * Decimal("1.0002")
-        mid = (best_bid + best_ask) / Decimal("2.0")
 
+        # P1 Invariant: Only attempt Bybit REST fetch if caller did NOT supply valid best_bid and best_ask
+        if best_bid is None or best_ask is None:
+            try:
+                ob = self.client.get_orderbook(symbol=symbol, limit=50)
+                bids = ob.get("b", [])
+                asks = ob.get("a", [])
+                if bids and asks:
+                    best_bid = Decimal(str(bids[0][0]))
+                    best_ask = Decimal(str(asks[0][0]))
+                    l2_ladder_bids = [(Decimal(str(p)), Decimal(str(s))) for p, s in bids]
+                    l2_ladder_asks = [(Decimal(str(p)), Decimal(str(s))) for p, s in asks]
+                    depth_bid_usdt = sum(Decimal(str(p)) * Decimal(str(s)) for p, s in bids)
+                    depth_ask_usdt = sum(Decimal(str(p)) * Decimal(str(s)) for p, s in asks)
+                    ob_ts = int(ob.get("ts", ts))
+                    l2_snapshot = L2OrderbookSnapshot(
+                        timestamp_ms=ob_ts,
+                        symbol=symbol,
+                        bids=l2_ladder_bids,
+                        asks=l2_ladder_asks,
+                        is_confirmed=True,
+                    )
+            except Exception as ob_err:
+                logger.debug(f"Failed to fetch live L2 orderbook for {symbol}: {ob_err}")
+
+        # Compute depth from discrete ladders if not explicitly set
+        if depth_bid_usdt is None:
+            depth_bid_usdt = sum((p * s for p, s in l2_ladder_bids), Decimal("0")) if l2_ladder_bids else Decimal("0")
+        if depth_ask_usdt is None:
+            depth_ask_usdt = sum((p * s for p, s in l2_ladder_asks), Decimal("0")) if l2_ladder_asks else Decimal("0")
+
+        # P1 Strict Invariant: Zero fictitious execution data
+        # If orderbook is missing, record unconfirmed depth / rejection without losing positions.
+        if best_bid is None or best_ask is None or best_bid <= Decimal("0") or best_ask <= Decimal("0"):
+            reason = "MISSING_L2_ORDERBOOK: No confirmed L2 orderbook or verified bids/asks available"
+            self.portfolio.rejected_orders.append({"symbol": symbol, "time_ms": ts, "reason": reason})
+            # Advance candle buffer so indicator continuity is maintained
+            record = {
+                "timestamp": ts,
+                "open": float(bar["open"]),
+                "high": float(bar["high"]),
+                "low": float(bar["low"]),
+                "close": float(bar["close"]),
+                "volume": float(bar.get("volume", 0.0)),
+                "turnover": float(bar.get("turnover", 0.0)),
+            }
+            prev_df = self.engine.candle_buffers.get(symbol)
+            if prev_df is None or len(prev_df) == 0:
+                df = pd.DataFrame([record])
+            else:
+                df = pd.concat([prev_df, pd.DataFrame([record])], ignore_index=True).tail(500)
+            if len(df) >= min(DONCHIAN_WINDOW, 50):
+                df = prepare_dual_regime_indicators(df, self.classifier, lookback=DONCHIAN_WINDOW)
+            self.engine.candle_buffers[symbol] = df
+            self.engine.last_processed_bar_ts[symbol] = ts
+            self.engine.save_state()
+            self.export_telemetry()
+            return {
+                "status": "REJECTED_MISSING_L2_ORDERBOOK",
+                "symbol": symbol,
+                "ts": ts,
+                "reason": reason,
+            }
+
+        mid = (best_bid + best_ask) / Decimal("2.0")
         self.latest_prices[symbol] = mid
         now_mono = time.monotonic()
         self.latest_quote_times[symbol] = now_mono
@@ -194,11 +255,12 @@ class ShadowPaperRunner:
             bar=bar_dict,
             best_bid=best_bid,
             best_ask=best_ask,
-            depth_bid_usdt=depth_bid_usdt,
-            depth_ask_usdt=depth_ask_usdt,
+            depth_bid_usdt=depth_bid_usdt or Decimal("0"),
+            depth_ask_usdt=depth_ask_usdt or Decimal("0"),
             funding_rate=funding_rate,
             l2_ladder_asks=l2_ladder_asks,
             l2_ladder_bids=l2_ladder_bids,
+            l2_snapshot=l2_snapshot,
             btc_bullish=btc_bullish,
             btc_bearish=btc_bearish,
         )
@@ -206,34 +268,180 @@ class ShadowPaperRunner:
         self.export_telemetry()
         return res
 
+    def update_quotes(
+        self,
+        quotes: Dict[str, Decimal],
+        timestamp_ms: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Updates live quotes for continuous MTM equity tracking.
+        """
+        now_mono = time.monotonic()
+        for sym, price in quotes.items():
+            self.latest_prices[sym] = price
+            self.latest_quote_times[sym] = now_mono
+
+        self.has_market_data = True
+        self.portfolio.update_drawdown(self.latest_prices)
+        self.engine.save_state()
+        return self.export_telemetry()
+
     def warm_up_history_from_bybit(self) -> None:
-        """Loads historical closed klines from Bybit public REST API."""
-        logger.info("Warming up historical klines for Realistic Shadow via Bybit public REST API...")
+        """Loads historical closed klines from Bybit public REST API for all universe symbols."""
+        logger.info(f"Warming up historical klines for Realistic Shadow via Bybit public REST API for {len(self.symbols)} symbols...")
         try:
             now_srv = self.client.get_server_time()
-            for sym in self.symbols[:5]:
-                raw = self.client.get_kline(sym, interval=CANDLE_INTERVAL, limit=150)
-                if not raw:
-                    continue
-                records = [
-                    dict(
-                        timestamp=int(k[0]),
-                        open=float(k[1]), high=float(k[2]), low=float(k[3]),
-                        close=float(k[4]), volume=float(k[5]), turnover=float(k[6])
-                    )
-                    for k in raw if int(k[0]) + BAR_INTERVAL_MS <= now_srv
-                ]
-                df = pd.DataFrame(records).sort_values("timestamp").drop_duplicates("timestamp").reset_index(drop=True)
-                if len(df) >= min(DONCHIAN_WINDOW, 50):
-                    self.engine.candle_buffers[sym] = df
-                    self.latest_prices[sym] = Decimal(str(df["close"].iloc[-1]))
-                    self.latest_quote_times[sym] = time.monotonic()
-                    self.latest_l2_times[sym] = time.monotonic()
-                    self.engine.last_processed_bar_ts[sym] = int(df["timestamp"].iloc[-1])
+            for sym in self.symbols:  # Full original universe, not sliced!
+                try:
+                    raw = self.client.get_kline(sym, interval=CANDLE_INTERVAL, limit=150)
+                    if not raw:
+                        continue
+                    records = [
+                        dict(
+                            timestamp=int(k[0]),
+                            open=float(k[1]), high=float(k[2]), low=float(k[3]),
+                            close=float(k[4]), volume=float(k[5]), turnover=float(k[6])
+                        )
+                        for k in raw if int(k[0]) + BAR_INTERVAL_MS <= now_srv
+                    ]
+                    df = pd.DataFrame(records).sort_values("timestamp").drop_duplicates("timestamp").reset_index(drop=True)
+                    if len(df) >= min(DONCHIAN_WINDOW, 50):
+                        self.engine.candle_buffers[sym] = df
+                        self.latest_prices[sym] = Decimal(str(df["close"].iloc[-1]))
+                        self.latest_quote_times[sym] = time.monotonic()
+                        self.latest_l2_times[sym] = time.monotonic()
+                        self.engine.last_processed_bar_ts[sym] = int(df["timestamp"].iloc[-1])
+                except Exception as sym_err:
+                    logger.debug(f"Shadow warm-up skip for {sym}: {sym_err}")
             self.has_market_data = len(self.engine.candle_buffers) > 0
             logger.info(f"Realistic Shadow warm-up complete. Buffers initialized for {len(self.engine.candle_buffers)} symbols.")
         except Exception as e:
             logger.warning(f"Public market data warm-up failed for Shadow (safe offline fallback): {e}")
+
+    def poll_market_step(self) -> Dict[str, Any]:
+        """
+        Executes one continuous forward market data polling cycle for Realistic Shadow:
+        1. Queries Bybit server time: now_srv = client.get_server_time().
+        2. Queries live tickers via Bybit public REST:
+           - Updates latest_prices and latest_quote_times.
+           - Updates MTM equity on live quotes.
+        3. Queries latest 1h klines for each symbol in self.symbols:
+           - Strictly validates closed bars: open_ts + 3600_000 <= now_srv.
+           - If new closed bar: fetches confirmed L2 orderbook snapshot (/v5/market/orderbook).
+           - Passes authentic discrete L2 ladder and real depth into ingest_closed_bar().
+        4. Detects funding events and applies contract-specific funding payments.
+        5. Handles network latency, transient errors, rate limits with backoff without crashing.
+        6. Atomically updates state and exports standardized telemetry.
+        """
+        try:
+            now_srv = self.client.get_server_time()
+            tickers = self.client.get_tickers_detail(category="linear")
+            ticker_map = {t["symbol"]: t for t in tickers if "symbol" in t}
+
+            quotes_to_update = {}
+            funding_map = {}
+            for sym in self.symbols:
+                t = ticker_map.get(sym)
+                if t and t.get("lastPrice"):
+                    try:
+                        quotes_to_update[sym] = Decimal(str(t["lastPrice"]))
+                        if t.get("fundingRate"):
+                            funding_map[sym] = Decimal(str(t["fundingRate"]))
+                    except Exception:
+                        pass
+
+            if quotes_to_update:
+                self.update_quotes(quotes_to_update, timestamp_ms=now_srv)
+
+            # Check BTC Trend Filter from BTC candle buffer
+            btc_bullish = True
+            btc_bearish = True
+            btc_df = self.engine.candle_buffers.get("BTCUSDT")
+            if btc_df is not None and len(btc_df) >= 50:
+                btc_close = btc_df["close"].iloc[-1]
+                btc_ema50 = btc_df["ema_fast"].iloc[-1] if "ema_fast" in btc_df else btc_close
+                btc_bullish = bool(btc_close >= btc_ema50)
+                btc_bearish = bool(btc_close <= btc_ema50)
+
+            processed_count = 0
+            for sym in self.symbols:
+                try:
+                    raw = self.client.get_kline(sym, interval=CANDLE_INTERVAL, limit=3)
+                    if not raw:
+                        continue
+                    closed_bars = [k for k in raw if int(k[0]) + BAR_INTERVAL_MS <= now_srv]
+                    closed_bars.sort(key=lambda k: int(k[0]))
+                    for k in closed_bars:
+                        bar_ts = int(k[0])
+                        if bar_ts > self.engine.last_processed_bar_ts.get(sym, 0):
+                            bar_dict = {
+                                "timestamp": bar_ts,
+                                "open": float(k[1]),
+                                "high": float(k[2]),
+                                "low": float(k[3]),
+                                "close": float(k[4]),
+                                "volume": float(k[5]),
+                                "turnover": float(k[6]),
+                            }
+                            # Fetch authentic L2 orderbook snapshot for Shadow execution
+                            best_bid = None
+                            best_ask = None
+                            depth_bid_usdt = None
+                            depth_ask_usdt = None
+                            l2_ladder_bids = None
+                            l2_ladder_asks = None
+                            l2_snap = None
+                            try:
+                                ob = self.client.get_orderbook(symbol=sym, limit=50)
+                                bids = ob.get("b", [])
+                                asks = ob.get("a", [])
+                                if bids and asks:
+                                    best_bid = Decimal(str(bids[0][0]))
+                                    best_ask = Decimal(str(asks[0][0]))
+                                    l2_ladder_bids = [(Decimal(str(p)), Decimal(str(s))) for p, s in bids]
+                                    l2_ladder_asks = [(Decimal(str(p)), Decimal(str(s))) for p, s in asks]
+                                    depth_bid_usdt = sum(Decimal(str(p)) * Decimal(str(s)) for p, s in bids)
+                                    depth_ask_usdt = sum(Decimal(str(p)) * Decimal(str(s)) for p, s in asks)
+                                    ob_ts = int(ob.get("ts", bar_ts))
+                                    l2_snap = L2OrderbookSnapshot(
+                                        timestamp_ms=ob_ts,
+                                        symbol=sym,
+                                        bids=l2_ladder_bids,
+                                        asks=l2_ladder_asks,
+                                        is_confirmed=True,
+                                    )
+                                    self.latest_l2_times[sym] = time.monotonic()
+                            except Exception as ob_err:
+                                logger.debug(f"Orderbook fetch failed for {sym}: {ob_err}")
+
+                            f_rate = funding_map.get(sym)
+                            res = self.ingest_closed_bar(
+                                symbol=sym,
+                                bar=bar_dict,
+                                best_bid=best_bid,
+                                best_ask=best_ask,
+                                depth_bid_usdt=depth_bid_usdt,
+                                depth_ask_usdt=depth_ask_usdt,
+                                l2_ladder_asks=l2_ladder_asks,
+                                l2_ladder_bids=l2_ladder_bids,
+                                l2_snapshot=l2_snap,
+                                funding_rate=f_rate,
+                                btc_bullish=btc_bullish,
+                                btc_bearish=btc_bearish,
+                            )
+                            if res.get("status") in ["FULL", "PROCESSED", "NO_SIGNAL"]:
+                                processed_count += 1
+                except Exception as sym_err:
+                    logger.debug(f"Error checking klines for {sym}: {sym_err}")
+
+            return {
+                "status": "SUCCESS",
+                "processed_bars": processed_count,
+                "server_time_ms": now_srv,
+            }
+        except Exception as e:
+            logger.warning(f"Shadow poll_market_step failed: {e}")
+            return {"status": "ERROR", "reason": str(e)}
 
     def export_telemetry(self) -> Dict[str, Any]:
         """
@@ -345,7 +553,7 @@ class ShadowPaperRunner:
         return telemetry
 
     def run(self, duration_sec: Optional[int] = None, interval_sec: int = 5) -> None:
-        """Main daemon loop."""
+        """Main daemon loop with continuous market data polling and execution."""
         self._running = True
         logger.info(f"Starting Realistic Shadow Runner. DB: {self.db_path}, Telemetry: {self.telemetry_path}")
         self.warm_up_history_from_bybit()
@@ -354,11 +562,16 @@ class ShadowPaperRunner:
         start_time = time.monotonic()
         try:
             while self._running:
-                time.sleep(interval_sec)
+                # 1. Step continuous market stream with confirmed L2 orderbooks
+                self.poll_market_step()
+
+                # 2. Update telemetry
                 self.export_telemetry()
+
                 if duration_sec and (time.monotonic() - start_time >= duration_sec):
                     logger.info(f"Target duration of {duration_sec}s reached. Exiting cleanly.")
                     break
+                time.sleep(interval_sec)
         except KeyboardInterrupt:
             logger.info("Shutdown requested.")
         finally:

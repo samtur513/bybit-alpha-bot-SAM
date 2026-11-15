@@ -1,0 +1,39 @@
+{
+  "protocol": "TORG-BOT \u2014 FORWARD-LIVE-DATA-GATE-008",
+  "branch": "feature/forward-live-data-gate-008",
+  "base_commit": "04acbd2c28cfaa1320bbc50454d23c49454300ec",
+  "candidate_t0_utc": "2026-11-17T00:00:00+00:00",
+  "cohort_id": "TORG_THREE_SYS_20261115_001",
+  "schedule_active": false,
+  "status": "FORWARD_RUNTIME_OFFLINE_VERIFIED / VPS_PREFLIGHT_PENDING",
+  "files": {
+    "v3/src/bybit_client.py": {
+      "sha256": "5c25fd9a7bc3a6966ca92834a2c4c8ffb722dca9fc7d6559624ff8a31ba9a584",
+      "bytes": 9680
+    },
+    "v3_2/src/runners/run_native_paper.py": {
+      "sha256": "95e1ae02b4b3abe160080d725c25c283eecea212f3fa489ea610bbdeb974b799",
+      "bytes": 33945
+    },
+    "v3_2/src/runners/run_shadow_paper.py": {
+      "sha256": "fc7c7620834481a0118539bfb29be1978fe0781d3bdb8d05e3c339a8549db373",
+      "bytes": 29001
+    },
+    "tests/test_forward_live_data_gate_008.py": {
+      "sha256": "7ccda0c1452fade7862fa0fa4884041b9f7b2db204bab559355ca0fe926b59b8",
+      "bytes": 20103
+    },
+    "reports/forward_live_data_gate_008/CONTINUOUS_FORWARD_RUNTIME_PROOF.md": {
+      "sha256": "5b0e85961c89fb5b912eb7a6be401e6213033996f3dddab5bd2415c320fcaf63",
+      "bytes": 8341
+    },
+    "reports/forward_live_data_gate_008/EVENT_ACCOUNTING_AND_RECOVERY_PROOF.md": {
+      "sha256": "340274135e595cd904feb2f326ec9db9ac347b86963016a7de6eedd3eba67feb",
+      "bytes": 7048
+    },
+    "reports/forward_live_data_gate_008/VPS_PREFLIGHT_HANDOFF.md": {
+      "sha256": "a165eb618339b34b7c351fa35a8831a89e59efb12d413e9331fcf960d396c865",
+      "bytes": 6643
+    }
+  }
+}
