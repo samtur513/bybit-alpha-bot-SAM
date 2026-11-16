@@ -42,6 +42,7 @@ if str(REPO_ROOT) not in sys.path:
 from v3.src.bybit_client import BybitClient
 from v3.src.persistence import atomic_json
 from v3_2.src.config import DEFAULT_SYMBOLS, DONCHIAN_WINDOW, CANDLE_INTERVAL, BAR_INTERVAL_MS
+from v3_2.src.runners.hourly_kline_gate import HourlyKlineGate
 from v3_2.src.paper_trader_v32 import prepare_dual_regime_indicators, MarketRegimeClassifier
 from v3_2.src.shadow.paper_trader_v32_shadow import (
     V32LegacyShadowEngine,
@@ -108,6 +109,11 @@ class ShadowPaperRunner:
 
         # 1. Initialize Bybit Public Client (Read-Only)
         self.client = BybitClient(timeout=10, max_retries=5)
+        # Public candle data changes only once an hour; leave quote/MTM polling at 5s.
+        # Native and Shadow phases differ to avoid synchronous Bybit request bursts.
+        self._kline_gate = HourlyKlineGate(
+            interval_ms=BAR_INTERVAL_MS, after_close_delay_ms=25000, retry_delay_ms=60_000
+        )
 
         # 2. Initialize V32LegacyShadowEngine
         self.engine = V32LegacyShadowEngine(
@@ -476,7 +482,12 @@ class ShadowPaperRunner:
                 btc_bearish = bool(btc_close <= btc_ema50)
 
             processed_count = 0
-            for sym in self.symbols:
+            due_symbols = self._kline_gate.due_symbols(self.symbols, self.engine.last_processed_bar_ts, now_srv)
+            for sym in due_symbols:
+                # Mark before HTTP: failed/empty requests cannot hammer the endpoint
+                # again on the next 5-second telemetry cycle.
+                self._kline_gate.record_attempt(sym, now_srv)
+                time.sleep(0.18)  # <=5.6 kline starts/sec even on a fast network
                 try:
                     # limit=50 allows catching up on network gaps > 3 hours chronologically (Section P0.4)
                     raw = self.client.get_kline(sym, interval=CANDLE_INTERVAL, limit=50)
