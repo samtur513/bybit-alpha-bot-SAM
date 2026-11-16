@@ -32,7 +32,7 @@ def test_blocked_report_does_not_block_health_or_second_client():
     report_entered=threading.Event()
     release_report=threading.Event()
 
-    def blocked_report():
+    def blocked_report(_handler):
         report_entered.set()
         assert release_report.wait(timeout=5), "test report was not released"
         return {"status":"ok","systems":{}}
