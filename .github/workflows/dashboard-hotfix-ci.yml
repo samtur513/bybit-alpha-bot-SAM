@@ -58,6 +58,13 @@ jobs:
               print("LIVE_EVENT_KINDS",dict(collections.Counter(e.get("event_type") for e in data.get("events",[]))))
               health=json.loads(read("/api/health"))
               print("LIVE_HEALTH_ACTIVITY",json.dumps(health.get("market_activity","MISSING"),ensure_ascii=False))
+              analytics=json.loads(read("/api/analytics"))
+              from datetime import datetime
+              points=(analytics.get("r2") or analytics.get("r2_shadow") or {}).get("equity_history",[])
+              parsed=[datetime.fromisoformat(p["timestamp_utc"].replace("Z","+00:00")) for p in points]
+              print("LIVE_R2_POINTS",len(points))
+              print("LIVE_R2_TIMESTAMPS",[(p["timestamp_utc"],p.get("equity")) for p in points[:30]])
+              print("LIVE_R2_INTERVAL_SECONDS",[round((b-a).total_seconds(),2) for a,b in zip(parsed,parsed[1:])][:30])
           except Exception as e:
               print("LIVE_PROBE_UNAVAILABLE",type(e).__name__,str(e)[:200])
           PY
