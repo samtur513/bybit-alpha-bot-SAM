@@ -1,0 +1,25 @@
+name: Three-system read-only trade-path audit
+on:
+  push:
+    branches: [audit/three-system-trade-path-20261116]
+  pull_request:
+    paths:
+      - tools/audit_three_system_trade_path.py
+      - tests/test_three_system_trade_path_audit.py
+      - .github/workflows/three-system-trade-path-audit.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate source syntax
+        run: python -m py_compile tools/audit_three_system_trade_path.py tests/test_three_system_trade_path_audit.py
+      - name: Verify live-safe diagnostics with fixture SQLite ledgers
+        run: python -m unittest -v tests.test_three_system_trade_path_audit
