@@ -1,0 +1,41 @@
+name: One-off live Dashboard HTTP verification
+on:
+  push:
+    branches: [fix/dashboard-activity-journal-health-20261116]
+    paths: ['.github/workflows/dashboard-live-http-probe.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Inspect public read-only dashboard without exposing data
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, urllib.request, collections
+          base = "http://150.241.98.70:8085"
+          def read(path):
+              with urllib.request.urlopen(base+path, timeout=9) as resp:
+                  data = resp.read(2000000)
+                  print("GET",path,"HTTP",resp.status,"bytes",len(data))
+                  return data
+          try:
+              html = read("/").decode("utf-8","replace")
+              for key in ("Фактический прогресс рыночных циклов","Последнее суточное решение R2","Показано", "BAR_PROCESSED"):
+                  print("HTML_HAS",repr(key),key in html)
+              journal = json.loads(read("/api/journal?limit=120"))
+              print("JOURNAL_COUNT",journal.get("total_events"),"RETURNED",len(journal.get("events",[])))
+              print("JOURNAL_SCOPE",journal.get("scope","MISSING"))
+              print("JOURNAL_SOURCES",json.dumps(journal.get("source_status",{}),ensure_ascii=False))
+              print("JOURNAL_EVENT_TYPES",dict(collections.Counter(x.get("event_type") for x in journal.get("events",[]))))
+              health = json.loads(read("/api/health"))
+              print("HEALTH_MARKET_ACTIVITY",json.dumps(health.get("market_activity","MISSING"),ensure_ascii=False))
+          except Exception as e:
+              print("HTTP_PROBE_FAILED",type(e).__name__,str(e)[:250])
+              raise
+          PY
