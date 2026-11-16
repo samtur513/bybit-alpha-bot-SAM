@@ -145,3 +145,56 @@ def test_health_shows_proven_shadow_bar_age_separate_from_telemetry(tmp_path):
         "2026-11-16T12:00:00")
     assert health["services"][1]["status"] == "SERVICE_STATE_UNKNOWN"
     assert health["services"][1]["status"] != "TELEMETRY_FRESH"
+
+
+def test_r2_equity_real_live_timestamps_only_one_actual_gap():
+    """Captured R2 UTC sample cadence: 3603s/3656s are normal jitter, 8h is a gap."""
+    from v3_2.src.integrations.three_system_dashboard import ThreeSystemComparativeDashboard
+    timestamps = [
+        "2026-11-16T00:00:11.795857+00:00",
+        "2026-11-16T00:00:12.263874+00:00",
+        "2026-11-16T01:00:15.636765+00:00",
+        "2026-11-16T01:00:46.085704+00:00",
+        "2026-11-16T09:20:21.740820+00:00",
+        "2026-11-16T10:00:48.042497+00:00",
+        "2026-11-16T11:00:03.826232+00:00",
+        "2026-11-16T12:01:00.111746+00:00",
+        "2026-11-16T13:00:38.123376+00:00",
+    ]
+    series = [{"timestamp_utc": t, "equity": 300.0} for t in timestamps]
+    svg = ThreeSystemComparativeDashboard()._render_svg_equity_chart(series)
+    assert svg.count('data-gap=') == 1, "Minute-scale scheduler jitter is not a data outage"
+    assert "GAP 8h 19m" in svg
+    assert "UTC / USD" in svg
+    assert ">00:00<" in svg
+    assert ">13:00<" in svg
+    # Time-proportional gap should occupy >half the plotting width (~8h/13h).
+    import re
+    match = re.search(r'data-gap="1"[^>]+width="([0-9.]+)"', svg)
+    assert match and float(match.group(1)) > 350.0
+
+
+def test_hourly_r2_small_timestamp_jitter_has_zero_gaps():
+    from v3_2.src.integrations.three_system_dashboard import ThreeSystemComparativeDashboard
+    series = [
+        {"timestamp_utc": "2026-11-16T11:00:03Z", "equity": 300.0},
+        {"timestamp_utc": "2026-11-16T12:01:00Z", "equity": 300.2},
+        {"timestamp_utc": "2026-11-16T13:00:38Z", "equity": 300.4},
+    ]
+    svg = ThreeSystemComparativeDashboard()._render_svg_equity_chart(series)
+    assert 'data-gap=' not in svg
+    assert "<polyline" in svg
+    assert ">13:00<" in svg
+
+
+def test_unpriced_mtm_is_never_connected_through_unknown_value():
+    from v3_2.src.integrations.three_system_dashboard import ThreeSystemComparativeDashboard
+    series = [
+        {"timestamp_utc": "2026-11-16T10:00:00Z", "equity": 300},
+        {"timestamp_utc": "2026-11-16T11:00:00Z", "equity": None},
+        {"timestamp_utc": "2026-11-16T12:00:00Z", "equity": 290},
+    ]
+    svg = ThreeSystemComparativeDashboard()._render_svg_equity_chart(series)
+    assert "<polyline" not in svg
+    assert svg.count("<circle") >= 2
+    assert "None" not in svg
