@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import resource
 import shutil
+import subprocess
 import sys
 import time
 
@@ -54,6 +55,29 @@ def check_against_frozen_thresholds(sample):
     }
 
 
+def r2_service_fd_limit(service="bybit-shadow-r2.service"):
+    """Inspect R2's *own* RLIMIT_NOFILE, not the observer's limit."""
+    try:
+        result = subprocess.run(
+            ["systemctl", "show", "--value", "-p", "MainPID", service],
+            capture_output=True, text=True, timeout=2, check=True,
+        )
+        pid = int(result.stdout.strip())
+        if pid <= 0:
+            return None, None
+        limits = Path(f"/proc/{pid}/limits").read_text(encoding="utf-8")
+        for line in limits.splitlines():
+            if line.startswith("Max open files"):
+                columns = line[len("Max open files"):].split()
+                if not columns:
+                    break
+                soft = columns[0]
+                return (2**63 - 1 if soft == "unlimited" else int(soft)), pid
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    return None, None
+
+
 def sample_metrics(root):
     """Read host metrics without opening any database or writing to data root."""
     root = Path(root).resolve(strict=True)
@@ -66,7 +90,10 @@ def sample_metrics(root):
         raise ValueError("MemAvailable missing")
     disk = shutil.disk_usage(root)
     stat = os.statvfs(root)
-    fd_limit = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+    fd_limit, r2_pid = r2_service_fd_limit()
+    fd_limit_evidence = "R2_PROCESS_LIMITS" if r2_pid else "OBSERVER_FALLBACK_UNVERIFIED"
+    if fd_limit is None:
+        fd_limit = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
     if fd_limit < 0:
         fd_limit = 2**63 - 1
     # Match the *exact* file counting contract of the frozen readiness guard.
@@ -76,7 +103,7 @@ def sample_metrics(root):
         if item.is_file():
             count += 1
             total_bytes += item.stat().st_size
-    return {
+    metrics = {
         "free_disk_bytes": int(disk.free),
         "mem_available_bytes": int(mem["MemAvailable"]),
         "free_inodes": int(stat.f_favail),
@@ -85,16 +112,18 @@ def sample_metrics(root):
         "runtime_files": count,
         "runtime_bytes": total_bytes,
     }
+    return metrics, {"fd_limit_source": fd_limit_evidence, "r2_pid": r2_pid}
 
 
 def sample_report(root):
-    metrics = sample_metrics(root)
+    metrics, evidence = sample_metrics(root)
     evaluation = check_against_frozen_thresholds(metrics)
     return {
         "recorded_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "root": str(Path(root).resolve()),
         "diagnostic_only": True,
         "metrics": metrics,
+        "measurement_evidence": evidence,
         "evaluation": evaluation,
     }
 
