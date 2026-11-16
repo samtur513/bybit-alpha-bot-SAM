@@ -117,7 +117,7 @@ User=root
 WorkingDirectory=/opt/bybit-shadow/bybit-alpha-bot-SAM
 Environment="PYTHONPATH=/opt/bybit-shadow/bybit-alpha-bot-SAM:/opt/bybit-shadow/CryptoLab"
 Environment="PYTHONUNBUFFERED=1"
-ExecStart=/opt/bybit-bot/venv/bin/python v3_2/src/runners/run_three_system_dashboard.py --host 0.0.0.0 --port 8085 --native-telemetry /opt/bybit-shadow/telemetry/telemetry_native.json --shadow-telemetry /opt/bybit-shadow/telemetry/telemetry_shadow.json --r2-telemetry /opt/bybit-shadow/telemetry/telemetry_r2.json --cohort-id 20261116_000000_THREE_SYSTEM_SHADOW --t0-utc 2026-11-16T00:00:00Z
+ExecStart=/opt/bybit-bot/venv/bin/python v3_2/src/runners/run_three_system_dashboard.py --host 0.0.0.0 --port 8085 --native-telemetry /opt/bybit-shadow/telemetry/telemetry_native.json --shadow-telemetry /opt/bybit-shadow/telemetry/telemetry_shadow.json --r2-telemetry /opt/bybit-shadow/data/cryptolab/telemetry.json --cohort-id 20261116_000000_THREE_SYSTEM_SHADOW --t0-utc 2026-11-16T00:00:00Z
 Restart=always
 RestartSec=10
 LimitNOFILE=65535
@@ -150,6 +150,19 @@ def main():
         subprocess.run(["systemctl", "restart", unit_name], check=True)
         p = subprocess.run(["systemctl", "is-active", unit_name], capture_output=True, text=True)
         print(f"  -> {unit_name}: {p.stdout.strip()}")
+
+    # Ensure telemetry symlink for CryptoLab R2 exists
+    telem_dir = Path("/opt/bybit-shadow/telemetry")
+    r2_data_telem = Path("/opt/bybit-shadow/data/cryptolab/telemetry.json")
+    r2_link = telem_dir / "telemetry_r2.json"
+    if telem_dir.exists() and r2_data_telem.exists():
+        try:
+            if r2_link.is_symlink() or r2_link.exists():
+                r2_link.unlink()
+            r2_link.symlink_to(r2_data_telem)
+            print(f"  -> Linked {r2_link} -> {r2_data_telem}")
+        except Exception as e:
+            print(f"  -> Symlink warning: {e}")
 
     print("\nFLEET_DEPLOYMENT_COMPLETE: All 4 services deployed and started.")
 

@@ -4,11 +4,11 @@
   "v3_2/src/runners/run_three_system_dashboard.py": "6719a7f96ae78923ebf242b18b65ef1a2ffc6bdf82a2ab6a587d7387236b6feb",
   "v3_2/src/integrations/three_system_dashboard.py": "d2b58ef6273a45e43c536c6dd8f9712b667f6b344d4c1999aed8c8ed2e88d488",
   "v3_2/src/integrations/r2_consumer.py": "ab4b7e0a75c7597db5f072809315f5fca30cfc922405b0732a9e83459ac03e82",
-  "tools/deploy_shadow_fleet_services.py": "b5336af261de484d74622fcb7c050224c05dee7693723544a2722a5c60d8a81a",
+  "tools/deploy_shadow_fleet_services.py": "f84c3de9fe84597e908690b1f9491edaebd684b2f2f8d42b790fca502b63d1a7",
   "tools/init_cryptolab_vps.py": "e896f7208ecfc02baa5c5a4b04389f289eb8c30ff4abd5bb89ad92977240e733",
   "tests/test_final_start_blockers_009.py": "3ec1f4214ac3ec41d4f59503c32b373367f335b875152867aa957bc926b054cf",
   "reports/acceptance_001/THREE_SYSTEM_DEPLOYMENT_AUDIT.md": "bdf7b114e808640f3380321b0d9e97c6870001a80cc12a92fab341580a5b7ffc",
-  "reports/acceptance_001/POST_T0_001_VERIFICATION_REPORT.md": "d8e48c9231f9b8692c4cefd68f68f570e8e0e5510317cde4de6c98fefc71cb61",
+  "reports/acceptance_001/POST_T0_001_VERIFICATION_REPORT.md": "cfaf876341653f9b96890d1e4f1bc8aa062612b46135e7d12408a9dc91fc1555",
   "cryptolab_frozen_blobs": {
     "research/hunter001_dg001/r2_validation/core.py": {
       "git_blob_sha": "04e37595f0609603edcf14afaf97ad87fb781b57",

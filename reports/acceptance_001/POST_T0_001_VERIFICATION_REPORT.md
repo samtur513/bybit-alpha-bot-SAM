@@ -111,13 +111,21 @@ for k, s in d['systems'].items():
 echo -e "\n=== [7] ПОДТВЕРЖДЕНИЕ ОТСУТСТВИЯ СДЕЛОК ДО T0 (1794787200000 MS) ==="
 /opt/bybit-bot/venv/bin/python -c "
 import sqlite3
-for name, db in [('Native', '/opt/bybit-shadow/data/native_ledger.db'), ('Shadow', '/opt/bybit-shadow/data/shadow_ledger.db')]:
-    try:
-        conn = sqlite3.connect(db)
-        cnt = conn.execute('SELECT count(*) FROM ' + name.lower() + '_trades WHERE exit_time_ms < 1794787200000').fetchone()[0]
-        print(f'{name} Trades before T0: {cnt} (Expected: 0)')
-    except Exception as e:
-        print(f'{name} DB check: {e}')
+# 1. Native Trades
+try:
+    c = sqlite3.connect('/opt/bybit-shadow/data/native_ledger.db')
+    cnt = c.execute('SELECT count(*) FROM native_trades WHERE exit_time_ms < 1794787200000').fetchone()[0]
+    print(f'Native Trades before T0: {cnt} (Expected: 0)')
+except Exception as e:
+    print(f'Native DB check: {e}')
+
+# 2. Shadow Execution Events
+try:
+    c = sqlite3.connect('/opt/bybit-shadow/data/shadow_ledger.db')
+    cnt = c.execute(\"SELECT count(*) FROM shadow_execution_events WHERE event_type='EXIT' AND exchange_ts < 1794787200000\").fetchone()[0]
+    print(f'Shadow Trades before T0: {cnt} (Expected: 0)')
+except Exception as e:
+    print(f'Shadow DB check: {e}')
 "
 
 echo -e "\n=== [8] ПРОВЕРКА ОТСУТСТВИЯ СЕКРЕТНЫХ КЛЮЧЕЙ В SYSTEMD ОКРУЖЕНИИ ==="
