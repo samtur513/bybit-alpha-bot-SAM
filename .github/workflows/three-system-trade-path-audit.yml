@@ -22,4 +22,4 @@ jobs:
       - name: Validate source syntax
         run: python -m py_compile tools/audit_three_system_trade_path.py tests/test_three_system_trade_path_audit.py
       - name: Verify live-safe diagnostics with fixture SQLite ledgers
-        run: python -m unittest -v tests.test_three_system_trade_path_audit
+        run: python -m unittest discover -s tests -p test_three_system_trade_path_audit.py -v
