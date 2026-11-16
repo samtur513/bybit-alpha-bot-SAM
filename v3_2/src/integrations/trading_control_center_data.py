@@ -1891,10 +1891,67 @@ class TradingControlCenterDataEngine:
         except Exception:
             pass
 
-        # R2 telemetry status
+        # R2 telemetry status (not proof of systemd process state).
         r2_tel = self._read_json(self.r2_telemetry_path) or {}
-        r2_process_status = r2_tel.get("process_status", determine_service_state(r2_ok, r2_age))
+        r2_process_status = r2_tel.get("process_status", "NOT_RECORDED")
         r2_heartbeat_at = r2_tel.get("heartbeat_at")
+
+        def activity_item(value_ms, source, interval_sec, kind):
+            if value_ms is None:
+                return {"last_observation_utc": "NOT_RECORDED", "age_sec": None,
+                        "status": "NOT_RECORDED", "source": source, "kind": kind}
+            try:
+                value_ms = int(value_ms)
+                if value_ms <= 0:
+                    raise ValueError("invalid market timestamp")
+                age = max(0, round(time.time() - value_ms / 1000.0, 1))
+                # 3-minute grace after a new expected bar/decision boundary.
+                label = "CURRENT" if age <= interval_sec + 180 else "OBSERVATION_DELAYED"
+                return {"last_observation_utc": format_utc_ts(value_ms),
+                        "age_sec": age, "status": label, "source": source, "kind": kind}
+            except (ValueError, OverflowError, TypeError):
+                return {"last_observation_utc": "NOT_RECORDED", "age_sec": None,
+                        "status": "DATA_SOURCE_ERROR", "source": source, "kind": kind}
+
+        activity = {}
+        native_state, native_stat, _ = self._get_authoritative_native_state()
+        native_bars = native_state.get("last_processed_bar_ts", {}) if native_stat == "OK" else {}
+        native_max = max((int(ts) for ts in native_bars.values() if ts), default=0) if isinstance(native_bars, dict) else 0
+        activity["native"] = activity_item(
+            native_max + 3600000 if native_max else None,
+            "native_state_journal.last_processed_bar_ts", 3600, "CLOSED_1H_BAR")
+
+        conn = self._ro_sqlite_connect(self.shadow_ledger_path)
+        shadow_max = None
+        if conn:
+            try:
+                row = conn.execute("SELECT MAX(exchange_ts) FROM shadow_dedup_events").fetchone()
+                if row and row[0] is not None:
+                    shadow_max = int(row[0]) + 3600000
+            except sqlite3.Error:
+                pass
+            finally:
+                conn.close()
+        activity["shadow"] = activity_item(
+            shadow_max, "shadow_dedup_events.exchange_ts", 3600, "CLOSED_1H_BAR")
+
+        conn = self._ro_sqlite_connect(self.r2_ledger_path)
+        r2_decision_ms = None
+        if conn:
+            try:
+                row = conn.execute(
+                    "SELECT at FROM events WHERE kind='DECISION' ORDER BY at DESC LIMIT 1"
+                ).fetchone()
+                if row:
+                    parsed = datetime.fromisoformat(str(row[0]).replace("Z", "+00:00"))
+                    if parsed.tzinfo is not None:
+                        r2_decision_ms = int(parsed.timestamp() * 1000)
+            except (sqlite3.Error, ValueError, TypeError, OverflowError):
+                pass
+            finally:
+                conn.close()
+        activity["r2"] = activity_item(
+            r2_decision_ms, "observer.events.kind=DECISION", 86400, "DAILY_DECISION")
 
         res = {
             "timestamp_iso": now_iso,
@@ -1904,6 +1961,7 @@ class TradingControlCenterDataEngine:
                 "load_average": load_avg,
                 "server_time_utc": now_iso,
             },
+            "market_activity": activity,
             "services": [
                 {
                     "name": "bybit-shadow-native.service",
@@ -1911,7 +1969,7 @@ class TradingControlCenterDataEngine:
                     "telemetry_present": nat_ok,
                     "heartbeat_age_sec": nat_age,
                     "freshness": "FRESH" if (nat_age is not None and nat_age <= 120.0) else "STALE",
-                    "status": determine_service_state(nat_ok, nat_age),
+                    "status": "SERVICE_STATE_UNKNOWN",
                 },
                 {
                     "name": "bybit-shadow-realistic.service",
@@ -1919,7 +1977,7 @@ class TradingControlCenterDataEngine:
                     "telemetry_present": sha_ok,
                     "heartbeat_age_sec": sha_age,
                     "freshness": "FRESH" if (sha_age is not None and sha_age <= 120.0) else "STALE",
-                    "status": determine_service_state(sha_ok, sha_age),
+                    "status": "SERVICE_STATE_UNKNOWN",
                 },
                 {
                     "name": "bybit-shadow-r2.service",
@@ -1928,7 +1986,7 @@ class TradingControlCenterDataEngine:
                     "heartbeat_age_sec": r2_age,
                     "freshness": "FRESH" if (r2_age is not None and r2_age <= 120.0) else "STALE",
                     "process_status": r2_process_status,
-                    "status": determine_service_state(r2_ok, r2_age),
+                    "status": "SERVICE_STATE_UNKNOWN",
                     "heartbeat_at": r2_heartbeat_at,
                 },
                 {
@@ -1960,10 +2018,10 @@ class TradingControlCenterDataEngine:
                     "system": "CryptoLab R2",
                     "timestamp_utc": "2026-11-16T10:47:35Z",
                     "error_type": "READINESS_RESOURCE_LIMITS",
-                    "n_restarts": 1799,
+                    "n_restarts_at_incident": 1799,
                     "trigger_metrics": "TRIGGER_NOT_IDENTIFIED (readiness.py does not serialize which of the 7 thresholds was breached: CPU load > 0.8, available RAM < 512MB, etc.)",
                     "diagnostic_plan": "docs/R2_RESOURCE_OBSERVABILITY_001.md",
-                    "status": "AUTO_RESTARTED_BY_SYSTEMD",
+                    "status": "HISTORICAL_AUTO_RESTART",
                 },
             ],
             "invariants": {
