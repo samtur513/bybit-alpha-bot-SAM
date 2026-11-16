@@ -358,7 +358,7 @@ class ThreeSystemComparativeDashboard:
             portfolio=native_portfolio,
             name="v3.2 Native",
             role="Original Donchian Trend Logic (New Isolated Paper Cohort)",
-            fee_tier_note="Linear Perpetuals, Half-Kelly sizing, 0.09% MNT taker fee tier",
+            fee_tier_note="Linear Perpetuals, Half-Kelly sizing, VIP0 standard fee (0.100% taker, 0.036% maker)",
             now_dt=now_dt,
             is_started=is_started,
             cohort_id=cohort_id,
@@ -562,7 +562,7 @@ class ThreeSystemComparativeDashboard:
         }
 
     def _render_svg_equity_chart(self, series: List[Dict[str, Any]], width: int = 700, height: int = 200, color: str = "#64b5f6") -> str:
-        """Renders self-contained SVG equity line chart without external CDN libraries."""
+        """Renders self-contained SVG equity line chart without external CDN libraries, splitting across observation gaps."""
         if not series or len(series) < 2:
             return f'''<svg width="100%" height="{height}" viewBox="0 0 {width} {height}" style="background:#121824;border-radius:6px;">
                 <rect width="100%" height="100%" fill="#121824"/>
@@ -583,16 +583,58 @@ class ThreeSystemComparativeDashboard:
         pw = width - pad_left - pad_right
         ph = height - pad_top - pad_bottom
 
+        def parse_iso(ts_str):
+            if not ts_str:
+                return None
+            try:
+                clean_ts = str(ts_str).replace("Z", "+00:00")
+                return datetime.fromisoformat(clean_ts)
+            except Exception:
+                return None
+
         n = len(series)
-        coords = []
+        segments = []
+        current_seg = []
+        gap_intervals = []
+
         for i, p in enumerate(series):
             x = pad_left + (i / max(1, n - 1)) * pw
             eq = float(p.get("equity", 300.0))
             y = pad_top + ph - ((eq - min_eq) / rng) * ph
-            coords.append(f"{x:.1f},{y:.1f}")
+            pt_str = f"{x:.1f},{y:.1f}"
 
-        polyline = " ".join(coords)
+            if i > 0:
+                t_prev = parse_iso(series[i - 1].get("timestamp_utc"))
+                t_curr = parse_iso(p.get("timestamp_utc"))
+                if t_prev and t_curr:
+                    diff_sec = (t_curr - t_prev).total_seconds()
+                    if diff_sec > 3600:
+                        if current_seg:
+                            segments.append(current_seg)
+                        current_seg = []
+                        prev_x = pad_left + ((i - 1) / max(1, n - 1)) * pw
+                        gap_intervals.append((prev_x, x))
+            current_seg.append(pt_str)
+
+        if current_seg:
+            segments.append(current_seg)
+
+        lines_svg = []
+        for seg in segments:
+            if len(seg) > 1:
+                lines_svg.append(f'<polyline fill="none" stroke="{color}" stroke-width="2" points="{" ".join(seg)}"/>')
+            elif len(seg) == 1:
+                px, py = seg[0].split(",")
+                lines_svg.append(f'<circle cx="{px}" cy="{py}" r="3" fill="{color}"/>')
+
+        gaps_svg = []
+        for gx1, gx2 in gap_intervals:
+            g_w = max(2.0, gx2 - gx1)
+            gaps_svg.append(f'''<rect x="{gx1:.1f}" y="{pad_top}" width="{g_w:.1f}" height="{ph}" fill="#ffa72611" stroke="#ffa72644" stroke-dasharray="2,2"/>
+            <text x="{(gx1+gx2)/2:.1f}" y="{pad_top+14}" text-anchor="middle" fill="#ffa726" font-size="9">GAP</text>''')
+
         base_300_y = pad_top + ph - ((300.0 - min_eq) / rng) * ph
+        last_pt = segments[-1][-1].split(",") if segments and segments[-1] else (f"{width-pad_right}", f"{pad_top+ph/2}")
 
         return f'''<svg width="100%" height="{height}" viewBox="0 0 {width} {height}" style="background:#121824;border-radius:6px;">
             <!-- Grid Lines -->
@@ -605,10 +647,12 @@ class ThreeSystemComparativeDashboard:
             <text x="{pad_left-6}" y="{pad_top+ph+3}" text-anchor="end" fill="#78909c" font-size="10">${min_eq:.1f}</text>
             <!-- Baseline -->
             <line x1="{pad_left}" y1="{base_300_y:.1f}" x2="{width-pad_right}" y2="{base_300_y:.1f}" stroke="#37474f" stroke-width="1"/>
-            <!-- Line -->
-            <polyline fill="none" stroke="{color}" stroke-width="2" points="{polyline}"/>
+            <!-- Gaps -->
+            {" ".join(gaps_svg)}
+            <!-- Lines -->
+            {" ".join(lines_svg)}
             <!-- Last point circle -->
-            <circle cx="{coords[-1].split(",")[0]}" cy="{coords[-1].split(",")[1]}" r="4" fill="{color}"/>
+            <circle cx="{last_pt[0]}" cy="{last_pt[1]}" r="4" fill="{color}"/>
         </svg>'''
 
     def render_html_dashboard(self, report: Dict[str, Any]) -> str:
@@ -635,11 +679,17 @@ class ThreeSystemComparativeDashboard:
             return html_lib.escape(s)
 
         def fmt_val(v, suffix=""):
-            return f"{v:,.2f}{suffix}" if v is not None else "<span class='dim'>--</span>"
+            if v is None:
+                return "<span class='dim'>--</span>"
+            if isinstance(v, (int, float)):
+                return f"{v:,.2f}{suffix}"
+            return f"<span class='dim'>{esc(v)}</span>"
 
         def fmt_pct(v):
             if v is None:
                 return "<span class='dim'>--</span>"
+            if not isinstance(v, (int, float)):
+                return f"<span class='dim'>{esc(v)}</span>"
             color = "#00e676" if v > 0 else ("#ff5252" if v < 0 else "#ffffff")
             sign = "+" if v > 0 else ""
             return f"<span style='color:{color}'>{sign}{v:.2f}%</span>"
@@ -667,7 +717,17 @@ class ThreeSystemComparativeDashboard:
         # SVG Charts
         nat_chart = self._render_svg_equity_chart(analytics_data.get("native", {}).get("equity_history", []), color="#4fc3f7")
         sha_chart = self._render_svg_equity_chart(analytics_data.get("shadow", {}).get("equity_history", []), color="#ab47bc")
-        r2_chart = self._render_svg_equity_chart(analytics_data.get("r2_shadow", {}).get("equity_history", []), color="#26a69a")
+        r2_analytics = analytics_data.get("r2_shadow") or analytics_data.get("r2") or {}
+        r2_chart = self._render_svg_equity_chart(r2_analytics.get("equity_history", []), color="#26a69a")
+
+        # Determine verified accounting status based on actual closed trades from analytics_data
+        nat_trades = analytics_data.get("native", {}).get("closed_trades", [])
+        sha_trades = analytics_data.get("shadow", {}).get("closed_trades", [])
+        r2_trades = (analytics_data.get("r2") or analytics_data.get("r2_shadow") or {}).get("closed_trades", [])
+
+        acc_status_a = "OK" if len(nat_trades) > 0 else "ACCOUNTING_NOT_YET_OBSERVED"
+        acc_status_b = "OK" if len(sha_trades) > 0 else "ACCOUNTING_NOT_YET_OBSERVED"
+        acc_status_c = "OK" if len(r2_trades) > 0 else "ACCOUNTING_NOT_YET_OBSERVED"
 
         # HTML Assembly
         html_content = f'''<!DOCTYPE html>
@@ -794,7 +854,7 @@ class ThreeSystemComparativeDashboard:
       </div>
     </div>
     <div class="header-meta">
-      Когорта: <strong>{tc.get("cohort_id")}</strong> | T0 UTC: <strong>{tc.get("t0_utc")}</strong> | Статус когорты: {fmt_status(tc.get("cohort_status"))}
+      Когорта: <strong>{esc(tc.get("cohort_id"))}</strong> | T0 UTC: <strong>{esc(tc.get("t0_utc"))}</strong> | Статус когорты: {fmt_status(tc.get("cohort_status"))}
     </div>
   </div>
 
@@ -846,8 +906,8 @@ class ThreeSystemComparativeDashboard:
       <div class="card" style="border-top: 3px solid #ab47bc;">
         <div class="card-header">
           <div>
-            <div class="card-title" style="color:#ab47bc">{b.get("name")}</div>
-            <div class="card-sub">{b.get("role")}</div>
+            <div class="card-title" style="color:#ab47bc">{esc(b.get("name"))}</div>
+            <div class="card-sub">{esc(b.get("role"))}</div>
           </div>
           {fmt_status(b.get("data_freshness_status"))}
         </div>
@@ -868,8 +928,8 @@ class ThreeSystemComparativeDashboard:
       <div class="card" style="border-top: 3px solid #26a69a;">
         <div class="card-header">
           <div>
-            <div class="card-title" style="color:#26a69a">{c.get("name")}</div>
-            <div class="card-sub">{c.get("role")}</div>
+            <div class="card-title" style="color:#26a69a">{esc(c.get("name"))}</div>
+            <div class="card-sub">{esc(c.get("role"))}</div>
           </div>
           {fmt_status(c.get("data_freshness_status"))}
         </div>
@@ -932,9 +992,9 @@ class ThreeSystemComparativeDashboard:
             </tr>
             <tr>
               <td><strong>ACCOUNTING_VERIFIED</strong></td>
-              <td>{fmt_status("OK" if a.get("equity_usdt") is not None else "UNVERIFIED")}</td>
-              <td>{fmt_status("OK" if b.get("equity_usdt") is not None else "UNVERIFIED")}</td>
-              <td>{fmt_status("OK" if c.get("equity_usdt") is not None else "UNVERIFIED")}</td>
+              <td>{fmt_status(acc_status_a)}</td>
+              <td>{fmt_status(acc_status_b)}</td>
+              <td>{fmt_status(acc_status_c)}</td>
               <td>Баланс и транзакции согласованы с неизменяемым SQLite-журналом</td>
             </tr>
             <tr>
@@ -942,7 +1002,7 @@ class ThreeSystemComparativeDashboard:
               <td>{fmt_status("VALID_SYNCHRONIZED" if a.get("cohort_id") == tc.get("cohort_id") else "COHORT_MISMATCH")}</td>
               <td>{fmt_status("VALID_SYNCHRONIZED" if b.get("cohort_id") == tc.get("cohort_id") else "COHORT_MISMATCH")}</td>
               <td>{fmt_status("VALID_SYNCHRONIZED" if c.get("cohort_id") == tc.get("cohort_id") else "COHORT_MISMATCH")}</td>
-              <td>Единая когорта T0 ({tc.get("t0_utc")}) подтверждена для всех систем</td>
+              <td>Единая когорта T0 ({esc(tc.get("t0_utc"))}) подтверждена для всех систем</td>
             </tr>
           </tbody>
         </table>
@@ -1287,7 +1347,7 @@ class ThreeSystemComparativeDashboard:
       <div class="cards-grid">
         <div class="card">
           <div class="card-title" style="font-size:15px;color:var(--accent-blue);">Торговые издержки (Friction)</div>
-          <div class="metric-row"><span class="dim">Комиссии MNT (0.09%)</span><span>${fmt_val(a.get("fees_paid_usdt"))}</span></div>
+          <div class="metric-row"><span class="dim">Комиссии (VIP0 Taker 0.100%)</span><span>${fmt_val(a.get("fees_paid_usdt"))}</span></div>
           <div class="metric-row"><span class="dim">Проскальзывание (0.02%)</span><span>${fmt_val(a.get("slippage_cost_usdt"))}</span></div>
           <div class="metric-row"><span class="dim">Funding Perpetual</span><span>${fmt_val(a.get("funding_paid_usdt"))}</span></div>
         </div>
@@ -1548,9 +1608,19 @@ class ThreeSystemDashboardHTTPHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_POST(self):
+        content_length = self.headers.get("Content-Length")
+        if content_length:
+            try:
+                self.rfile.read(int(content_length))
+            except Exception:
+                pass
+        body = b"405 Method Not Allowed (Read-Only Interface)\n"
         self.send_response(405)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
         self.end_headers()
-        self.wfile.write(b"405 Method Not Allowed (Read-Only Interface)\n")
+        self.wfile.write(body)
 
     def do_PUT(self):
         self.do_POST()

@@ -241,6 +241,7 @@ class TradingControlCenterDataEngine:
                         return {}, "DATA_SOURCE_ERROR", f"CORRUPTED_SQLITE_PAYLOAD: {type(e).__name__}"
             except Exception as e:
                 logger.debug(f"native_state_journal query failed: {e}")
+                return {}, "DATA_SOURCE_ERROR", f"SQLITE_QUERY_ERROR: {type(e).__name__}: {e}"
             finally:
                 conn.close()
 
@@ -284,6 +285,7 @@ class TradingControlCenterDataEngine:
                         return {}, "DATA_SOURCE_ERROR", f"CORRUPTED_SQLITE_PAYLOAD: {type(e).__name__}"
             except Exception as e:
                 logger.debug(f"shadow_state_journal query failed: {e}")
+                return {}, "DATA_SOURCE_ERROR", f"SQLITE_QUERY_ERROR: {type(e).__name__}: {e}"
             finally:
                 conn.close()
 
@@ -326,6 +328,7 @@ class TradingControlCenterDataEngine:
                         return {}, telemetry_dict, "DATA_SOURCE_ERROR", f"CORRUPTED_R2_ACCOUNT_JSON: {type(e).__name__}"
             except Exception as e:
                 logger.debug(f"R2 accounts query failed: {e}")
+                return {}, telemetry_dict, "DATA_SOURCE_ERROR", f"R2_SQLITE_QUERY_ERROR: {type(e).__name__}: {e}"
             finally:
                 conn.close()
 
@@ -457,15 +460,15 @@ class TradingControlCenterDataEngine:
                     "symbol": sym,
                     "source": "NATIVE_STATE (last_processed_bar_ts)",
                     "strategy": "Dual-Regime (Donchian 4h + Range 1h)",
-                    "market_regime": "NO_BREAKOUT",
+                    "market_regime": "NOT_RECORDED",
                     "event_at": bar_utc,
                     "observed_at": now_iso,
                     "signal": "NO_SIGNAL_RECORDED",
                     "confidence_status": "NO_SIGNAL_RECORDED",
                     "score": "NOT_AVAILABLE",
-                    "eligible": "NO_SIGNAL",
+                    "eligible": "NOT_RECORDED",
                     "rejection_reason": "NOT_RECORDED",
-                    "decision": "OBSERVING_MARKET",
+                    "decision": "NO_DECISION_RECORDED",
                 })
             else:
                 native_scanner_list.append({
@@ -560,15 +563,15 @@ class TradingControlCenterDataEngine:
                     "symbol": sym,
                     "source": "SHADOW_LEDGER (shadow_execution_events)",
                     "strategy": "Realistic Shadow (Donchian 4h + L2 Orderbook)",
-                    "market_regime": "OBSERVED",
+                    "market_regime": "NOT_RECORDED",
                     "event_at": format_utc_ts(ev.get("exchange_ts")),
                     "observed_at": now_iso,
                     "signal": "NO_SIGNAL_RECORDED",
                     "confidence_status": "NO_SIGNAL_RECORDED",
                     "score": "NOT_AVAILABLE",
-                    "eligible": "NO_SIGNAL",
+                    "eligible": "NOT_RECORDED",
                     "rejection_reason": "NOT_RECORDED",
-                    "decision": "OBSERVING_MARKET",
+                    "decision": "NO_DECISION_RECORDED",
                 })
             else:
                 shadow_scanner_list.append({
@@ -666,15 +669,15 @@ class TradingControlCenterDataEngine:
         r2_event_at = r2_telemetry.get("heartbeat_at") or r2_telemetry.get("generated_at") or "NOT_RECORDED"
 
         for sym in R2_SYMBOLS_3:
-            r2_evaluated_cnt += 1
             qty = r2_quantities.get(sym, 0.0)
             is_active = (qty > 0)
             sig_info = r2_signal_map.get(sym, {})
             score = sig_info.get("score")
             eligible_flag = sig_info.get("eligible")
-            weight = r2_weights_map.get(sym, sig_info.get("target_weight", 0.0) or 0.0)
+            weight = r2_weights_map.get(sym, sig_info.get("target_weight", None))
 
             if is_active:
+                r2_evaluated_cnt += 1
                 r2_active_cnt += 1
                 decision = "ALLOCATED_SPOT_LONG"
                 signal_str = "SPOT_LONG"
@@ -682,32 +685,34 @@ class TradingControlCenterDataEngine:
                 rejection_reason = "NONE"
                 confidence = "RECORDED_POSITION"
             elif eligible_flag is False:
+                r2_evaluated_cnt += 1
                 r2_rejected_cnt += 1
                 decision = "REJECTED (Filter Rank)"
                 signal_str = "RANK_REJECTED"
                 eligible_str = "NO"
                 rejection_reason = "BELOW_RANK_THRESHOLD"
                 confidence = "PROVEN_FILTER_REJECTION"
-            elif weight > 0:
+            elif weight is not None and weight > 0:
+                r2_evaluated_cnt += 1
                 r2_eligible_cnt += 1
                 decision = "TARGET_WEIGHT_ALLOCATED"
                 signal_str = "ALLOCATE_TARGET"
                 eligible_str = "YES"
                 rejection_reason = "NONE"
                 confidence = "RECORDED_SIGNAL"
-            elif score is not None:
-                decision = "OBSERVING_SPOT_BOOK"
+            elif score is not None or (weight is not None and weight == 0.0):
+                r2_evaluated_cnt += 1
+                decision = "ZERO_WEIGHT_CASH"
                 signal_str = "HOLD_CASH"
                 eligible_str = "NO" if eligible_flag is False else "WAITING_RANK"
                 rejection_reason = "ZERO_TARGET_WEIGHT"
                 confidence = "RECORDED_SNAPSHOT"
             else:
-                decision = "OBSERVING_SPOT_BOOK"
+                decision = "NO_DECISION_RECORDED"
                 signal_str = "NOT_RECORDED"
                 eligible_str = "NOT_RECORDED"
                 rejection_reason = "NOT_RECORDED"
-                confidence = "NO_SIGNAL_RECORDED"
-
+                confidence = "NOT_EVALUATED" 
             r2_scanner_list.append({
                 "symbol": sym,
                 "source": "CRYPTOLAB_R2 (telemetry + observer.sqlite)",
@@ -802,9 +807,45 @@ class TradingControlCenterDataEngine:
                     notional = ep * qty
                     sl_dist = round(((sl - ep) / ep) * 100.0, 2) if ep > 0 else 0.0
 
-                    # Real Cascade TP Calculation for Native Trend Engine (1.5R and 3.0R)
-                    tp1_taken = bool(pos.get("tp1_taken", False))
-                    tp2_taken = bool(pos.get("tp2_taken", False))
+                    # Confirmed current mark or NOT_AVAILABLE
+                    mark_val = pos.get("current_mark") or pos.get("mark_price") or pos.get("last_price")
+                    if mark_val is not None and float(mark_val) > 0:
+                        current_mark = float(mark_val)
+                        mark_time_val = pos.get("mark_time") or pos.get("price_time") or pos.get("mark_time_ms")
+                        mark_time_utc = format_utc_ts(mark_time_val) if mark_time_val else "NOT_RECORDED"
+                    else:
+                        current_mark = "NOT_AVAILABLE"
+                        mark_time_utc = "NOT_AVAILABLE"
+
+                    # Confirmed unrealized PnL or calculated mathematically, else NOT_AVAILABLE (never fake 0.0)
+                    if pos.get("unrealized_pnl") is not None:
+                        unreal = round(float(pos["unrealized_pnl"]), 4)
+                    elif pos.get("unrealized_pnl_usdt") is not None:
+                        unreal = round(float(pos["unrealized_pnl_usdt"]), 4)
+                    elif current_mark != "NOT_AVAILABLE" and ep > 0 and qty > 0:
+                        unreal = round(dir_int * (current_mark - ep) * qty, 4)
+                    else:
+                        unreal = "NOT_AVAILABLE"
+
+                    # Last SL update time: ONLY when recorded event exists, never fallback to entry_time
+                    sl_upd = pos.get("last_sl_update_utc") or pos.get("sl_update_time") or pos.get("sl_update_time_ms")
+                    last_sl_update_utc = format_utc_ts(sl_upd) if sl_upd else "NOT_RECORDED"
+
+                    # Cascade TP: In CoreV3Engine.to_dict(), tp1_taken/tp2_taken are absent
+                    if "tp1_taken" in pos:
+                        tp1_taken = bool(pos["tp1_taken"])
+                        tp1_status = "TAKEN" if tp1_taken else "PENDING"
+                    else:
+                        tp1_taken = None
+                        tp1_status = "UNKNOWN"
+
+                    if "tp2_taken" in pos:
+                        tp2_taken = bool(pos["tp2_taken"])
+                        tp2_status = "TAKEN" if tp2_taken else "PENDING"
+                    else:
+                        tp2_taken = None
+                        tp2_status = "UNKNOWN"
+
                     is_be = bool(pos.get("is_breakeven_set", False))
 
                     if atr > 0:
@@ -821,9 +862,11 @@ class TradingControlCenterDataEngine:
                         tp2_dist = "NOT_APPLICABLE"
 
                     flags = ["DONCHIAN_4H"]
-                    if tp1_taken:
+                    if tp1_status == "TAKEN":
                         flags.append("TP1_TAKEN")
-                    if tp2_taken:
+                    elif tp1_status == "UNKNOWN":
+                        flags.append("TP_STATUS_UNKNOWN")
+                    if tp2_status == "TAKEN":
                         flags.append("TP2_TAKEN")
                     if is_be:
                         flags.append("BREAK_EVEN")
@@ -838,17 +881,20 @@ class TradingControlCenterDataEngine:
                         "entry_price": ep,
                         "current_qty": qty,
                         "notional_usdt": round(notional, 2),
-                        "current_mark": ep,
-                        "unrealized_pnl_usdt": round(unreal, 4),
+                        "current_mark": current_mark,
+                        "mark_time_utc": mark_time_utc,
+                        "unrealized_pnl_usdt": unreal,
                         "stop_loss": sl,
                         "sl_distance_pct": sl_dist,
                         "tp1_price": tp1_str,
                         "tp1_distance_pct": tp1_dist,
+                        "tp1_status": tp1_status,
                         "tp2_price": tp2_str,
                         "tp2_distance_pct": tp2_dist,
+                        "tp2_status": tp2_status,
                         "flags": flags,
                         "bars_held": int(pos.get("bars_held", 0)),
-                        "last_sl_update_utc": entry_utc,
+                        "last_sl_update_utc": last_sl_update_utc,
                         "credibility": "CONFIRMED_STATE_POSITION",
                     })
                 except Exception as e:
@@ -872,6 +918,26 @@ class TradingControlCenterDataEngine:
                     if tp1_done:
                         flags.append("TP1_DONE")
 
+                    mark_val = pos.get("current_mark") or pos.get("mark_price") or pos.get("last_price")
+                    if mark_val is not None and float(mark_val) > 0:
+                        current_mark = float(mark_val)
+                        mark_time_utc = format_utc_ts(pos.get("mark_time") or pos.get("price_time"))
+                    else:
+                        current_mark = "NOT_AVAILABLE"
+                        mark_time_utc = "NOT_AVAILABLE"
+
+                    if pos.get("unrealized_pnl") is not None:
+                        unreal = round(float(pos["unrealized_pnl"]), 4)
+                    elif pos.get("unrealized_pnl_usdt") is not None:
+                        unreal = round(float(pos["unrealized_pnl_usdt"]), 4)
+                    elif current_mark != "NOT_AVAILABLE" and ep > 0 and qty > 0:
+                        unreal = round(dir_int * (current_mark - ep) * qty, 4)
+                    else:
+                        unreal = "NOT_AVAILABLE"
+
+                    sl_upd = pos.get("last_sl_update_utc") or pos.get("sl_update_time")
+                    last_sl_update_utc = format_utc_ts(sl_upd) if sl_upd else "NOT_RECORDED"
+
                     entry_utc = format_utc_ts(pos.get("entry_time"))
 
                     native_positions_list.append({
@@ -882,8 +948,9 @@ class TradingControlCenterDataEngine:
                         "entry_price": ep,
                         "current_qty": qty,
                         "notional_usdt": round(notional, 2),
-                        "current_mark": ep,
-                        "unrealized_pnl_usdt": 0.0,
+                        "current_mark": current_mark,
+                        "mark_time_utc": mark_time_utc,
+                        "unrealized_pnl_usdt": unreal,
                         "stop_loss": sl,
                         "sl_distance_pct": sl_dist,
                         "tp1_price": f"${tp1:.4f}" if tp1 > 0 else f"${tp:.4f}",
@@ -892,7 +959,7 @@ class TradingControlCenterDataEngine:
                         "tp2_distance_pct": "0.0%",
                         "flags": flags,
                         "bars_held": int(pos.get("entry_bar_idx", 0)),
-                        "last_sl_update_utc": entry_utc,
+                        "last_sl_update_utc": last_sl_update_utc,
                         "credibility": "CONFIRMED_STATE_POSITION",
                     })
                 except Exception as e:
@@ -935,6 +1002,26 @@ class TradingControlCenterDataEngine:
                     if be_set:
                         flags.append("BREAK_EVEN")
 
+                    mark_val = pos.get("current_mark") or pos.get("mark_price") or pos.get("last_price")
+                    if mark_val is not None and float(mark_val) > 0:
+                        current_mark = float(mark_val)
+                        mark_time_utc = format_utc_ts(pos.get("mark_time") or pos.get("price_time"))
+                    else:
+                        current_mark = "NOT_AVAILABLE"
+                        mark_time_utc = "NOT_AVAILABLE"
+
+                    if pos.get("unrealized_pnl") is not None:
+                        unreal = round(float(pos["unrealized_pnl"]), 4)
+                    elif pos.get("unrealized_pnl_usdt") is not None:
+                        unreal = round(float(pos["unrealized_pnl_usdt"]), 4)
+                    elif current_mark != "NOT_AVAILABLE" and ep > 0 and qty > 0:
+                        unreal = round(dir_int * (current_mark - ep) * qty, 4)
+                    else:
+                        unreal = "NOT_AVAILABLE"
+
+                    sl_upd = pos.get("last_sl_update_utc") or pos.get("sl_update_time")
+                    last_sl_update_utc = format_utc_ts(sl_upd) if sl_upd else "NOT_RECORDED"
+
                     entry_utc = format_utc_ts(pos.get("entry_time_ms"))
 
                     shadow_positions_list.append({
@@ -945,8 +1032,9 @@ class TradingControlCenterDataEngine:
                         "entry_price": ep,
                         "current_qty": qty,
                         "notional_usdt": round(notional, 2),
-                        "current_mark": ep,
-                        "unrealized_pnl_usdt": round(unreal, 4),
+                        "current_mark": current_mark,
+                        "mark_time_utc": mark_time_utc,
+                        "unrealized_pnl_usdt": unreal,
                         "stop_loss": sl,
                         "sl_distance_pct": sl_dist,
                         "tp1_price": f"${tp1:.4f}" if tp1 > 0 else "NOT_DEFINED",
@@ -955,7 +1043,7 @@ class TradingControlCenterDataEngine:
                         "tp2_distance_pct": f"{((tp2-ep)/ep)*100:.2f}%" if tp2 > 0 and ep > 0 else "NOT_APPLICABLE",
                         "flags": flags,
                         "bars_held": bars,
-                        "last_sl_update_utc": entry_utc,
+                        "last_sl_update_utc": last_sl_update_utc,
                         "credibility": "CONFIRMED_STATE_POSITION",
                     })
                 except Exception as e:
@@ -1009,10 +1097,19 @@ class TradingControlCenterDataEngine:
                     })
 
         total_pos = len(native_positions_list) + len(shadow_positions_list) + len(r2_positions_list)
+        total_open_positions = total_pos
+        has_error = (native_source_status == "DATA_SOURCE_ERROR" or shadow_source_status == "DATA_SOURCE_ERROR" or r2_source_status == "DATA_SOURCE_ERROR")
+        is_empty = (total_open_positions == 0 and not has_error)
 
         res = {
             "timestamp_iso": now_iso,
-            "total_open_positions": total_pos,
+            "total_open_positions": total_open_positions,
+            "is_empty": is_empty,
+            "data_status": {
+                "native": "OK_POSITIONS" if len(native_positions_list) > 0 else ("DATA_SOURCE_ERROR" if native_source_status != "OK" else "OK_EMPTY"),
+                "shadow": "OK_POSITIONS" if len(shadow_positions_list) > 0 else ("DATA_SOURCE_ERROR" if shadow_source_status != "OK" else "OK_EMPTY"),
+                "r2": "OK_POSITIONS" if len(r2_positions_list) > 0 else ("DATA_SOURCE_ERROR" if r2_source_status != "OK" else "OK_EMPTY"),
+            },
             "native": {
                 "status": "OK_POSITIONS" if len(native_positions_list) > 0 else ("DATA_SOURCE_ERROR" if native_source_status != "OK" else "OK_EMPTY"),
                 "error_diagnostic": native_error_diag,
@@ -1033,8 +1130,8 @@ class TradingControlCenterDataEngine:
             "shadow_positions": shadow_positions_list,
             "r2_positions": r2_positions_list,
             "empty_reason": (
-                "Все системы работают в штатном режиме. Входных пробоев Donchian Channel не зафиксировано, "
-                "сигналы находятся в зоне накопления или отфильтрованы по ADX/BTC Delta."
+                "Открытых позиций в подтверждённом состоянии систем не зарегистрировано (OK_EMPTY)."
+                if is_empty else ("Ошибка источника данных (DATA_SOURCE_ERROR)" if has_error else "")
             ),
         }
         return self._set_cached("positions", res)
@@ -1285,9 +1382,13 @@ class TradingControlCenterDataEngine:
         conn_n = self._ro_sqlite_connect(self.native_ledger_path)
         if conn_n:
             try:
-                # Section P0.4: Native Equity MUST come from total_equity
+                # Section P0.4: Native Equity MUST come from total_equity (Last 500 records in chronological order)
                 j_rows = conn_n.execute(
-                    "SELECT iso_time, total_equity, cash_balance FROM native_journal ORDER BY journal_id ASC LIMIT 500;"
+                    """SELECT journal_id, iso_time, total_equity, cash_balance
+                       FROM (
+                           SELECT journal_id, iso_time, total_equity, cash_balance
+                           FROM native_journal ORDER BY journal_id DESC LIMIT 500
+                       ) ORDER BY journal_id ASC;"""
                 ).fetchall()
                 for r in j_rows:
                     native_equity_series.append({
@@ -1330,14 +1431,37 @@ class TradingControlCenterDataEngine:
         conn_s = self._ro_sqlite_connect(self.shadow_ledger_path)
         if conn_s:
             try:
+                # Section P0.4: Shadow MTM Equity (Last 500 records in chronological order, factoring open positions)
                 j_rows = conn_s.execute(
-                    """SELECT saved_at_utc, shadow_realized_equity
-                       FROM shadow_state_journal ORDER BY journal_id ASC LIMIT 500;"""
+                    """SELECT journal_id, saved_at_utc, shadow_realized_equity, state_json
+                       FROM (
+                           SELECT journal_id, saved_at_utc, shadow_realized_equity, state_json
+                           FROM shadow_state_journal ORDER BY journal_id DESC LIMIT 500
+                       ) ORDER BY journal_id ASC;"""
                 ).fetchall()
                 for r in j_rows:
+                    realized_eq = float(r["shadow_realized_equity"])
+                    unreal_sum = 0.0
+                    try:
+                        st = json.loads(r["state_json"])
+                        port = st.get("shadow_portfolio", {})
+                        for p in port.get("positions", {}).values():
+                            if p.get("unrealized_pnl") is not None:
+                                unreal_sum += float(p["unrealized_pnl"])
+                            elif (p.get("current_mark") or p.get("mark_price")) and float(p.get("entry_price", 0)) > 0:
+                                m = float(p.get("current_mark") or p.get("mark_price"))
+                                ep = float(p["entry_price"])
+                                q = float(p.get("current_qty", 0))
+                                d = int(p.get("direction", 1))
+                                unreal_sum += d * (m - ep) * q
+                    except Exception:
+                        pass
+                    mtm_eq = realized_eq + unreal_sum
                     shadow_equity_series.append({
                         "timestamp_utc": format_utc_ts(r["saved_at_utc"]),
-                        "equity": float(r["shadow_realized_equity"]),
+                        "equity": round(mtm_eq, 4),
+                        "realized_equity": round(realized_eq, 4),
+                        "unrealized_pnl": round(unreal_sum, 4),
                     })
             except Exception as e:
                 logger.debug(f"Failed to query shadow state journal for equity: {e}")
@@ -1350,20 +1474,32 @@ class TradingControlCenterDataEngine:
             shadow_port = shadow_state.get("shadow_portfolio", {})
             for t in shadow_port.get("closed_trades", []):
                 try:
+                    init_q = t.get("initial_qty")
+                    fin_q = t.get("final_qty")
+                    fallback_q = t.get("qty")
+                    qty_val = float(fin_q if fin_q is not None else (init_q if init_q is not None else (fallback_q or 0.0)))
+
+                    f_pnl = t.get("funding_pnl")
+                    if f_pnl is None:
+                        f_pnl = t.get("funding_paid")
+
                     shadow_trades_list.append({
                         "trade_id": sanitize_safe_text(t.get("trade_id")),
                         "symbol": sanitize_safe_text(t.get("symbol")),
                         "side": "LONG" if int(t.get("direction", 1)) == 1 else "SHORT",
                         "entry_time_utc": format_utc_ts(t.get("entry_time_ms")),
                         "exit_time_utc": format_utc_ts(t.get("exit_time_ms")),
-                        "entry_price": float(t.get("entry_price", 0.0)),
-                        "exit_price": float(t.get("exit_price", 0.0)),
-                        "qty": float(t.get("qty", 0.0)),
-                        "gross_pnl_usdt": float(t.get("gross_pnl", 0.0)),
-                        "fees_paid_usdt": float(t.get("fees_paid", 0.0)),
-                        "funding_pnl_usdt": float(t.get("funding_paid", 0.0)),
-                        "net_pnl_usdt": float(t.get("net_pnl", 0.0)),
+                        "entry_price": float(t["entry_price"]) if t.get("entry_price") is not None else "NOT_RECORDED",
+                        "exit_price": float(t["exit_price"]) if t.get("exit_price") is not None else "NOT_RECORDED",
+                        "initial_qty": float(init_q) if init_q is not None else qty_val,
+                        "final_qty": float(fin_q) if fin_q is not None else qty_val,
+                        "qty": qty_val,
+                        "gross_pnl_usdt": float(t["gross_pnl"]) if t.get("gross_pnl") is not None else "NOT_RECORDED",
+                        "fees_paid_usdt": float(t["fees_paid"]) if t.get("fees_paid") is not None else "NOT_RECORDED",
+                        "funding_pnl_usdt": float(f_pnl) if f_pnl is not None else "NOT_RECORDED",
+                        "net_pnl_usdt": float(t["net_pnl"]) if t.get("net_pnl") is not None else "NOT_RECORDED",
                         "exit_reason": sanitize_safe_text(t.get("exit_reason", "MARKET_CLOSE")),
+                        "slippage_bps": float(t.get("slippage_bps", 0.0)),
                     })
                 except Exception:
                     pass
@@ -1376,8 +1512,11 @@ class TradingControlCenterDataEngine:
         if conn_r2:
             try:
                 # Section P0.3: Must filter strategy, capital, cost, policy
+                # Bounded query of the latest 500 rows
                 rows = conn_r2.execute(
-                    """SELECT at, payload FROM events WHERE kind='EQUITY' ORDER BY rowid ASC;"""
+                    """SELECT at, payload FROM (
+                           SELECT rowid, at, payload FROM events WHERE kind='EQUITY' ORDER BY rowid DESC LIMIT 500
+                       ) ORDER BY rowid ASC;"""
                 ).fetchall()
                 for r in rows:
                     try:
@@ -1467,6 +1606,22 @@ class TradingControlCenterDataEngine:
                 },
             },
             "r2": {
+                "primary_profile": R2_PRIMARY_PROFILE,
+                "equity_history": downsample(r2_equity_series),
+                "closed_trades": [],
+                "metrics": {
+                    "closed_trades_count": 0,
+                    "profit_factor": "LOT_REALIZATION_NOT_DEFINED",
+                    "fill_claim": "QUOTE_ESTIMATE_NOT_PROVED_FILL",
+                    "data_gap_annotation": {
+                        "gap_window": f"{R2_DATA_GAP_START_UTC} -> {R2_DATA_GAP_END_UTC}",
+                        "status": "RESEARCH_DATA_GAP_RECOVERY_ACCEPTED",
+                        "incident": "R2-RECOVERY-001",
+                        "recovery_confirmed_utc": "2026-11-16T09:20:00Z",
+                    },
+                },
+            },
+            "r2_shadow": {
                 "primary_profile": R2_PRIMARY_PROFILE,
                 "equity_history": downsample(r2_equity_series),
                 "closed_trades": [],
@@ -1603,7 +1758,9 @@ class TradingControlCenterDataEngine:
                     "name": "bybit-shadow-dashboard.service",
                     "role": "Three-System Trading Control Center (Port 8085)",
                     "port": 8085,
-                    "status": "TELEMETRY_FRESH",
+                    "status": "ACTIVE_RUNNING",
+                    "verification": "INDEPENDENT_HTTP_LISTENER",
+                    "public_access": "0.0.0.0:8085 (READ_ONLY)",
                 },
             ],
             "databases": {
