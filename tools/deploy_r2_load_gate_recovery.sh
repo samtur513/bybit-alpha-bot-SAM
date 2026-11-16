@@ -64,7 +64,8 @@ git merge-base --is-ancestor "$SHA" "origin/$BRANCH" || die "SHA not in authoriz
 STAGE=$(mktemp -d /opt/bybit-shadow/r2-cpu-stage.XXXXXXXX)
 git show "${SHA}:$DIR/readiness.py" > "$STAGE/readiness.py"
 git show "${SHA}:$DIR/RECOVERY_PATCH.json" > "$STAGE/RECOVERY_PATCH.json"
-"$PY" -m py_compile "$STAGE/readiness.py"
+git show "${SHA}:tools/r2_resource_observer.py" > "$STAGE/r2_resource_observer.py"
+"$PY" -m py_compile "$STAGE/readiness.py" "$STAGE/r2_resource_observer.py"
 
 "$PY" - "$STAGE" "$REPO/$DIR" "$DATA" <<'PYCHECK'
 import hashlib,importlib.util,json,pathlib,sqlite3,sys
@@ -137,3 +138,32 @@ after=$(systemctl show "$SVC" -p NRestarts --value)
 SUCCESS=1
 echo "R2_CPU_GATE_REMOVAL_PASS SHA=$SHA R2_ACTIVE=yes NRestarts=$after BACKUP=$BACKUP"
 echo "Frozen strategies, cohort/T0, 24 accounts and ledger were not modified by installer."
+
+# Repair the independent monitor too: an earlier terminal command ran outside the
+# git repository and could have copied an empty file to this path.
+# Monitor failure must NOT undo a successful protected R2 recovery.
+MONITOR=/opt/bybit-shadow/diagnostics/r2_resource_observer.py
+if [[ -d /opt/bybit-shadow/diagnostics ]]; then
+  if [[ -e "$MONITOR" ]]; then
+    cp -a "$MONITOR" "$BACKUP/r2_resource_observer.py.previous" ||
+      echo "WARN: old monitor backup failed" >&2
+  fi
+  if install -m 0644 "$STAGE/r2_resource_observer.py" "$MONITOR" &&
+     cmp -s "$STAGE/r2_resource_observer.py" "$MONITOR"; then
+    echo "R2_MONITOR_FILE_RESTORED: CPU above 0.8 is advisory"
+    if [[ "$(systemctl show r2-resource-watch.service -p LoadState --value 2>/dev/null)" == loaded ]]; then
+      if systemctl restart r2-resource-watch.service &&
+         systemctl is-active --quiet r2-resource-watch.service; then
+        echo "R2_MONITOR_ACTIVE_PASS"
+      else
+        echo "WARN: monitor restart failed; R2 recovery remains applied" >&2
+      fi
+    else
+      echo "WARN: monitor unit not loaded; diagnostic file restored" >&2
+    fi
+  else
+    echo "WARN: monitor file install failed; R2 recovery remains applied" >&2
+  fi
+else
+  echo "WARN: independent monitor directory absent; R2 recovery remains applied" >&2
+fi
