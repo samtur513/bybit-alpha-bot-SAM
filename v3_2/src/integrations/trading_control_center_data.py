@@ -1282,216 +1282,230 @@ class TradingControlCenterDataEngine:
         limit: int = 50,
         offset: int = 0,
     ) -> Dict[str, Any]:
-        """Provides unified chronological event stream across real databases."""
-        limit = min(max(1, limit), 200)
-        offset = max(0, offset)
+        """Bounded, evidence-only activity feed. A processed bar is NOT a signal.
 
+        Native source: native_journal.close_bar_% and execution/funding ledgers.
+        Shadow source: shadow_dedup_events, execution/funding ledgers.
+        R2 source: observer events (excluding frequent EQUITY ticks; use Analytics).
+        Never writes events to the trading databases and never invents trades.
+        """
+        limit = min(max(1, int(limit)), 200)
+        offset = min(max(0, int(offset)), 10000)
         eff_sys = system or system_filter
         eff_ev = event_type or event_type_filter
-        eff_sym = symbol
-
         now_iso = datetime.now(timezone.utc).isoformat()
-        events_pool: List[Dict[str, Any]] = []
+        pool: List[Dict[str, Any]] = []
+        source_diagnostics: Dict[str, str] = {}
+        last_r2_decision_utc = None
 
-        # ---------------------------------------------------------------------
-        # 1. Native Events: native_missed_opportunities + native_trades + native_funding_settlements
-        # ---------------------------------------------------------------------
-        conn_n = self._ro_sqlite_connect(self.native_ledger_path)
-        if conn_n:
+        def add(system_name: str, event_id: str, kind: str, symbol_name: str,
+                when_ms: int, recorded_ms: Optional[int], notes: Any,
+                source: str, price: Any = None, qty: Any = None,
+                pnl: Any = None):
+            if not when_ms or when_ms < 1_000_000_000_000:
+                return
+            pool.append({
+                "event_id": sanitize_safe_text(event_id),
+                "system": system_name,
+                "event_type": kind,
+                "symbol": sanitize_safe_text(symbol_name),
+                "event_utc": format_utc_ts(when_ms),
+                "recorded_utc": format_utc_ts(recorded_ms) if recorded_ms else "NOT_RECORDED",
+                "price": price,
+                "qty": qty,
+                "notional_usdt": None,
+                "pnl_impact_usdt": pnl,
+                "notes": sanitize_safe_text(notes),
+                "source": source,
+                "_sort_ts": int(when_ms),
+            })
+
+        def iso_ms(value):
+            if not value:
+                return 0
             try:
-                # Missed opportunities
-                m_rows = conn_n.execute(
-                    """SELECT id, symbol, timestamp_ms, strategy, direction, intended_price, reason
-                       FROM native_missed_opportunities ORDER BY id DESC LIMIT 50;"""
-                ).fetchall()
-                for r in m_rows:
-                    dt_utc = format_utc_ts(r["timestamp_ms"])
-                    events_pool.append({
-                        "event_id": f"NAT-MISS-{r['id']}",
-                        "system": "NATIVE",
-                        "event_type": "SIGNAL_REJECTED",
-                        "symbol": sanitize_safe_text(r["symbol"]),
-                        "event_utc": dt_utc,
-                        "recorded_utc": dt_utc,
-                        "price": float(r["intended_price"]),
-                        "qty": None,
-                        "notional_usdt": None,
-                        "pnl_impact_usdt": None,
-                        "notes": sanitize_safe_text(f"Filter rejection: {r['reason']} ({r['strategy']})"),
-                        "_sort_ts": int(r["timestamp_ms"]),
-                    })
+                dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+                return int(dt.timestamp() * 1000) if dt.tzinfo else 0
+            except (ValueError, TypeError, OverflowError):
+                return 0
 
-                # Closed trades from real native_trades table
-                t_rows = conn_n.execute(
-                    """SELECT trade_id, symbol, direction, entry_time_ms, exit_time_ms, entry_price,
-                              exit_price, qty, net_pnl, exit_reason
-                       FROM native_trades ORDER BY exit_time_ms DESC LIMIT 50;"""
+        # Native: bar processing and financial events are separate event classes.
+        db = self._ro_sqlite_connect(self.native_ledger_path)
+        if db is None:
+            source_diagnostics["native"] = "DATA_SOURCE_ERROR"
+        else:
+            try:
+                rows = db.execute(
+                    "SELECT journal_id, notes, timestamp_ms FROM native_journal "
+                    "WHERE notes LIKE 'closed_bar_%' ORDER BY journal_id DESC LIMIT 40"
                 ).fetchall()
-                for r in t_rows:
-                    dt_utc = format_utc_ts(r["exit_time_ms"])
-                    events_pool.append({
-                        "event_id": f"NAT-EXIT-{r['trade_id']}",
-                        "system": "NATIVE",
-                        "event_type": "EXIT_FILL",
-                        "symbol": sanitize_safe_text(r["symbol"]),
-                        "event_utc": dt_utc,
-                        "recorded_utc": dt_utc,
-                        "price": float(r["exit_price"]),
-                        "qty": float(r["qty"]),
-                        "notional_usdt": round(float(r["exit_price"]) * float(r["qty"]), 2),
-                        "pnl_impact_usdt": round(float(r["net_pnl"]), 4),
-                        "notes": sanitize_safe_text(f"Exit: {r['exit_reason']} (Net PnL: ${float(r['net_pnl']):.2f})"),
-                        "_sort_ts": int(r["exit_time_ms"]),
-                    })
-
-                # Funding settlements
-                f_rows = conn_n.execute(
-                    """SELECT symbol, settlement_time_ms, funding_rate, payment, created_at_utc
-                       FROM native_funding_settlements ORDER BY settlement_time_ms DESC LIMIT 20;"""
+                for r in rows:
+                    name = str(r["notes"])[len("closed_bar_"):]
+                    add("NATIVE", f"NAT-BAR-{r['journal_id']}", "BAR_PROCESSED",
+                        name, int(r["timestamp_ms"]), int(r["timestamp_ms"]),
+                        "Закрытая свеча обработана; это не зарегистрированный сигнал.",
+                        "native_journal")
+                rows = db.execute(
+                    "SELECT id, symbol, timestamp_ms, reason FROM "
+                    "native_missed_opportunities ORDER BY id DESC LIMIT 40"
                 ).fetchall()
-                for r in f_rows:
-                    dt_utc = format_utc_ts(r["settlement_time_ms"])
-                    events_pool.append({
-                        "event_id": f"NAT-FUND-{r['symbol']}-{r['settlement_time_ms']}",
-                        "system": "NATIVE",
-                        "event_type": "FUNDING_SETTLEMENT",
-                        "symbol": sanitize_safe_text(r["symbol"]),
-                        "event_utc": dt_utc,
-                        "recorded_utc": format_utc_ts(r["created_at_utc"]),
-                        "price": None,
-                        "qty": None,
-                        "notional_usdt": None,
-                        "pnl_impact_usdt": round(-float(r["payment"]), 4),
-                        "notes": sanitize_safe_text(f"Funding rate: {float(r['funding_rate'])*100:.4f}%"),
-                        "_sort_ts": int(r["settlement_time_ms"]),
-                    })
-            except Exception as e:
-                logger.debug(f"Failed to query native journal events: {e}")
+                for r in rows:
+                    add("NATIVE", f"NAT-MISS-{r['id']}", "SIGNAL_REJECTED",
+                        r["symbol"], int(r["timestamp_ms"]), None,
+                        r["reason"], "native_missed_opportunities")
+                rows = db.execute(
+                    "SELECT trade_id,symbol,exit_time_ms,exit_price,qty,net_pnl,exit_reason "
+                    "FROM native_trades ORDER BY exit_time_ms DESC LIMIT 40"
+                ).fetchall()
+                for r in rows:
+                    add("NATIVE", f"NAT-EXIT-{r['trade_id']}", "EXIT_FILL",
+                        r["symbol"], int(r["exit_time_ms"]), None,
+                        r["exit_reason"], "native_trades", r["exit_price"], r["qty"], r["net_pnl"])
+                rows = db.execute(
+                    "SELECT symbol,settlement_time_ms,payment FROM "
+                    "native_funding_settlements ORDER BY settlement_time_ms DESC LIMIT 20"
+                ).fetchall()
+                for r in rows:
+                    add("NATIVE", f"NAT-FUND-{r['symbol']}-{r['settlement_time_ms']}",
+                        "FUNDING_SETTLEMENT", r["symbol"], int(r["settlement_time_ms"]),
+                        None, "Зарегистрированный funding settlement",
+                        "native_funding_settlements", pnl=-float(r["payment"]))
+                source_diagnostics["native"] = "OK"
+            except (sqlite3.Error, ValueError, TypeError) as exc:
+                source_diagnostics["native"] = "DATA_SOURCE_ERROR:" + type(exc).__name__
+                logger.warning("Native activity journal read error: %s", type(exc).__name__)
             finally:
-                conn_n.close()
+                db.close()
 
-        # ---------------------------------------------------------------------
-        # 2. Shadow Events: shadow_execution_events + shadow_funding_settlements
-        # ---------------------------------------------------------------------
-        conn_s = self._ro_sqlite_connect(self.shadow_ledger_path)
-        if conn_s:
+        # Shadow: deduplicated processed bars are the source of truth, not MANUAL_SAVE.
+        db = self._ro_sqlite_connect(self.shadow_ledger_path)
+        if db is None:
+            source_diagnostics["shadow"] = "DATA_SOURCE_ERROR"
+        else:
             try:
-                e_rows = conn_s.execute(
-                    """SELECT event_id, exchange_ts, receive_ts, trade_id, portfolio, symbol,
-                              event_type, direction, intended_price, fill_price, qty,
-                              notional_usdt, fee_paid, realized_pnl, notes, execution_status
-                       FROM shadow_execution_events ORDER BY event_id DESC LIMIT 100;"""
+                rows = db.execute(
+                    "SELECT event_key,exchange_ts,symbol,processed_at_ms FROM "
+                    "shadow_dedup_events ORDER BY exchange_ts DESC LIMIT 40"
                 ).fetchall()
-                for r in e_rows:
-                    dt_utc = format_utc_ts(r["exchange_ts"])
-                    events_pool.append({
-                        "event_id": f"SHA-EV-{r['event_id']}",
-                        "system": "SHADOW",
-                        "event_type": sanitize_safe_text(r["event_type"]),
-                        "symbol": sanitize_safe_text(r["symbol"]),
-                        "event_utc": dt_utc,
-                        "recorded_utc": format_utc_ts(r["receive_ts"]),
-                        "price": float(r["fill_price"]) if r["fill_price"] > 0 else float(r["intended_price"]),
-                        "qty": float(r["qty"]),
-                        "notional_usdt": float(r["notional_usdt"]),
-                        "pnl_impact_usdt": float(r["realized_pnl"]),
-                        "notes": sanitize_safe_text(f"Status: {r['execution_status']}. {r['notes']}"),
-                        "_sort_ts": int(r["exchange_ts"]),
-                    })
-            except Exception as e:
-                logger.debug(f"Failed to query shadow execution events: {e}")
+                for r in rows:
+                    # exchange_ts represents the *open* of the 1h kline.
+                    close_ms = int(r["exchange_ts"]) + 3600000
+                    add("SHADOW", "SHA-BAR-" + str(r["event_key"]), "BAR_PROCESSED",
+                        r["symbol"], close_ms, int(r["processed_at_ms"]),
+                        "Дедуплицированная закрытая свеча; не является торговым сигналом.",
+                        "shadow_dedup_events")
+                rows = db.execute(
+                    "SELECT event_id,exchange_ts,receive_ts,symbol,event_type,"
+                    "fill_price,qty,realized_pnl,execution_status FROM "
+                    "shadow_execution_events ORDER BY event_id DESC LIMIT 40"
+                ).fetchall()
+                for r in rows:
+                    add("SHADOW", f"SHA-EV-{r['event_id']}", r["event_type"],
+                        r["symbol"], int(r["exchange_ts"]), int(r["receive_ts"] or 0),
+                        "Execution status: " + str(r["execution_status"]),
+                        "shadow_execution_events", r["fill_price"], r["qty"], r["realized_pnl"])
+                rows = db.execute(
+                    "SELECT symbol,settlement_time_ms,payment FROM "
+                    "shadow_funding_settlements ORDER BY settlement_time_ms DESC LIMIT 20"
+                ).fetchall()
+                for r in rows:
+                    add("SHADOW", f"SHA-FUND-{r['symbol']}-{r['settlement_time_ms']}",
+                        "FUNDING_SETTLEMENT", r["symbol"], int(r["settlement_time_ms"]),
+                        None, "Зарегистрированный funding settlement",
+                        "shadow_funding_settlements", pnl=-float(r["payment"]))
+                source_diagnostics["shadow"] = "OK"
+            except (sqlite3.Error, ValueError, TypeError) as exc:
+                source_diagnostics["shadow"] = "DATA_SOURCE_ERROR:" + type(exc).__name__
+                logger.warning("Shadow activity journal read error: %s", type(exc).__name__)
             finally:
-                conn_s.close()
+                db.close()
 
-        # ---------------------------------------------------------------------
-        # 3. CryptoLab R2 Events: from observer.sqlite (filtered strictly by R2 profile)
-        # ---------------------------------------------------------------------
-        conn_r2 = self._ro_sqlite_connect(self.r2_ledger_path)
-        if conn_r2:
+        # R2: query relevant event kinds *before* LIMIT; EQUITY ticks can crowd
+        # out the single authentic DECISION at 00:00 UTC.
+        db = self._ro_sqlite_connect(self.r2_ledger_path)
+        if db is None:
+            source_diagnostics["r2"] = "DATA_SOURCE_ERROR"
+        else:
             try:
-                r2_rows = conn_r2.execute(
-                    """SELECT id, kind, at, payload FROM events
-                       WHERE kind IN ('ORDER', 'DECISION', 'EQUITY')
-                       ORDER BY rowid DESC LIMIT 100;"""
+                row = db.execute(
+                    "SELECT at FROM events WHERE kind='DECISION' "
+                    "ORDER BY at DESC LIMIT 1"
+                ).fetchone()
+                last_r2_decision_utc = str(row["at"]) if row else None
+                rows = db.execute(
+                    "SELECT id,kind,at,payload FROM events "
+                    "WHERE kind IN ('DECISION','EXECUTION','RISK_MARK','ORDER',"
+                    "'MISSED_DECISION','MISSED_EXECUTION','DATA_QUALITY','SNAPSHOT') "
+                    "ORDER BY at DESC LIMIT 100"
                 ).fetchall()
-                for r in r2_rows:
+                event_types = {
+                    "DECISION": "DAILY_DECISION_RECORDED",
+                    "EXECUTION": "VIRTUAL_EXECUTION_CYCLE",
+                    "RISK_MARK": "RISK_MARK_EVALUATED",
+                    "ORDER": "VIRTUAL_ORDER_ESTIMATE",
+                    "SNAPSHOT": "MARKET_SNAPSHOT_RECORDED",
+                    "MISSED_DECISION": "MISSED_DAILY_DECISION",
+                    "MISSED_EXECUTION": "MISSED_VIRTUAL_EXECUTION",
+                    "DATA_QUALITY": "DATA_QUALITY_WARNING",
+                }
+                for r in rows:
                     try:
-                        pld = json.loads(r["payload"])
-                        k = r["kind"]
-                        dt_iso = r["at"]
-                        try:
-                            dt_ts = int(datetime.fromisoformat(dt_iso.replace("Z", "+00:00")).timestamp() * 1000)
-                        except Exception:
-                            dt_ts = 0
-
-                        # Filter strictly for profile R2:300:BASE:OBSERVED_BOOK
-                        if pld.get("strategy") and pld.get("strategy") != "R2":
-                            continue
-                        if pld.get("capital") and pld.get("capital") != 300:
-                            continue
-
-                        if k == "ORDER":
-                            events_pool.append({
-                                "event_id": f"R2-ORD-{r['id']}",
-                                "system": "CRYPTOLAB_R2",
-                                "event_type": "ORDER_INTENT",
-                                "symbol": sanitize_safe_text(pld.get("symbol", "PORTFOLIO")),
-                                "event_utc": format_utc_ts(dt_iso),
-                                "recorded_utc": format_utc_ts(dt_iso),
-                                "price": float(pld.get("reference_mid", 0.0)),
-                                "qty": float(pld.get("gross_qty", 0.0)),
-                                "notional_usdt": round(float(pld.get("gross_qty", 0.0)) * float(pld.get("reference_mid", 0.0)), 2),
-                                "pnl_impact_usdt": -float(pld.get("fee_quote", 0.0)),
-                                "notes": sanitize_safe_text(f"Status: {pld.get('status', 'ESTIMATE')}. Fill Claim: QUOTE_ESTIMATE_NOT_PROVED_FILL"),
-                                "_sort_ts": dt_ts,
-                            })
-                        elif k == "DECISION":
-                            events_pool.append({
-                                "event_id": f"R2-DEC-{r['id']}",
-                                "system": "CRYPTOLAB_R2",
-                                "event_type": "SIGNAL_DETECTED",
-                                "symbol": "PORTFOLIO",
-                                "event_utc": format_utc_ts(dt_iso),
-                                "recorded_utc": format_utc_ts(dt_iso),
-                                "price": None,
-                                "qty": None,
-                                "notional_usdt": None,
-                                "pnl_impact_usdt": None,
-                                "notes": sanitize_safe_text(f"Decision evaluated: {pld.get('action', 'REBALANCE')}"),
-                                "_sort_ts": dt_ts,
-                            })
-                    except Exception:
-                        pass
-            except Exception as e:
-                logger.debug(f"Failed to query r2 events: {e}")
+                        data = json.loads(r["payload"])
+                        kind = str(r["kind"])
+                        if kind == "ORDER":
+                            if any(data.get(key) != val for key, val in (
+                                ("strategy", "R2"), ("capital", 300),
+                                ("cost", "BASE"), ("policy", "OBSERVED_BOOK")
+                            )):
+                                continue
+                        if kind == "SNAPSHOT":
+                            if data.get("record_type") not in (
+                                "FORWARD_DECISION", "FORWARD_EXECUTION"
+                            ):
+                                continue
+                            if data.get("symbol") not in R2_SYMBOLS_3:
+                                continue
+                        note = {
+                            "DECISION": "Суточное решение вычислено. Наличие решения не означает открытие позиции.",
+                            "EXECUTION": "Модельный расчёт исполнения, не биржевой fill.",
+                            "RISK_MARK": "Зарегистрирована оценка рыночного риска.",
+                            "SNAPSHOT": "Снимок модели, не торговое исполнение.",
+                            "ORDER": "Расчётная заявка: QUOTE_ESTIMATE_NOT_PROVED_FILL.",
+                        }.get(kind, data.get("reason", kind))
+                        add("CRYPTOLAB_R2", "R2-" + str(r["id"]),
+                            event_types[kind], data.get("symbol", "PORTFOLIO"),
+                            iso_ms(r["at"]), iso_ms(r["at"]), note, "observer.events")
+                    except (json.JSONDecodeError, ValueError, TypeError, KeyError):
+                        continue
+                source_diagnostics["r2"] = "OK"
+            except sqlite3.Error as exc:
+                source_diagnostics["r2"] = "DATA_SOURCE_ERROR:" + type(exc).__name__
+                logger.warning("R2 activity journal read error: %s", type(exc).__name__)
             finally:
-                conn_r2.close()
+                db.close()
 
-        # Sort reverse chronologically
-        events_pool.sort(key=lambda x: x["_sort_ts"], reverse=True)
-
-        # Apply filtering
-        filtered = events_pool
-        if eff_sys:
-            filtered = [e for e in filtered if e["system"].upper() == eff_sys.upper()]
-        if eff_ev:
-            filtered = [e for e in filtered if e["event_type"].upper() == eff_ev.upper()]
-        if eff_sym:
-            filtered = [e for e in filtered if e["symbol"].upper() == eff_sym.upper()]
-
-        total_matching = len(filtered)
-        paginated = filtered[offset : offset + limit]
-
-        # Strip internal sort key
-        for item in paginated:
+        # Per-event source proofs, no synthetic trades. Bounded recent feed.
+        pool.sort(key=lambda item: item["_sort_ts"], reverse=True)
+        filtered = [
+            item for item in pool
+            if (not eff_sys or item["system"].upper() == eff_sys.upper())
+            and (not eff_ev or item["event_type"].upper() == eff_ev.upper())
+            and (not eff_sym or item["symbol"].upper() == eff_sym.upper())
+        ]
+        visible = filtered[offset:offset + limit]
+        for item in visible:
             item.pop("_sort_ts", None)
-
         return {
             "timestamp_iso": now_iso,
-            "total_events": total_matching,
+            "total_events": len(filtered),
             "limit": limit,
             "offset": offset,
-            "events": paginated,
+            "events": visible,
+            "scope": "BOUNDED_RECENT_ACTIVITIES_NOT_ALL_TIME",
+            "r2_last_daily_decision_utc": last_r2_decision_utc or "NOT_RECORDED",
+            "source_status": source_diagnostics,
+            "notes": "BAR_PROCESSED confirms market processing, not a trading signal. "
+                     "R2 virtual execution is not an exchange fill.",
         }
 
     # =========================================================================
