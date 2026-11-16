@@ -7,10 +7,10 @@
   "tools/deploy_shadow_fleet_services.py": "f84c3de9fe84597e908690b1f9491edaebd684b2f2f8d42b790fca502b63d1a7",
   "tools/init_cryptolab_vps.py": "e896f7208ecfc02baa5c5a4b04389f289eb8c30ff4abd5bb89ad92977240e733",
   "tests/test_final_start_blockers_009.py": "3ec1f4214ac3ec41d4f59503c32b373367f335b875152867aa957bc926b054cf",
-  "tests/test_r2_recovery_001.py": "2ede88b2bdfbaae388c9fef22fc15765a30069c7597147d9b5473a6edaf97a5c",
+  "tests/test_r2_recovery_001.py": "4dedcdf1666680784a171c1791f8471deccf7c37fbe41dd23b3000bf5e48bae8",
   "reports/acceptance_001/THREE_SYSTEM_DEPLOYMENT_AUDIT.md": "bdf7b114e808640f3380321b0d9e97c6870001a80cc12a92fab341580a5b7ffc",
-  "reports/acceptance_001/POST_T0_001_VERIFICATION_REPORT.md": "f0ac7e99db416a7ede4c4ce8af7b459ade4f1218155afda76da2534908292bd3",
-  "vendor/cryptolab_r2/research/hunter001_dg001/r2_shadow/readiness.py": "5241c984b027beb3e107e617e0a55edc718877f2d1bb524ee95405780354b711",
+  "reports/acceptance_001/POST_T0_001_VERIFICATION_REPORT.md": "d8302bdd8d707d64b6d562364519c43e83c74bdede90c416e5165ce19091587c",
+  "vendor/cryptolab_r2/research/hunter001_dg001/r2_shadow/readiness.py": "532c51b83ca69d7067ec59bc5789640713d9b1effd7b94492faf497f2a8bf135",
   "cryptolab_frozen_blobs": {
     "research/hunter001_dg001/r2_validation/core.py": {
       "git_blob_sha": "04e37595f0609603edcf14afaf97ad87fb781b57",
@@ -58,5 +58,6 @@
       "bytes": 649
     }
   },
-  "cryptolab_git_commit": "313a908782271a6e1fffaee83be7ea1a616337cb"
+  "cryptolab_git_commit": "313a908782271a6e1fffaee83be7ea1a616337cb",
+  "vendor/cryptolab_r2/research/hunter001_dg001/r2_shadow/RECOVERY_PATCH.json": "2234249b75b38596c162fa8c528784fccc564a42d5f28c60733fc39530a194d4"
 }

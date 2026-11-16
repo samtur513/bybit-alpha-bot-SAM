@@ -171,8 +171,18 @@ def validate(root,policy,cohort,now=None):
         if not is_recovery:
             if m["code_sha256"]!=current_code:fail("SOURCE_BINDING")
         else:
-            for name in ("raw_store.py","telemetry.py","marks.py","collect_readiness.py"):
+            # In recovery mode:
+            # 1. Core modules that must remain 100% identical to initial manifest:
+            for name in ("runtime.py","raw_store.py","telemetry.py","marks.py","collect_readiness.py"):
                 if m["code_sha256"].get(name)!=current_code.get(name):fail("SOURCE_BINDING")
+            # 2. readiness.py must match either initial manifest OR the approved R2-RECOVERY-001 patch:
+            patch_file=runtime.HERE/"RECOVERY_PATCH.json"
+            if not patch_file.is_file():fail("MISSING_RECOVERY_PATCH")
+            patch=json.loads(patch_file.read_text(encoding="utf-8"))
+            if patch.get("protocol")!="R2-RECOVERY-001":fail("INVALID_RECOVERY_PATCH_PROTOCOL")
+            approved_readiness_sha=patch.get("approved_patch",{}).get("readiness.py")
+            if current_code.get("readiness.py") not in (m["code_sha256"].get("readiness.py"),approved_readiness_sha):
+                fail("UNAUTHORIZED_READINESS_PATCH")
         if is_recovery:
             receipt=json.loads(receipt_path.read_text())
             if receipt.get("status") not in ("ARMED","STARTED_UNVERIFIED","OBSERVING"):fail("START_RECEIPT_STATUS")

@@ -1,0 +1,8 @@
+{
+  "protocol": "R2-RECOVERY-001",
+  "approved_patch": {
+    "readiness.py": "532c51b83ca69d7067ec59bc5789640713d9b1effd7b94492faf497f2a8bf135",
+    "runtime.py": "3a9c85f53896779aa9202f87e9b496f8abbb64fea5a6ccc7f457052b3ded5f62"
+  },
+  "rationale": "Resolve READINESS_EXPIRED_OR_FUTURE blocker in readiness.py for authorized cohort restarts without weakening cryptographic code bindings."
+}

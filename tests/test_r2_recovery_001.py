@@ -139,8 +139,10 @@ def test_r2_recovery_rejects_tampered_manifest(tmp_path, monkeypatch):
 def test_r2_recovery_rejects_tampered_code(tmp_path, monkeypatch):
     """
     Proves:
-    If core strategy modules (e.g. marks.py or raw_store.py) are altered during recovery,
-    readiness.validate() strictly rejects it with READINESS_SOURCE_BINDING.
+    1. If core strategy modules (e.g. runtime.py, marks.py) are altered during recovery,
+       readiness.validate() strictly rejects it with READINESS_SOURCE_BINDING.
+    2. If readiness.py is tampered with an unauthorized hash, it is strictly rejected with
+       READINESS_UNAUTHORIZED_READINESS_PATCH.
     """
     root = tmp_path / "tampered_code"
     folder, manifest, reports, policy, when = setup_r2_fixture(root, monkeypatch)
@@ -151,12 +153,27 @@ def test_r2_recovery_rejects_tampered_code(tmp_path, monkeypatch):
 
     recovery_time = when + datetime.timedelta(hours=4)
 
-    # Simulate tampered core shadow file hash
-    fake_code_hashes = readiness.code_hashes()
-    fake_code_hashes["marks.py"] = "0" * 64
-    monkeypatch.setattr(readiness, "code_hashes", lambda: fake_code_hashes)
+    real_code_hashes = dict(readiness.code_hashes())
 
+    # 1. Simulate tampered runtime.py
+    fake_code_hashes_runtime = dict(real_code_hashes)
+    fake_code_hashes_runtime["runtime.py"] = "0" * 64
+    monkeypatch.setattr(readiness, "code_hashes", lambda: fake_code_hashes_runtime)
     with pytest.raises(RuntimeError, match="READINESS_SOURCE_BINDING"):
+        readiness.validate(root, policy, test_qa_fix.cohort(), now=recovery_time)
+
+    # 2. Simulate tampered marks.py
+    fake_code_hashes_marks = dict(real_code_hashes)
+    fake_code_hashes_marks["marks.py"] = "0" * 64
+    monkeypatch.setattr(readiness, "code_hashes", lambda: fake_code_hashes_marks)
+    with pytest.raises(RuntimeError, match="READINESS_SOURCE_BINDING"):
+        readiness.validate(root, policy, test_qa_fix.cohort(), now=recovery_time)
+
+    # 3. Simulate unauthorized readiness.py hash
+    fake_code_hashes_readiness = dict(real_code_hashes)
+    fake_code_hashes_readiness["readiness.py"] = "badf00d" * 8
+    monkeypatch.setattr(readiness, "code_hashes", lambda: fake_code_hashes_readiness)
+    with pytest.raises(RuntimeError, match="READINESS_UNAUTHORIZED_READINESS_PATCH"):
         readiness.validate(root, policy, test_qa_fix.cohort(), now=recovery_time)
 
 
