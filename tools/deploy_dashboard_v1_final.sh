@@ -1,105 +1,107 @@
 #!/usr/bin/env bash
-# tools/deploy_dashboard_v1_final.sh
-# Production-Safe Deployment & Automated Rollback Script for TORG_BOT Trading Control Center v1.0
-# Target Service: bybit-shadow-dashboard.service (Port 8085)
-# Invariant: NEVER touch Native, Shadow, R2, or v3.2 production engines.
+# Deploy ONLY the READ-ONLY Dashboard (port 8085), pinned to an explicit commit.
+# Usage: bash tools/deploy_dashboard_v1_final.sh <40-character-SHA>
+set -Eeuo pipefail
+REPO=/opt/bybit-shadow/bybit-alpha-bot-SAM
+BRANCH=fix/dashboard-v1-chatgpt-20261116
+PY=/opt/bybit-bot/venv/bin/python
+SERVICE=bybit-shadow-dashboard.service
+SHA="${1:-}"
+FILES=(
+  v3_2/src/integrations/three_system_dashboard.py
+  v3_2/src/integrations/trading_control_center_data.py
+  v3_2/src/runners/run_three_system_dashboard.py
+)
+STAGE=""
+BACKUP=""
+MODIFIED=0
+RESTARTED=0
 
-set -euo pipefail
-
-REPO_DIR="/opt/bybit-shadow/bybit-alpha-bot-SAM"
-V32_SRC="$REPO_DIR/v3_2/src/integrations"
-BACKUP_BASE_DIR="/opt/bybit-shadow/backup_dashboard"
-TIMESTAMP=$(date -u +"%Y%m%dT%H%M%SZ")
-BACKUP_DIR="$BACKUP_BASE_DIR/backup_$TIMESTAMP"
-TARGET_PORT=8085
-HEALTH_URL="http://127.0.0.1:${TARGET_PORT}/health"
-HTML_URL="http://127.0.0.1:${TARGET_PORT}/"
-PYTHON_BIN="/opt/bybit-bot/venv/bin/python"
-
-echo "================================================================="
-echo "  TORG_BOT TRADING CONTROL CENTER v1.0 — DEPLOYMENT & VERIFICATION"
-echo "  Timestamp: $TIMESTAMP"
-echo "================================================================="
-
-# Step 1: Verify current directory and Git status
-cd "$REPO_DIR"
-CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-CURRENT_COMMIT=$(git rev-parse HEAD)
-echo "[1] Current Branch: $CURRENT_BRANCH | Current Commit: $CURRENT_COMMIT"
-
-# Step 2: Syntax and Import Verification in Staging
-echo "[2] Verifying Python syntax of updated integration modules..."
-$PYTHON_BIN -m py_compile "$V32_SRC/trading_control_center_data.py"
-$PYTHON_BIN -m py_compile "$V32_SRC/three_system_dashboard.py"
-echo "    -> Syntax check: PASS"
-
-# Step 3: Create atomic backup of existing working files
-echo "[3] Creating backup of current dashboard implementation..."
-mkdir -p "$BACKUP_DIR"
-cp "$V32_SRC/trading_control_center_data.py" "$BACKUP_DIR/trading_control_center_data.py.bak"
-cp "$V32_SRC/three_system_dashboard.py" "$BACKUP_DIR/three_system_dashboard.py.bak"
-
-sha256sum "$BACKUP_DIR/trading_control_center_data.py.bak" > "$BACKUP_DIR/checksums.sha256"
-sha256sum "$BACKUP_DIR/three_system_dashboard.py.bak" >> "$BACKUP_DIR/checksums.sha256"
-echo "    -> Backup created at: $BACKUP_DIR"
-cat "$BACKUP_DIR/checksums.sha256"
-
-# Rollback function in case of failure
-rollback() {
-    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-    echo "  DEPLOYMENT FAILED! INITIATING AUTOMATED ROLLBACK..."
-    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-    cp "$BACKUP_DIR/trading_control_center_data.py.bak" "$V32_SRC/trading_control_center_data.py"
-    cp "$BACKUP_DIR/three_system_dashboard.py.bak" "$V32_SRC/three_system_dashboard.py"
-    echo "    -> Files restored from backup."
-    sudo systemctl restart bybit-shadow-dashboard.service
-    echo "    -> Service bybit-shadow-dashboard.service restarted with previous code."
-    sleep 3
-    if curl -s -f -m 5 "$HTML_URL" > /dev/null; then
-        echo "    -> Rollback verified successfully: Dashboard is healthy."
-    else
-        echo "    -> CRITICAL: Manual intervention required!"
-    fi
-    exit 1
+abort() { echo "BLOCKED: $*" >&2; exit 1; }
+cleanup() { [[ -z "$STAGE" || ! -d "$STAGE" ]] || rm -rf -- "$STAGE"; }
+on_error() {
+  local exitcode=$?
+  trap - ERR
+  if [[ "$MODIFIED" == "1" ]]; then
+    echo "INSTALL_FAILED: restoring previous Dashboard files from $BACKUP" >&2
+    for file in "${FILES[@]}"; do
+      if [[ -f "$BACKUP/$file" ]]; then
+        install -m 0644 "$BACKUP/$file" "$REPO/$file" || true
+      elif [[ -f "$BACKUP/$file.absent" ]]; then
+        rm -f -- "$REPO/$file"
+      fi
+    done
+    if [[ "$RESTARTED" == "1" ]]; then systemctl restart "$SERVICE" || true; fi
+  fi
+  echo "Rollback backup retained: $BACKUP" >&2
+  exit "$exitcode"
 }
+trap cleanup EXIT
+trap on_error ERR
+[[ "$EUID" -eq 0 ]] || abort "root required"
+[[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || abort "supply exact 40-character commit SHA"
+[[ -d "$REPO/.git" && -x "$PY" ]] || abort "repository or python unavailable"
+systemctl is-active --quiet "$SERVICE" || abort "Dashboard service not active"
 
-trap rollback ERR
+cd "$REPO"
+echo "Current worktree HEAD: $(git rev-parse HEAD). No checkout/pull/reset/clean."
+git fetch origin "$BRANCH"
+git cat-file -e "${SHA}^{commit}"
+git merge-base --is-ancestor "$SHA" "origin/$BRANCH" ||
+  abort "commit is not on approved release branch"
 
-# Step 4: Verify and load new changes
-echo "[4] Pulling or verifying Git commit..."
-# (If running as deployer, git pull origin fix/final-start-blockers-009 has already updated files)
-DEPLOYED_COMMIT=$(git rev-parse HEAD)
-echo "    -> Deployed Commit: $DEPLOYED_COMMIT"
+STAGE=$(mktemp -d /opt/bybit-shadow/dashboard-stage.XXXXXXXX)
+BACKUP=$(mktemp -d /opt/bybit-shadow/dashboard-backup.XXXXXXXX)
+for file in "${FILES[@]}"; do
+  mkdir -p "$STAGE/$(dirname "$file")" "$BACKUP/$(dirname "$file")"
+  git show "${SHA}:$file" > "$STAGE/$file"
+  expected=$(git rev-parse "${SHA}:$file")
+  actual=$(git hash-object "$STAGE/$file")
+  [[ "$expected" == "$actual" ]] || abort "staging checksum mismatch: $file"
+  if [[ -f "$REPO/$file" ]]; then
+    cp -a "$REPO/$file" "$BACKUP/$file"
+    cmp -s "$REPO/$file" "$BACKUP/$file" || abort "backup mismatch: $file"
+  else
+    touch "$BACKUP/$file.absent"
+  fi
+done
+echo "$SHA" > "$BACKUP/release.sha"
+(
+  cd "$STAGE"
+  "$PY" -m py_compile "${FILES[@]}"
+)
+echo "STAGING_SYNTAX_PASS; backup=$BACKUP"
 
-# Step 5: Restart ONLY the dashboard service
-echo "[5] Restarting bybit-shadow-dashboard.service..."
-sudo systemctl restart bybit-shadow-dashboard.service
-echo "    -> Restart signal sent. Waiting 3 seconds for port ${TARGET_PORT}..."
-sleep 3
+MODIFIED=1
+for file in "${FILES[@]}"; do
+  install -m 0644 "$STAGE/$file" "$REPO/$file"
+  cmp -s "$STAGE/$file" "$REPO/$file"
+done
 
-# Step 6: Post-deployment health & HTML verification
-echo "[6] Performing automated health checks on port ${TARGET_PORT}..."
-HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -m 5 "$HTML_URL" || echo "000")
-if [ "$HTTP_STATUS" != "200" ]; then
-    echo "[-] Health check failed! HTTP status: $HTTP_STATUS"
-    rollback
-fi
+# Dry run: no HTTP listener, only read-only existing ledger/telemetry sources.
+PYTHONDONTWRITEBYTECODE=1 "$PY" "$REPO/v3_2/src/runners/run_three_system_dashboard.py" --dry-run
 
-# Check HTML content contains Trading Control Center and no corruption
-HTML_CONTENT=$(curl -s -m 5 "$HTML_URL")
-if echo "$HTML_CONTENT" | grep -q "TORG_BOT — Trading Control Center"; then
-    echo "    -> HTTP 200 OK & 'TORG_BOT — Trading Control Center' banner verified."
-else
-    echo "[-] Banner check failed!"
-    rollback
-fi
+RESTARTED=1
+systemctl restart "$SERVICE"
+sleep 2
+systemctl is-active --quiet "$SERVICE"
+curl -fsS --max-time 8 http://127.0.0.1:8085/ -o "$STAGE/index.html"
+grep -Fq "Trading Control Center" "$STAGE/index.html" || abort "HTML banner mismatch"
 
-# Step 7: Final Status Output
+for endpoint in status scanner positions journal analytics health; do
+  curl -fsS --max-time 8 "http://127.0.0.1:8085/api/$endpoint" -o "$STAGE/$endpoint.json"
+  "$PY" -m json.tool "$STAGE/$endpoint.json" >/dev/null
+done
+"$PY" - "$STAGE/status.json" <<'PYCODE'
+import json,sys
+with open(sys.argv[1],encoding="utf-8") as file:
+    status=json.load(file)
+assert status["target_cohort"]["cohort_id"]=="20261116_000000_THREE_SYSTEM_SHADOW"
+assert {"native","shadow","r2_shadow"} <= set(status["systems"])
+print("Cohort and all 3 systems: PASS")
+PYCODE
+method=$(curl -sS --max-time 8 -X POST -o /dev/null -w '%{http_code}' http://127.0.0.1:8085/api/status)
+[[ "$method" == 405 ]] || abort "READ_ONLY_METHOD_CHECK_FAILED"
 trap - ERR
-echo "================================================================="
-echo "  DEPLOYMENT SUCCESSFUL!"
-echo "  Target Port: ${TARGET_PORT}"
-echo "  Commit: $DEPLOYED_COMMIT"
-echo "  Backup: $BACKUP_DIR"
-echo "================================================================="
-exit 0
+echo "DASHBOARD_DEPLOY_PASS: $SHA"
+echo "Only $SERVICE restarted. Restore files available: $BACKUP"
