@@ -44,6 +44,7 @@ from v3.src.bybit_client import BybitClient
 from v3.src.core_v3 import CoreV3Engine, ActivePosition, ClosedTrade, PortfolioSnapshot
 from v3.src.persistence import atomic_json
 from v3_2.src.config import DEFAULT_SYMBOLS, DONCHIAN_WINDOW, CANDLE_INTERVAL, BAR_INTERVAL_MS
+from v3_2.src.runners.hourly_kline_gate import HourlyKlineGate
 from v3_2.src.regime_classifier import MarketRegimeClassifier
 from v3_2.src.paper_trader_v32 import prepare_dual_regime_indicators
 from v3_2.src.range_engine import (
@@ -110,6 +111,11 @@ class NativePaperRunner:
 
         # 1. Initialize Bybit Public Client (Read-Only)
         self.client = BybitClient(timeout=10, max_retries=5)
+        # Public candle data changes only once an hour; leave quote/MTM polling at 5s.
+        # Native and Shadow phases differ to avoid synchronous Bybit request bursts.
+        self._kline_gate = HourlyKlineGate(
+            interval_ms=BAR_INTERVAL_MS, after_close_delay_ms=10000, retry_delay_ms=60_000
+        )
         self.instrument_rules: Dict[str, Dict[str, Decimal]] = self._build_default_rules()
 
         self.peak_equity = self.initial_capital
@@ -1128,6 +1134,7 @@ class NativePaperRunner:
             now_srv = self.client.get_server_time()
             for sym in self.symbols:  # Full original universe, not sliced!
                 try:
+                    time.sleep(0.18)  # startup catch-up paced; reduce simultaneous Bybit 10006 bursts
                     raw = self.client.get_kline(sym, interval=CANDLE_INTERVAL, limit=150)
                     if not raw:
                         continue
@@ -1211,7 +1218,12 @@ class NativePaperRunner:
 
             # 3. Poll for newly closed 1h bars (limit=50 catches up on network gaps > 3 hours without loss)
             processed_count = 0
-            for sym in self.symbols:
+            due_symbols = self._kline_gate.due_symbols(self.symbols, self.last_processed_bar_ts, now_srv)
+            for sym in due_symbols:
+                # Mark before HTTP: failed/empty requests cannot hammer the endpoint
+                # again on the next 5-second telemetry cycle.
+                self._kline_gate.record_attempt(sym, now_srv)
+                time.sleep(0.18)  # <=5.6 kline starts/sec even on a fast network
                 try:
                     raw = self.client.get_kline(sym, interval=CANDLE_INTERVAL, limit=50)
                     if not raw:
