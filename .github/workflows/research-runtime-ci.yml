@@ -1,0 +1,35 @@
+name: Research paper market-data and R2 resource diagnostics
+on:
+  push:
+    branches: [fix/research-market-data-resource-20261116]
+  pull_request:
+    paths:
+      - 'v3_2/src/runners/hourly_kline_gate.py'
+      - 'v3_2/src/runners/run_native_paper.py'
+      - 'v3_2/src/runners/run_shadow_paper.py'
+      - 'tools/r2_resource_observer.py'
+      - 'tests/test_research_market_data_gate.py'
+      - 'tests/test_r2_resource_observer.py'
+      - '.github/workflows/research-runtime-ci.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test runner
+        run: python -m pip install --disable-pip-version-check pytest
+      - name: Python syntax
+        run: |
+          python -m py_compile v3_2/src/runners/hourly_kline_gate.py
+          python -m py_compile v3_2/src/runners/run_native_paper.py
+          python -m py_compile v3_2/src/runners/run_shadow_paper.py
+          python -m py_compile tools/r2_resource_observer.py
+      - name: Public market data and R2 resource safety unit tests
+        run: python -m pytest -q tests/test_research_market_data_gate.py tests/test_r2_resource_observer.py
