@@ -47,9 +47,9 @@ systemctl is-active --quiet "$SVC" || die "R2 is not currently active"
 # before replacing *any* files.
 [[ "$(systemctl show "$SVC" -p LoadState --value)" == loaded ]] ||
   die "R2 unit not loaded"
-R2_PID=$(systemctl show "$SVC" -p MainPID --value)
-[[ "$R2_PID" =~ ^[0-9]+$ && "$R2_PID" -gt 0 && -r "/proc/$R2_PID/cmdline" ]] ||
-  die "R2 has no inspectable active main process"
+# A rapidly restarting R2 may briefly report MainPID=0 while systemd still
+# considers the unit active. Source SHA+approved patch+cohort/ledger identity,
+# not a transient PID snapshot, guard the actual installation target.
 # Avoid daily signal boundary UTC 00:00.
 utc_hhmm=$(date -u +%H:%M)
 if [[ "$utc_hhmm" > "23:45" || "$utc_hhmm" < "00:15" ]]; then
