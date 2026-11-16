@@ -43,16 +43,25 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ThreeSystemDashboard")
 
+def _resolve_default_path(vps_str: str, local_rel_str: str) -> Path:
+    p_vps = Path(vps_str)
+    if p_vps.exists():
+        return p_vps
+    p_local = REPO_ROOT / local_rel_str
+    if p_local.exists():
+        return p_local
+    return p_vps if Path("/opt/bybit-shadow").exists() else p_local
+
 DEFAULT_PORT = 8085
 DEFAULT_HOST = "0.0.0.0"
-DEFAULT_NATIVE_FILE = REPO_ROOT / "reports" / "telemetry_native.json"
-DEFAULT_SHADOW_FILE = REPO_ROOT / "reports" / "telemetry_shadow.json"
-DEFAULT_R2_FILE = REPO_ROOT / "docs" / "integrations" / "r2_shadow" / "telemetry.json"
-DEFAULT_NATIVE_LEDGER = REPO_ROOT / "reports" / "v32_native_ledger.db"
-DEFAULT_SHADOW_LEDGER = REPO_ROOT / "reports" / "v32_shadow_ledger.db"
-DEFAULT_R2_LEDGER = Path("/opt/bybit-shadow/data/cryptolab/observer.sqlite")
-DEFAULT_NATIVE_STATE = REPO_ROOT / "reports" / "v32_native_state.json"
-DEFAULT_SHADOW_STATE = REPO_ROOT / "reports" / "v32_shadow_state.json"
+DEFAULT_NATIVE_FILE = _resolve_default_path("/opt/bybit-shadow/telemetry/telemetry_native.json", "reports/telemetry_native.json")
+DEFAULT_SHADOW_FILE = _resolve_default_path("/opt/bybit-shadow/telemetry/telemetry_shadow.json", "reports/telemetry_shadow.json")
+DEFAULT_R2_FILE = _resolve_default_path("/opt/bybit-shadow/data/cryptolab/telemetry.json", "data/cryptolab/telemetry.json")
+DEFAULT_NATIVE_LEDGER = _resolve_default_path("/opt/bybit-shadow/data/native_ledger.db", "reports/v32_native_ledger.db")
+DEFAULT_SHADOW_LEDGER = _resolve_default_path("/opt/bybit-shadow/data/shadow_ledger.db", "reports/v32_shadow_ledger.db")
+DEFAULT_R2_LEDGER = _resolve_default_path("/opt/bybit-shadow/data/cryptolab/observer.sqlite", "data/cryptolab/observer.sqlite")
+DEFAULT_NATIVE_STATE = _resolve_default_path("/opt/bybit-shadow/data/native_state.json", "reports/v32_native_state.json")
+DEFAULT_SHADOW_STATE = _resolve_default_path("/opt/bybit-shadow/data/shadow_state.json", "reports/v32_shadow_state.json")
 
 
 class FileBackedDashboardSupplier:

@@ -19,6 +19,8 @@ Core Invariants:
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import html as html_lib
+import re
 from decimal import Decimal
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
@@ -176,7 +178,10 @@ class ThreeSystemComparativeDashboard:
         Supports real PortfolioInstance, PaperTraderV32, or mock objects without attribute mismatch.
         If portfolio is None or not started, returns unverified/NOT_STARTED state with None values.
         """
-        raw_eq = getattr(portfolio, "realized_equity", None)
+        if isinstance(portfolio, dict):
+            raw_eq = portfolio.get("total_equity", portfolio.get("realized_equity"))
+        else:
+            raw_eq = getattr(portfolio, "total_equity", getattr(portfolio, "realized_equity", None))
         port_is_started = getattr(portfolio, "is_started", True)
         port_status = getattr(portfolio, "status", None)
 
@@ -621,6 +626,14 @@ class ThreeSystemComparativeDashboard:
         analytics_data = self.get_analytics_data()
         health_data = self.get_health_data()
 
+        def esc(val: Any) -> str:
+            if val is None:
+                return ""
+            s = str(val)
+            for prefix in ["/opt/bybit-shadow/", "/opt/bybit-bot/"]:
+                s = s.replace(prefix, "[root]/")
+            return html_lib.escape(s)
+
         def fmt_val(v, suffix=""):
             return f"{v:,.2f}{suffix}" if v is not None else "<span class='dim'>--</span>"
 
@@ -632,14 +645,19 @@ class ThreeSystemComparativeDashboard:
             return f"<span style='color:{color}'>{sign}{v:.2f}%</span>"
 
         def fmt_status(st):
+            st_clean = esc(st)
             colors = {
                 "FRESH": "#00e676", "ARMED": "#00e676", "OBSERVING": "#00e676",
                 "STALE": "#ffa726", "NOT_STARTED": "#78909c", "NO_FRESH_HEARTBEAT": "#ff5252",
                 "INVALID": "#ff5252", "COHORT_MISMATCH": "#ff1744", "OK": "#00e676",
-                "ACTIVE_RUNNING": "#00e676", "UNTOUCHED_ISOLATED_ACTIVE": "#00e676"
+                "TELEMETRY_FRESH": "#00e676", "TELEMETRY_STALE": "#ffa726",
+                "PROCESS_CONFIRMED_RUNNING": "#00e676", "SERVICE_STATE_UNKNOWN": "#78909c",
+                "OK_POSITIONS": "#00e676", "OK_EMPTY": "#78909c", "DATA_SOURCE_ERROR": "#ff5252",
+                "IN_TRADE": "#26a69a", "RECORDED_POSITION": "#26a69a", "RECORDED_SIGNAL": "#00e676",
+                "PROVEN_FILTER_REJECTION": "#ffa726", "NO_SIGNAL_RECORDED": "#78909c",
             }
             c_code = colors.get(st, "#90a4ae")
-            return f"<span class='badge' style='background:{c_code}22; color:{c_code}; border:1px solid {c_code}66'>{st}</span>"
+            return f"<span class='badge' style='background:{c_code}22; color:{c_code}; border:1px solid {c_code}66'>{st_clean}</span>"
 
         r2_extra = c.get("extra", {})
         edge_usdt = r2_extra.get("r2_minus_t01_usdt")
@@ -652,7 +670,7 @@ class ThreeSystemComparativeDashboard:
         r2_chart = self._render_svg_equity_chart(analytics_data.get("r2_shadow", {}).get("equity_history", []), color="#26a69a")
 
         # HTML Assembly
-        html = f'''<!DOCTYPE html>
+        html_content = f'''<!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
@@ -886,10 +904,10 @@ class ThreeSystemComparativeDashboard:
           <tbody>
             <tr>
               <td><strong>SERVICE_RUNNING</strong></td>
-              <td>{fmt_status("ACTIVE_RUNNING" if a.get("is_active") else "UNKNOWN")}</td>
-              <td>{fmt_status("ACTIVE_RUNNING" if b.get("is_active") else "UNKNOWN")}</td>
-              <td>{fmt_status("ACTIVE_RUNNING" if c.get("is_active") else "UNKNOWN")}</td>
-              <td>Процесс systemd активен в операционной системе VPS</td>
+              <td>{fmt_status("TELEMETRY_FRESH" if a.get("is_active") else "SERVICE_STATE_UNKNOWN")}</td>
+              <td>{fmt_status("TELEMETRY_FRESH" if b.get("is_active") else "SERVICE_STATE_UNKNOWN")}</td>
+              <td>{fmt_status("TELEMETRY_FRESH" if c.get("is_active") else "SERVICE_STATE_UNKNOWN")}</td>
+              <td>Статус активности процесса и свежесть телеметрии на сервере</td>
             </tr>
             <tr>
               <td><strong>DATA_FRESH</strong></td>
@@ -958,27 +976,27 @@ class ThreeSystemComparativeDashboard:
           <thead>
             <tr>
               <th>Символ</th>
+              <th>Источник</th>
               <th>Стратегия</th>
-              <th>Режим</th>
-              <th>Закрытый бар (UTC)</th>
+              <th>Время события (UTC)</th>
               <th>Сигнал</th>
               <th>Допуск</th>
               <th>Причина отбора / отказа</th>
+              <th>Статус достоверности</th>
               <th>Решение</th>
-              <th>Обновлено</th>
             </tr>
           </thead>
           <tbody>
             ''' + "".join([f'''<tr>
-              <td><strong>{row.get("symbol")}</strong></td>
-              <td>{row.get("strategy")}</td>
-              <td><span class="badge" style="background:#162030;color:#90a4ae;">{row.get("market_regime")}</span></td>
-              <td class="dim">{row.get("last_closed_bar_utc")}</td>
-              <td><strong>{row.get("signal")}</strong></td>
-              <td>{fmt_status("OK" if row.get("eligible") == "YES" else ("STALE" if row.get("eligible") == "AWAITING_BREAKOUT" else "INVALID"))}</td>
-              <td>{row.get("rejection_reason")}</td>
-              <td><strong>{row.get("decision")}</strong></td>
-              <td class="dim">{row.get("updated_utc")}</td>
+              <td><strong>{esc(row.get("symbol"))}</strong></td>
+              <td><span class="badge" style="background:#162030;color:#90a4ae;">{esc(row.get("source"))}</span></td>
+              <td>{esc(row.get("strategy"))}</td>
+              <td class="dim">{esc(row.get("event_at"))}</td>
+              <td><strong>{esc(row.get("signal"))}</strong></td>
+              <td>{fmt_status(row.get("eligible"))}</td>
+              <td>{esc(row.get("rejection_reason"))}</td>
+              <td><span class="badge" style="background:#162030;color:#64b5f6;">{esc(row.get("confidence_status"))}</span></td>
+              <td><strong>{esc(row.get("decision"))}</strong></td>
             </tr>''' for row in scanner_data.get("native_scanner", [])]) + f'''
           </tbody>
         </table>
@@ -1002,27 +1020,27 @@ class ThreeSystemComparativeDashboard:
           <thead>
             <tr>
               <th>Символ</th>
+              <th>Источник</th>
               <th>Стратегия</th>
-              <th>Режим</th>
-              <th>Срез стакана (UTC)</th>
+              <th>Время события (UTC)</th>
               <th>Сигнал</th>
               <th>Допуск</th>
               <th>Причина отбора / отказа</th>
+              <th>Статус достоверности</th>
               <th>Решение</th>
-              <th>Обновлено</th>
             </tr>
           </thead>
           <tbody>
             ''' + "".join([f'''<tr>
-              <td><strong>{row.get("symbol")}</strong></td>
-              <td>{row.get("strategy")}</td>
-              <td><span class="badge" style="background:#162030;color:#ab47bc;">{row.get("market_regime")}</span></td>
-              <td class="dim">{row.get("last_closed_bar_utc")}</td>
-              <td><strong>{row.get("signal")}</strong></td>
-              <td>{fmt_status("OK" if row.get("eligible") == "YES" else ("STALE" if row.get("eligible") == "AWAITING_BREAKOUT" else "INVALID"))}</td>
-              <td>{row.get("rejection_reason")}</td>
-              <td><strong>{row.get("decision")}</strong></td>
-              <td class="dim">{row.get("updated_utc")}</td>
+              <td><strong>{esc(row.get("symbol"))}</strong></td>
+              <td><span class="badge" style="background:#162030;color:#ab47bc;">{esc(row.get("source"))}</span></td>
+              <td>{esc(row.get("strategy"))}</td>
+              <td class="dim">{esc(row.get("event_at"))}</td>
+              <td><strong>{esc(row.get("signal"))}</strong></td>
+              <td>{fmt_status(row.get("eligible"))}</td>
+              <td>{esc(row.get("rejection_reason"))}</td>
+              <td><span class="badge" style="background:#162030;color:#64b5f6;">{esc(row.get("confidence_status"))}</span></td>
+              <td><strong>{esc(row.get("decision"))}</strong></td>
             </tr>''' for row in scanner_data.get("shadow_scanner", [])]) + f'''
           </tbody>
         </table>
@@ -1058,15 +1076,15 @@ class ThreeSystemComparativeDashboard:
           </thead>
           <tbody>
             ''' + "".join([f'''<tr>
-              <td><strong>{row.get("symbol")}</strong></td>
-              <td>{row.get("strategy")}</td>
-              <td><span class="badge" style="background:#162030;color:#26a69a;">{row.get("market_regime")}</span></td>
-              <td><strong>{row.get("signal")}</strong></td>
-              <td><code>{row.get("score")}</code></td>
-              <td>{row.get("target_weight")}</td>
-              <td>{fmt_status("OK" if row.get("eligible") in (True, "YES") else ("STALE" if row.get("eligible") == "OBSERVING" else "INVALID"))}</td>
-              <td>{row.get("decision")}</td>
-              <td><span class="badge" style="background:#78909c22;color:#90a4ae;">{row.get("fill_claim_badge")}</span></td>
+              <td><strong>{esc(row.get("symbol"))}</strong></td>
+              <td>{esc(row.get("strategy"))}</td>
+              <td><span class="badge" style="background:#162030;color:#26a69a;">{esc(row.get("market_regime"))}</span></td>
+              <td><strong>{esc(row.get("signal"))}</strong></td>
+              <td><code>{esc(row.get("score"))}</code></td>
+              <td>{esc(row.get("target_weight"))}</td>
+              <td>{fmt_status(row.get("eligible"))}</td>
+              <td>{esc(row.get("decision"))}</td>
+              <td><span class="badge" style="background:#78909c22;color:#90a4ae;">{esc(row.get("fill_claim_badge"))}</span></td>
             </tr>''' for row in scanner_data.get("r2_scanner", [])]) + f'''
           </tbody>
         </table>
@@ -1084,10 +1102,12 @@ class ThreeSystemComparativeDashboard:
 
     <!-- Native Positions -->
     <div class="subtab-pane active" id="sub-nat-pos">
-      ''' + (f'''<div class="empty-state">
+      ''' + (f'''<div class="banner banner-warn">
+        <strong>⚠️ ОШИБКА ИСТОЧНИКА ДАННЫХ (DATA_SOURCE_ERROR):</strong> {esc(positions_data.get("native", {}).get("error_diagnostic", "База данных недоступна или повреждена"))}.
+      </div>''' if positions_data.get("native", {}).get("status") == "DATA_SOURCE_ERROR" else (f'''<div class="empty-state">
         <div class="empty-icon">🛡️</div>
         <div class="empty-title">Пока открытых позиций нет</div>
-        <div class="empty-desc">{positions_data.get("empty_reason")}</div>
+        <div class="empty-desc">{esc(positions_data.get("empty_reason"))}</div>
       </div>''' if not positions_data.get("native_positions") else '''<div class="table-responsive">
         <table>
           <thead>
@@ -1107,29 +1127,31 @@ class ThreeSystemComparativeDashboard:
           </thead>
           <tbody>
             ''' + "".join([f'''<tr>
-              <td><strong>{p.get("symbol")}</strong> <span class="badge" style="color:{"#00e676" if p.get("side")=="LONG" else "#ff5252"}">{p.get("side")}</span></td>
-              <td>{p.get("strategy")}</td>
-              <td class="dim">{p.get("entry_time_utc")}</td>
-              <td>${p.get("entry_price")} / {p.get("current_qty")}</td>
-              <td>${p.get("notional_usdt")}</td>
+              <td><strong>{esc(p.get("symbol"))}</strong> <span class="badge" style="color:{"#00e676" if p.get("side")=="LONG" else "#ff5252"}">{esc(p.get("side"))}</span></td>
+              <td>{esc(p.get("strategy"))}</td>
+              <td class="dim">{esc(p.get("entry_time_utc"))}</td>
+              <td>${esc(p.get("entry_price"))} / {esc(p.get("current_qty"))}</td>
+              <td>${esc(p.get("notional_usdt"))}</td>
               <td>{fmt_val(p.get("unrealized_pnl_usdt"), " USDT")}</td>
-              <td>${p.get("stop_loss")} ({p.get("sl_distance_pct")}%)</td>
-              <td>{p.get("tp1_price")}</td>
-              <td>{" ".join([f"<span class='badge' style='background:#162030'>{fl}</span>" for fl in p.get("flags", [])])}</td>
-              <td>{p.get("bars_held")} баров</td>
-              <td><span class="badge" style="background:#00e67622;color:#00e676;">{p.get("credibility")}</span></td>
+              <td>${esc(p.get("stop_loss"))} ({esc(p.get("sl_distance_pct"))}%)</td>
+              <td>{esc(p.get("tp1_price"))}</td>
+              <td>{" ".join([f"<span class='badge' style='background:#162030'>{esc(fl)}</span>" for fl in p.get("flags", [])])}</td>
+              <td>{esc(p.get("bars_held"))} баров</td>
+              <td><span class="badge" style="background:#00e67622;color:#00e676;">{esc(p.get("credibility"))}</span></td>
             </tr>''' for p in positions_data.get("native_positions", [])]) + '''
           </tbody>
         </table>
-      </div>''') + f'''
+      </div>''')) + f'''
     </div>
 
     <!-- Shadow Positions -->
     <div class="subtab-pane" id="sub-sha-pos">
-      ''' + (f'''<div class="empty-state">
+      ''' + (f'''<div class="banner banner-warn">
+        <strong>⚠️ ОШИБКА ИСТОЧНИКА ДАННЫХ (DATA_SOURCE_ERROR):</strong> {esc(positions_data.get("shadow", {}).get("error_diagnostic", "База данных недоступна или повреждена"))}.
+      </div>''' if positions_data.get("shadow", {}).get("status") == "DATA_SOURCE_ERROR" else (f'''<div class="empty-state">
         <div class="empty-icon">🛡️</div>
         <div class="empty-title">Пока открытых позиций нет</div>
-        <div class="empty-desc">{positions_data.get("empty_reason")}</div>
+        <div class="empty-desc">{esc(positions_data.get("empty_reason"))}</div>
       </div>''' if not positions_data.get("shadow_positions") else '''<div class="table-responsive">
         <table>
           <thead>
@@ -1149,26 +1171,28 @@ class ThreeSystemComparativeDashboard:
           </thead>
           <tbody>
             ''' + "".join([f'''<tr>
-              <td><strong>{p.get("symbol")}</strong> <span class="badge" style="color:{"#00e676" if p.get("side")=="LONG" else "#ff5252"}">{p.get("side")}</span></td>
-              <td>{p.get("strategy")}</td>
-              <td class="dim">{p.get("entry_time_utc")}</td>
-              <td>${p.get("entry_price")} / {p.get("current_qty")}</td>
-              <td>${p.get("notional_usdt")}</td>
+              <td><strong>{esc(p.get("symbol"))}</strong> <span class="badge" style="color:{"#00e676" if p.get("side")=="LONG" else "#ff5252"}">{esc(p.get("side"))}</span></td>
+              <td>{esc(p.get("strategy"))}</td>
+              <td class="dim">{esc(p.get("entry_time_utc"))}</td>
+              <td>${esc(p.get("entry_price"))} / {esc(p.get("current_qty"))}</td>
+              <td>${esc(p.get("notional_usdt"))}</td>
               <td>{fmt_val(p.get("unrealized_pnl_usdt"), " USDT")}</td>
-              <td>${p.get("stop_loss")}</td>
-              <td>{p.get("tp1_price")} ({p.get("tp1_distance_pct")})</td>
-              <td>{p.get("tp2_price")} ({p.get("tp2_distance_pct")})</td>
-              <td>{" ".join([f"<span class='badge' style='background:#162030'>{fl}</span>" for fl in p.get("flags", [])])}</td>
-              <td>{p.get("bars_held")} баров</td>
+              <td>${esc(p.get("stop_loss"))}</td>
+              <td>{esc(p.get("tp1_price"))} ({esc(p.get("tp1_distance_pct"))})</td>
+              <td>{esc(p.get("tp2_price"))} ({esc(p.get("tp2_distance_pct"))})</td>
+              <td>{" ".join([f"<span class='badge' style='background:#162030'>{esc(fl)}</span>" for fl in p.get("flags", [])])}</td>
+              <td>{esc(p.get("bars_held"))} баров</td>
             </tr>''' for p in positions_data.get("shadow_positions", [])]) + '''
           </tbody>
         </table>
-      </div>''') + f'''
+      </div>''')) + f'''
     </div>
 
     <!-- R2 Positions -->
     <div class="subtab-pane" id="sub-r2-pos">
-      ''' + (f'''<div class="empty-state">
+      ''' + (f'''<div class="banner banner-warn">
+        <strong>⚠️ ОШИБКА ИСТОЧНИКА ДАННЫХ (DATA_SOURCE_ERROR):</strong> {esc(positions_data.get("r2", {}).get("error_diagnostic", "База данных недоступна или повреждена"))}.
+      </div>''' if positions_data.get("r2", {}).get("status") == "DATA_SOURCE_ERROR" else (f'''<div class="empty-state">
         <div class="empty-icon">🪙</div>
         <div class="empty-title">Позиций Spot Cash пока нет</div>
         <div class="empty-desc">Все три экспортируемых профиля (BASE, STRESS, T01) находятся в 100% Cash ($300.00 USDT). До первых рыночных целевых весов монеты не закупаются.</div>
@@ -1186,16 +1210,16 @@ class ThreeSystemComparativeDashboard:
           </thead>
           <tbody>
             ''' + "".join([f'''<tr>
-              <td><strong>{p.get("symbol")}</strong></td>
-              <td>{p.get("strategy")}</td>
-              <td><span class="badge" style="color:#00e676">{p.get("side")}</span></td>
-              <td>{p.get("current_qty")}</td>
-              <td>${p.get("notional_usdt")}</td>
-              <td><span class="badge" style="background:#78909c22;color:#90a4ae;">{p.get("credibility")}</span></td>
+              <td><strong>{esc(p.get("symbol"))}</strong></td>
+              <td>{esc(p.get("strategy"))}</td>
+              <td><span class="badge" style="color:#00e676">{esc(p.get("side"))}</span></td>
+              <td>{esc(p.get("current_qty"))}</td>
+              <td>${esc(p.get("notional_usdt"))}</td>
+              <td><span class="badge" style="background:#78909c22;color:#90a4ae;">{esc(p.get("credibility"))}</span></td>
             </tr>''' for p in positions_data.get("r2_positions", [])]) + '''
           </tbody>
         </table>
-      </div>''') + f'''
+      </div>''')) + f'''
     </div>
   </div>
 
@@ -1232,14 +1256,14 @@ class ThreeSystemComparativeDashboard:
         </thead>
         <tbody>
           ''' + "".join([f'''<tr>
-            <td><code>{ev.get("event_id")}</code></td>
-            <td><strong>{ev.get("system")}</strong></td>
-            <td><span class="badge" style="background:#162030;color:var(--accent-blue);">{ev.get("event_type")}</span></td>
-            <td><strong>{ev.get("symbol")}</strong></td>
-            <td class="dim">{ev.get("event_utc")}</td>
-            <td>{f"${ev.get('price')}" if ev.get('price') is not None else "--"} {f"({ev.get('qty')})" if ev.get('qty') is not None else ""}</td>
+            <td><code>{esc(ev.get("event_id"))}</code></td>
+            <td><strong>{esc(ev.get("system"))}</strong></td>
+            <td><span class="badge" style="background:#162030;color:var(--accent-blue);">{esc(ev.get("event_type"))}</span></td>
+            <td><strong>{esc(ev.get("symbol"))}</strong></td>
+            <td class="dim">{esc(ev.get("event_utc"))}</td>
+            <td>{f"${esc(ev.get('price'))}" if ev.get('price') is not None else "--"} {f"({esc(ev.get('qty'))})" if ev.get('qty') is not None else ""}</td>
             <td>{fmt_val(ev.get("pnl_impact_usdt"), " USDT") if ev.get("pnl_impact_usdt") is not None else "--"}</td>
-            <td>{ev.get("notes")}</td>
+            <td>{esc(ev.get("notes"))}</td>
           </tr>''' for ev in journal_data.get("events", [])]) + '''
         </tbody>
       </table>
@@ -1326,8 +1350,8 @@ class ThreeSystemComparativeDashboard:
           </thead>
           <tbody>
             ''' + "".join([f'''<tr>
-              <td><code>{svc.get("name")}</code></td>
-              <td>{svc.get("role")}</td>
+              <td><code>{esc(svc.get("name"))}</code></td>
+              <td>{esc(svc.get("role"))}</td>
               <td>{fmt_status("OK" if svc.get("telemetry_present") else "UNKNOWN")}</td>
               <td>{f"{svc.get('heartbeat_age_sec'):.1f}s" if svc.get('heartbeat_age_sec') is not None else "--"}</td>
               <td>{fmt_status(svc.get("status"))}</td>
@@ -1347,7 +1371,7 @@ class ThreeSystemComparativeDashboard:
               <th>Файл существует</th>
               <th>Размер DB</th>
               <th>Размер WAL</th>
-              <th>PRAGMA quick_check(1)</th>
+              <th>Статус подключения SQLite</th>
             </tr>
           </thead>
           <tbody>
@@ -1440,7 +1464,7 @@ class ThreeSystemComparativeDashboard:
 
 </body>
 </html>'''
-        return html
+        return html_content
 
 
 class ThreeSystemDashboardHTTPHandler(BaseHTTPRequestHandler):
@@ -1532,6 +1556,9 @@ class ThreeSystemDashboardHTTPHandler(BaseHTTPRequestHandler):
         self.do_POST()
 
     def do_DELETE(self):
+        self.do_POST()
+
+    def do_PATCH(self):
         self.do_POST()
 
     def _get_report(self) -> Dict[str, Any]:

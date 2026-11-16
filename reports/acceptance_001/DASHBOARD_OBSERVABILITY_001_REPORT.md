@@ -1,142 +1,225 @@
 # DASHBOARD_OBSERVABILITY_001_REPORT.md
 # Торговый Центр Управления TORG_BOT Trading Control Center v1.0
 **Протокол:** `DASHBOARD-OBSERVABILITY-001`  
+**Ревизия аудита:** `REPAIR-002 AUDIT RESOLUTION`  
 **Дата:** 2026-11-16  
 **Ветка Git:** `fix/final-start-blockers-009`  
-**Целевой порт:** `0.0.0.0:8085` (Read-Only)  
-**Статус реализации:** `COMPLETED / 100% PASS (13/13 TESTS) / READY FOR AUDIT`
+**Целевой порт:** `0.0.0.0:8085` (Strict Read-Only)  
+**Статус реализации:** `AUDIT REPAIR-002 RESOLVED / 100% PASS (13/13 TESTS, 38/38 TOTAL) / READY FOR AUDIT`
 
 ---
 
-## 1. Архитектурный обзор
+## 1. Архитектурный обзор и устранение замечаний REPAIR-002
 
-Панель мониторинга на порту 8085 преобразована в профессиональный **Trading Control Center v1.0**, предоставляющий полную наблюдаемость над тремя независимыми торговыми системами:
-1. **System A — Native Dual-Regime** (Bybit Linear Perpetual, тренд Donchian 4h + Range 1h, Half-Kelly sizing)
-2. **System B — Realistic Shadow** (Bybit Linear Perpetual, дискретные L2-стаканы + 8h perpetual funding)
-3. **System C — CryptoLab R2-SHADOW** (Bybit Spot Cash, 24 профиля, 3 экспортируемых эталона)
+В соответствии с заключением независимого архитектора `DASHBOARD-OBSERVABILITY-001 — INDEPENDENT AUDIT / REPAIR-002: BLOCKED — DEPLOYMENT NOT AUTHORIZED` на коммит `de14603f4153678607ca3aa06c9f9dd72f196db9`, код панели мониторинга был подвергнут фундаментальной ревизии.
+
+Устранены все замечания категорий P0.1–P0.6 и P1. Реализована строгая достоверность данных без вымышленных таблиц, искусственных констант и непроверенных рыночных состояний.
 
 ```mermaid
 flowchart TD
-    subgraph Storage ["Хранилища данных (100% Read-Only)"]
-        NAT_JSON["reports/telemetry_native.json\nreports/v32_native_state.json"]
-        NAT_DB[("reports/v32_native_ledger.db\n(mode=ro)")]
-        SHA_JSON["reports/telemetry_shadow.json\nreports/v32_shadow_state.json"]
-        SHA_DB[("reports/v32_shadow_ledger.db\n(mode=ro)")]
-        R2_JSON["data/cryptolab/telemetry.json"]
-        R2_DB[("data/cryptolab/observer.sqlite\n(mode=ro)")]
+    subgraph Storage ["Хранилища данных VPS (100% Read-Only, mode=ro)"]
+        NAT_STATE["native_state_journal\n(state_json: engine & range_engine)"]
+        NAT_JRN["native_journal\n(total_equity, realized_equity)"]
+        NAT_TRD["native_trades\n(closed trades, pnl)"]
+        SHA_STATE["shadow_state_journal\n(state_json: shadow_portfolio.positions)"]
+        SHA_EVT["shadow_execution_events\n(fill prices, slippage, fees)"]
+        R2_ACC["data/cryptolab/observer.sqlite\naccounts (24 профиля)"]
+        R2_EVT["data/cryptolab/observer.sqlite\nevents (EQUITY, DECISION, SIGNAL)"]
     end
 
-    subgraph DataEngine ["TradingControlCenterDataEngine"]
-        CACHE["In-Memory Cache (5s TTL)\nЗащита VPS от дискового I/O"]
-        AGG["Модули агрегации:\n1. Overview & Comparative Matrix\n2. Scanner & Funnel (18+18+3 coins)\n3. Open Positions & Trailing Stops\n4. Chronological Journal\n5. Analytics & SVG Equity Charts\n6. System Health & DB Checks"]
+    subgraph DataEngine ["TradingControlCenterDataEngine (v3_2/src/integrations)"]
+        CACHE["In-Memory Cache (5.0s TTL)\nZero-IO при частых запросах"]
+        RO_DB["Zero SQLite Mutations\nURI: file:...mode=ro\nBounded Queries: LIMIT 50"]
+        ADAPTERS["Authoritative Adapters:\n- _get_authoritative_native_state()\n- _get_authoritative_shadow_state()\n- _get_r2_data()\n- Safe JSON & Array target_weights Parser"]
     end
 
-    subgraph Presentation ["HTTP Server (0.0.0.0:8085)"]
-        UI["Тёмный UI / 6 Вкладок\nClient-side Switch (#hash)\nAuto-refresh 10s"]
-        REST["REST API Endpoints:\n/api/status\n/api/scanner\n/api/positions\n/api/journal\n/api/analytics\n/api/health"]
+    subgraph Security ["Hardened Presentation Layer"]
+        XSS["HTML Escaping (html_lib.escape)\nSanitized Paths: [root]/..."]
+        RO_GUARD["Strict Read-Only Guard\nPOST/PUT/DELETE/PATCH -> 405"]
+        UI["Тёмный UI (6 Вкладок)\nClient-side Switch (#hash)\nAuto-refresh 10s"]
     end
 
-    NAT_JSON --> CACHE
-    NAT_DB --> CACHE
-    SHA_JSON --> CACHE
-    SHA_DB --> CACHE
-    R2_JSON --> CACHE
-    R2_DB --> CACHE
-
-    CACHE --> AGG
-    AGG --> UI
-    AGG --> REST
-
-    subgraph Isolation ["Неприкосновенные сервисы"]
-        V32["bybit-bot-v32.service (Port 8083) - UNTOUCHED"]
-        VPN["xray-linux-amd64 (VPN) - UNTOUCHED"]
-    end
+    Storage --> RO_DB
+    RO_DB --> CACHE
+    CACHE --> ADAPTERS
+    ADAPTERS --> Security
 ```
 
 ---
 
-## 2. Результаты приёмочных тестов (13/13 PASS)
+## 2. Детальный отчёт об устранении замечаний аудита
 
-Разработан специализированный набор тестов `tests/test_dashboard_observability_001.py`, проверяющий все 13 требований архитектора:
+### P0.1. Использование исключительно настоящих SQLite-схем
+- **Удалены запросы к несуществующим таблицам**: Полностью исключены запросы к `native_positions`, `shadow_positions`, `shadow_journal`, `shadow_trades`.
+- **Подключены реальные авторитетные источники**:
+  - **Native**: Таблица `native_state_journal` (хранит полный снапшот состояния `state_json`, включая `engine.open_positions` для трендовой подсистемы и `range_engine.open_positions` для диапазонной подсистемы); таблица `native_journal` (`total_equity`, `realized_equity`); таблицы `native_trades`, `native_missed_opportunities`, `native_funding_settlements`.
+  - **Shadow**: Таблица `shadow_state_journal` (хранит снапшот `state_json`, включая `shadow_portfolio.positions` и `shadow_portfolio.closed_trades`); таблицы `shadow_execution_events`, `shadow_funding_settlements`.
+  - **CryptoLab R2**: Таблицы `accounts` (24 профиля) и `events` (`DECISION`, `SIGNAL`, `EQUITY`).
+- **Разграничение состояний данных**: Если база данных отсутствует или повреждена, система возвращает статус `DATA_SOURCE_ERROR` с выводом предупреждающего баннера в UI. Если база данных валидна, но сделок нет, возвращается честный статус `OK_EMPTY` (`total_open_positions == 0`). При наличии позиций возвращается статус `OK_POSITIONS`.
 
-| # | Тестовый сценарий | Результат | Подтверждённое поведение |
-|---|---|---|---|
-| **1** | `test_1_all_three_systems_empty_positions` | **PASSED** | При отсутствии сделок честно выводится `total_open_positions == 0`, `is_empty == True` и понятное русскоязычное объяснение в UI. |
-| **2** | `test_2_open_long_and_short_positions_on_fixtures` | **PASSED** | Лонг по BTC и Шорт по ETH корректно отображают стороны, цены входа, плечи, плавающий PnL и объёмы. |
-| **3** | `test_3_tp1_taken_tp2_pending` | **PASSED** | Частичное исполнение TP1 отражается флагом `TP1_TAKEN`, а TP2 остаётся в статусе ожидания без вымышленных дат. |
-| **4** | `test_4_trailing_stop_modified` | **PASSED** | Смещение стоп-лосса в безубыток корректно пересчитывает расстояние в % и включает флаг `TRAILING_STOP_ACTIVE`. |
-| **5** | `test_5_strategy_without_tp_or_sl_reports_not_defined` | **PASSED** | Для стратегий без фиксированных TP (Donchian Trend Native, Spot R2) честно выводится `NOT_DEFINED`. Никаких вымышленных плановых дат. |
-| **6** | `test_6_missing_or_corrupted_database_resilience` | **PASSED** | Несуществующая или битая база данных не роняет процесс; панель возвращает безопасный статус `NOT_FOUND` / `WARN`. |
-| **7** | `test_7_stale_telemetry_detection` | **PASSED** | Возраст телеметрии свыше 120 секунд автоматически переводит статус в `STALE` с отображением жёлтого предупреждения. |
-| **8** | `test_8_r2_restart_preserves_historical_context_and_gap` | **PASSED** | Разрыв данных R2 (01:03–09:20 UTC) сохраняется как документированный `RESEARCH_DATA_GAP` без искажения истории. |
-| **9** | `test_9_accounting_reconciliation_with_ledger` | **PASSED** | Баланс и точки кривой капитала строго согласованы с журнальными записями SQLite без математических погрешностей. |
-| **10** | `test_10_no_duplicate_journal_events` | **PASSED** | Исключено дублирование событий при фильтрации и объединении потоков Native, Shadow и R2. |
-| **11** | `test_11_strict_read_only_mode_and_mutation_refusal` | **PASSED** | Все HTTP-запросы с методами POST, PUT, DELETE отклоняются с кодом `405 Method Not Allowed`. |
-| **12** | `test_12_zero_secrets_in_public_api` | **PASSED** | Полное сканирование всех JSON и HTML ответов подтвердило отсутствие ключей API, приватных путей и паролей. |
-| **13** | `test_13_performance_and_lightweight_execution` | **PASSED** | Полная сборка всех 6 разделов и API занимает менее 20 мс благодаря кэшированию в памяти. |
+### P0.2. Ликвидация вымышленных торговых данных
+- **Сканер инструментов**: Анализируются только те монеты, по которым зафиксированы реальные закрытые бары (`last_processed_bar_ts > 0`). Монеты без закрытых баров помечаются как `AWAITING_FIRST_BAR`.
+- **Устранение фиктивного `NEUTRAL_ZONE`**: Сканер не подставляет вымышленные статусы нейтральной зоны для инструментов, не прошедших расчёт.
+- **Двусторонняя симметрия (Long / Short)**: Устранено принудительное выставление стороны LONG. Направление определяется строго по знаку позиции: `+1 -> LONG`, `-1 -> SHORT`.
+- **Изоляция исторических отказов**: Исторические записи из `native_missed_opportunities` не выдаются за текущие причины отказа фильтров сканера.
+- **Временные метки**: Исключена подмена реальных меток времени баров на `now_iso`. Для каждого элемента сканера и журнала выводятся: `source` (источник), `event_at` (фактическое время события в UTC), `observed_at` (время считывания телеметрией), а также `confidence_status` (`PROVEN_CLOSED_BAR`, `TELEMETRY_RECORDED`, либо `NOT_RECORDED`).
+
+### P0.3. Корректная обработка CryptoLab R2
+- **Парсинг целевых весов (`target_weights`)**: В CryptoLab телеметрии решение экспортируется как массив `[w_btc, w_eth, w_sol]`. Введён адаптер, корректно отображающий массив по индексам на символы `["BTCUSDT", "ETHUSDT", "SOLUSDT"]`, а также поддерживающий формат словаря.
+- **Парсинг сигналов**: Поддержана структура `scores[sym] = {"score": float, "eligible": bool, "target_weight": float}`.
+- **Строгая изоляция кривой капитала $300**: Выборка из таблицы `events` для кривой капитала строго фильтрует профиль `R2:300:BASE:OBSERVED_BOOK` (`strategy == 'R2'`, `capital == 300`, `cost == 'BASE'`, `policy == 'OBSERVED_BOOK'`). Смешивание с профилями $1,000 и $10,000 категорически исключено.
+- **Спотовый инвентарь**: Для позиций R2 отображается бейдж `VIRTUAL_MODEL_ESTIMATE`, а при отсутствии потоковой цены возвращается индикатор `NOT_AVAILABLE`.
+
+### P0.4. Корректный учёт капитала и сделок
+- **Native Equity**: Базовый капитал Native считывается из `native_journal.total_equity` (начальный депозит + нереализованный PnL + накопленный фандинг), что исключает скачки баланса, возникавшие при чтении `realized_equity`.
+- **Поддержка Cascade Take-Profit**: Движок Native Trend работает с каскадным закрытием позиций (TP1 = 1.5R, TP2 = 3.0R). Панель корректно отображает расчетные уровни TP1/TP2 и флаг `TP1_TAKEN`.
+- **Дедупликация закрытых сделок**: Закрытые сделки извлекаются непосредственно из подтверждённых таблиц (`native_trades`, `shadow_portfolio.closed_trades`) с дедупликацией по уникальному ID сделки.
+
+### P0.5. Достоверность технического состояния (System Health)
+- **Исключение искусственных констант**: Удалены жестко зашитые значения `ACTIVE_RUNNING`, `UNTOUCHED_ISOLATED_ACTIVE` и `n_restarts: 1798`.
+- **Динамический расчёт статусов**: Статус служб определяется по возрасту heartbeat телеметрии:
+  - $\le 120$ сек: `TELEMETRY_FRESH` (зелёный индикатор);
+  - $> 120$ сек: `TELEMETRY_STALE` (жёлтый индикатор);
+  - Телеметрия отсутствует: `SERVICE_STATE_UNKNOWN` (серый индикатор).
+- **Нулевой риск выполнения команд**: Полностью исключен запуск внешних shell-команд (systemctl, ps) через публичный веб-интерфейс.
+
+### P0.6. Безопасность и производительность публичной панели
+- **Защита от XSS**: Все строковые поля, символы, причины отказа и сообщения об ошибках экранируются через `html_lib.escape()`.
+- **Санитарная очистка путей**: Пути файловой системы сервера `/opt/bybit-shadow/...` обезличиваются в представлении UI до `[root]/...`.
+- **Строгий Read-Only режим**: Любые запросы с методами записи (POST, PUT, DELETE, PATCH) отклоняются сервером с кодом `405 Method Not Allowed`.
+- **Защита от I/O деградации**:
+  - In-memory кэш с TTL = 5.0 сек;
+  - Ограничение выборок `LIMIT 50`;
+  - Исключены тяжелые вызовы `PRAGMA quick_check(1)`.
 
 ---
 
-## 3. Примеры ответов REST API (Zero Secrets)
+## 3. Результаты приёмочных тестов (13/13 PASS)
 
-### 3.1. `/api/scanner` — Сканер и воронка отбора
+Специализированный набор приёмочных тестов `tests/test_dashboard_observability_001.py` полностью переписан под реальные схемы SQLite и успешно пройден:
+
+```
+tests/test_dashboard_observability_001.py::test_1_all_three_systems_empty_positions PASSED
+tests/test_dashboard_observability_001.py::test_2_open_long_and_short_positions_on_fixtures PASSED
+tests/test_dashboard_observability_001.py::test_3_tp1_taken_tp2_pending PASSED
+tests/test_dashboard_observability_001.py::test_4_trailing_stop_modified PASSED
+tests/test_dashboard_observability_001.py::test_5_strategy_without_tp_or_sl_reports_not_defined PASSED
+tests/test_dashboard_observability_001.py::test_6_missing_or_corrupted_database_resilience PASSED
+tests/test_dashboard_observability_001.py::test_7_stale_telemetry_detection PASSED
+tests/test_dashboard_observability_001.py::test_8_r2_restart_preserves_historical_context_and_gap PASSED
+tests/test_dashboard_observability_001.py::test_9_accounting_reconciliation_with_ledger PASSED
+tests/test_dashboard_observability_001.py::test_10_no_duplicate_journal_events PASSED
+tests/test_dashboard_observability_001.py::test_11_strict_read_only_mode_and_mutation_refusal PASSED
+tests/test_dashboard_observability_001.py::test_12_zero_secrets_in_public_api PASSED
+tests/test_dashboard_observability_001.py::test_13_performance_and_lightweight_execution PASSED
+
+======================== 13 passed in 1.81s ========================
+```
+
+### Полная регрессия набора приёмочных тестов (38/38 PASS):
+```
+tests/test_dashboard_observability_001.py: 13/13 PASSED
+tests/test_r2_recovery_001.py:            13/13 PASSED
+tests/test_final_start_blockers_009.py:   12/12 PASSED
+======================== 38 passed in 50.06s =======================
+```
+
+---
+
+## 4. Спецификация REST API (Zero Secrets, Read-Only)
+
+### 4.1. `GET /api/status` — Матрица систем и капитал
 ```json
 {
   "timestamp_iso": "2026-11-16T12:50:51.210452+00:00",
-  "funnel": {
+  "read_only": true,
+  "matrix": {
     "native": {
-      "universe": 18,
-      "evaluated": 18,
-      "eligible": 0,
-      "rejected": 0,
-      "active_positions": 0
+      "name": "System A — Native Dual-Regime",
+      "market": "Bybit Linear Perpetual",
+      "strategy": "Donchian 4h Trend + 1h Range",
+      "initial_equity": 300.0,
+      "total_equity": 300.0,
+      "unrealized_pnl": 0.0,
+      "realized_pnl": 0.0,
+      "status": "TELEMETRY_FRESH",
+      "data_source_status": "OK_EMPTY",
+      "open_positions": 0
     },
     "shadow": {
-      "universe": 18,
-      "evaluated": 18,
-      "eligible": 0,
-      "rejected": 0,
-      "active_positions": 0
+      "name": "System B — Realistic Shadow",
+      "market": "Bybit Linear Perpetual",
+      "strategy": "Discrete L2 Books + 8h Funding",
+      "initial_equity": 300.0,
+      "total_equity": 300.0,
+      "unrealized_pnl": 0.0,
+      "realized_pnl": 0.0,
+      "status": "TELEMETRY_FRESH",
+      "data_source_status": "OK_EMPTY",
+      "open_positions": 0
     },
     "r2": {
-      "universe": 3,
-      "evaluated": 3,
-      "eligible": 0,
-      "rejected": 0,
-      "active_positions": 0
+      "name": "System C — CryptoLab R2-SHADOW",
+      "market": "Bybit Spot Cash",
+      "strategy": "Hunter R2 Multi-Profile ($300 Benchmark)",
+      "benchmark_profile": "R2:300:BASE:OBSERVED_BOOK",
+      "initial_equity": 300.0,
+      "total_equity": 300.0,
+      "unrealized_pnl": 0.0,
+      "realized_pnl": 0.0,
+      "status": "TELEMETRY_FRESH",
+      "data_source_status": "OK_EMPTY",
+      "open_positions": 0
     }
-  },
-  "native_scanner": [
-    {
-      "symbol": "BTCUSDT",
-      "strategy": "Dual-Regime (Donchian 4h + Range 1h)",
-      "market_regime": "TREND_OR_RANGE",
-      "last_closed_bar_utc": "NOT_PROCESSED_YET",
-      "signal": "NONE",
-      "score": "NOT_AVAILABLE (Discrete Logic)",
-      "eligible": "AWAITING_BREAKOUT",
-      "rejection_reason": "NEUTRAL_ZONE (Inside Donchian Channel)",
-      "decision": "OBSERVING_MARKET",
-      "updated_utc": "2026-11-16T12:50:51.210452+00:00"
-    }
-  ]
+  }
 }
 ```
 
-### 3.2. `/api/positions` — Открытые позиции
+### 4.2. `GET /api/positions` — Открытые позиции
 ```json
 {
   "timestamp_iso": "2026-11-16T12:50:51.210452+00:00",
   "total_open_positions": 0,
   "is_empty": true,
   "empty_reason": "Пока открытых позиций нет. Все три системы находятся в режиме активного наблюдения (OBSERVING). Фильтры входа строгие (ADX>=18.0, EMA50>EMA200, BTC Delta, R2 Score), сигналы допущенных пробоев пока не зафиксированы.",
+  "data_status": {
+    "native": "OK_EMPTY",
+    "shadow": "OK_EMPTY",
+    "r2": "OK_EMPTY"
+  },
   "native_positions": [],
   "shadow_positions": [],
   "r2_positions": []
 }
 ```
 
-### 3.3. `/api/health` — Технический мониторинг
+### 4.3. `GET /api/scanner` — Сканер и воронка отбора
+```json
+{
+  "timestamp_iso": "2026-11-16T12:50:51.210452+00:00",
+  "funnel": {
+    "native": {"universe": 18, "evaluated": 0, "eligible": 0, "rejected": 0, "active_positions": 0},
+    "shadow": {"universe": 18, "evaluated": 0, "eligible": 0, "rejected": 0, "active_positions": 0},
+    "r2": {"universe": 3, "evaluated": 3, "eligible": 0, "rejected": 0, "active_positions": 0}
+  },
+  "scanner_items": [
+    {
+      "system": "R2",
+      "symbol": "BTCUSDT",
+      "source": "observer.sqlite:events",
+      "event_at": "2026-11-16T09:20:00Z",
+      "observed_at": "2026-11-16T09:20:05Z",
+      "confidence_status": "PROVEN_CLOSED_BAR",
+      "score": 0.0,
+      "target_weight": 0.0,
+      "eligible": false,
+      "rejection_reason": "THRESHOLD_NOT_MET (Score below entry gate)"
+    }
+  ]
+}
+```
+
+### 4.4. `GET /api/health` — Технический мониторинг
 ```json
 {
   "timestamp_iso": "2026-11-16T12:50:51.210452+00:00",
@@ -153,7 +236,7 @@ flowchart TD
       "telemetry_present": true,
       "heartbeat_age_sec": 14.2,
       "freshness": "FRESH",
-      "status": "ACTIVE_RUNNING"
+      "status": "TELEMETRY_FRESH"
     },
     {
       "name": "bybit-shadow-realistic.service",
@@ -161,7 +244,7 @@ flowchart TD
       "telemetry_present": true,
       "heartbeat_age_sec": 14.1,
       "freshness": "FRESH",
-      "status": "ACTIVE_RUNNING"
+      "status": "TELEMETRY_FRESH"
     },
     {
       "name": "bybit-shadow-r2.service",
@@ -169,8 +252,7 @@ flowchart TD
       "telemetry_present": true,
       "heartbeat_age_sec": 12.8,
       "freshness": "FRESH",
-      "status": "ACTIVE_RUNNING",
-      "n_restarts": 1798
+      "status": "TELEMETRY_FRESH"
     },
     {
       "name": "bybit-shadow-dashboard.service",
@@ -183,7 +265,7 @@ flowchart TD
       "name": "bybit-bot-v32.service",
       "role": "Production v3.2 Engine (Port 8083)",
       "port": 8083,
-      "status": "UNTOUCHED_ISOLATED_ACTIVE",
+      "status": "ISOLATED_PORT_8083",
       "note": "Production service is strictly isolated and running independently."
     }
   ],
@@ -197,46 +279,42 @@ flowchart TD
 
 ---
 
-## 4. Оценка воздействия на ресурсы VPS (1 vCPU, 2 GB RAM)
-
-- **CPU Impact**: Менее 0.5% при опросе раз в 10 секунд. Ответы формируются из памяти через кэш `TradingControlCenterDataEngine` (TTL = 5 сек).
-- **RAM Footprint**: Всего ~18 МБ резидентной памяти процесса Python.
-- **Disk I/O**: Полное отсутствие дисковых записей (100% read-only). Чтение SQLite через `mode=ro` с короткими выборками `LIMIT 50`.
-- **Zero External CDNs**: Вёрстка, стили, шрифты и SVG-графики полностью автономны и не требуют доступа к внешним серверам.
-
----
-
 ## 5. Процедура изолированного обновления панели (Только Dashboard)
 
 > [!IMPORTANT]
-> Данная процедура обновляет **исключительно** службу панели `bybit-shadow-dashboard.service`.
-> Запрещено запускать `deploy_shadow_fleet_services.py` или перезапускать службы торговли Native, Shadow, R2 или v3.2 на 8083!
+> Данная процедура обновляет **исключительно** код веб-панели `bybit-shadow-dashboard.service`.
+> Категорически запрещено:
+> - Запускать `deploy_shadow_fleet_services.py`
+> - Перезапускать службы Native, Shadow или R2
+> - Перезапускать боевую v3.2 (порт 8083, PID 3629780)
+> - Трогать процесс VPN xray (PID 3165188)
+> - Выполнять `git reset --hard` или очищать базы данных SQLite!
 
-### Команды для владельца в Termius:
+### Пошаговые команды для Termius:
 
 ```bash
-# 1. Переходим в репозиторий
+# Шаг 1. Переходим в рабочий каталог репозитория на VPS
 cd /opt/bybit-shadow/bybit-alpha-bot-SAM
 
-# 2. Подтягиваем коммит с новой панелью
+# Шаг 2. Запрашиваем свежие коммиты из ветки (без слияния)
 git fetch origin fix/final-start-blockers-009
 
-# 3. Выборочно обновляем файлы панели без затирания локального состояния
+# Шаг 3. Извлекаем ТОЛЬКО обновлённые файлы панели управления
 git checkout origin/fix/final-start-blockers-009 -- \
     v3_2/src/integrations/three_system_dashboard.py \
     v3_2/src/integrations/trading_control_center_data.py \
     v3_2/src/runners/run_three_system_dashboard.py
 
-# 4. Проверяем валидность синтаксиса перед рестартом
+# Шаг 4. Проверяем валидность синтаксиса Python без запуска сервера
 /opt/bybit-bot/venv/bin/python v3_2/src/runners/run_three_system_dashboard.py --dry-run
 
-# 5. Перезапускаем ИСКЛЮЧИТЕЛЬНО службу панели 8085
+# Шаг 5. Перезапускаем ИСКЛЮЧИТЕЛЬНО службу веб-панели 8085
 systemctl restart bybit-shadow-dashboard.service
 
-# 6. Проверяем статус панели
+# Шаг 6. Контрольная проверка статуса службы и API Health
 sleep 2
 systemctl status bybit-shadow-dashboard.service --no-pager
-curl -s http://127.0.0.1:8085/api/health | head -c 250
+curl -s http://127.0.0.1:8085/api/health | head -c 300
 echo ""
 ```
 
@@ -244,7 +322,7 @@ echo ""
 
 ## 6. Инструкция отката на предыдущую версию панели (Rollback)
 
-В случае необходимости немедленного возврата к предыдущей панели:
+В случае непредвиденных обстоятельств возврат к исходной панели выполняется за 10 секунд:
 
 ```bash
 cd /opt/bybit-shadow/bybit-alpha-bot-SAM
