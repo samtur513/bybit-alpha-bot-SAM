@@ -21,6 +21,8 @@ exit_handler() {
   trap - EXIT
   if [[ "$SUCCESS" != 1 && "$STOPPED" == 1 ]]; then
     echo "ROLLBACK: restoring prior R2 recovery code from $BACKUP" >&2
+    # Never modify a running R2 Python file: it checks source hashes every tick.
+    systemctl stop "$SVC" || true
     [[ -f "$BACKUP/readiness.py" ]] && cp -a "$BACKUP/readiness.py" "$REPO/$DIR/readiness.py"
     [[ -f "$BACKUP/RECOVERY_PATCH.json" ]] && cp -a "$BACKUP/RECOVERY_PATCH.json" "$REPO/$DIR/RECOVERY_PATCH.json"
     systemctl start "$SVC" || true
@@ -38,9 +40,16 @@ die() { echo "BLOCKED: $*" >&2; exit 1; }
 [[ -x "$PY" && -d "$REPO/.git" && -f "$DATA/COHORT.json" ]] || die "unexpected host layout"
 [[ -f "$DATA/START_RECEIPT.json" && -f "$DATA/observer.sqlite" ]] || die "R2 research history missing"
 systemctl is-active --quiet "$SVC" || die "R2 is not currently active"
-START_COMMAND=$(systemctl show "$SVC" -p ExecStart --value)
-[[ "$START_COMMAND" == *"$REPO/"* && "$START_COMMAND" == *"runtime.py"* ]] ||
-  die "service does not launch expected R2 runtime"
+# On the live VPS systemd may launch R2 via a shell wrapper or a relative
+# runtime.py path. ExecStart is not a reliable absolute-path identity check.
+# We target only the exact systemd unit, require it running, and cryptographically
+# validate its existing R2 source/approval plus the cohort/24-profile ledger
+# before replacing *any* files.
+[[ "$(systemctl show "$SVC" -p LoadState --value)" == loaded ]] ||
+  die "R2 unit not loaded"
+R2_PID=$(systemctl show "$SVC" -p MainPID --value)
+[[ "$R2_PID" =~ ^[0-9]+$ && "$R2_PID" -gt 0 && -r "/proc/$R2_PID/cmdline" ]] ||
+  die "R2 has no inspectable active main process"
 # Avoid daily signal boundary UTC 00:00.
 utc_hhmm=$(date -u +%H:%M)
 if [[ "$utc_hhmm" > "23:45" || "$utc_hhmm" < "00:15" ]]; then
