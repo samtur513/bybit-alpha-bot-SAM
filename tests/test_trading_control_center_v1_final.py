@@ -215,6 +215,33 @@ class TestTradingScenarios:
         _init_shadow_db(sha_db)
         _init_r2_db(r2_db)
 
+        # Empty positions must be PROVEN by real state journals, not inferred
+        # from an empty/missing state record.
+        with sqlite3.connect(nat_db) as conn:
+            conn.execute(
+                "INSERT INTO native_state_journal "
+                "(saved_at_ms, saved_at_utc, state_json) VALUES (?, ?, ?)",
+                (1794826800000, "2026-11-16T11:00:00Z",
+                 json.dumps({"engine": {"open_positions": {}},
+                             "range_engine": {"open_positions": {}},
+                             "last_processed_bar_ts": {"BTCUSDT": 1794823200000}}))
+            )
+        with sqlite3.connect(sha_db) as conn:
+            conn.execute(
+                "INSERT INTO shadow_state_journal "
+                "(saved_at_ms, saved_at_utc, event_key, native_realized_equity,"
+                " shadow_realized_equity, native_peak_equity, shadow_peak_equity,"
+                " native_gear, shadow_gear, state_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (1794826800000, "2026-11-16T11:00:00Z", "STATE",
+                 300, 300, 300, 300, 3, 3,
+                 json.dumps({"shadow_portfolio": {"positions": {}, "closed_trades": []}}))
+            )
+        with sqlite3.connect(r2_db) as conn:
+            conn.execute("INSERT INTO accounts (id, payload) VALUES (?, ?)",
+                         ("R2:300:BASE:OBSERVED_BOOK",
+                          json.dumps({"cash": 300.0, "qty": [0.0, 0.0, 0.0]})))
+
         # Insert 12 processed bars for BTCUSDT in Native journal
         conn_n = sqlite3.connect(nat_db)
         for i in range(12):
