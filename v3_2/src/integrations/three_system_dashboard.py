@@ -1150,13 +1150,14 @@ class ThreeSystemComparativeDashboard:
             <tr>
               <th>Символ</th>
               <th>Стратегия</th>
-              <th>Режим</th>
+              <th>Расписание</th>
               <th>Сигнал</th>
               <th>Score (R2)</th>
               <th>Дата решения (UTC)</th>
               <th>Целевой вес</th>
               <th>Допуск</th>
               <th>Статус решения</th>
+              <th>Причина отказа (если записана)</th>
               <th>Тип оценки</th>
             </tr>
           </thead>
@@ -1164,13 +1165,14 @@ class ThreeSystemComparativeDashboard:
             ''' + "".join([f'''<tr>
               <td><strong>{esc(row.get("symbol"))}</strong></td>
               <td>{esc(row.get("strategy"))}</td>
-              <td><span class="badge" style="background:#162030;color:#26a69a;">{esc(row.get("market_regime"))}</span></td>
+              <td><span class="badge" style="background:#162030;color:#26a69a;">{esc(row.get("schedule_note"))}</span></td>
               <td><strong>{esc(row.get("signal"))}</strong></td>
               <td><code>{esc(row.get("score"))}</code></td>
               <td class="dim">{esc(row.get("event_at"))}</td>
               <td>{esc(row.get("target_weight"))}</td>
               <td>{fmt_status(row.get("eligible"))}</td>
               <td>{esc(row.get("decision"))}</td>
+              <td>{esc(row.get("rejection_reason"))}</td>
               <td><span class="badge" style="background:#78909c22;color:#90a4ae;">{esc(row.get("fill_claim_badge"))}</span></td>
             </tr>''' for row in scanner_data.get("r2_scanner", [])]) + f'''
           </tbody>
