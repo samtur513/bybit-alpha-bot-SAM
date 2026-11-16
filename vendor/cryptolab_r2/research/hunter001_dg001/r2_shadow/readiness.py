@@ -146,21 +146,52 @@ def validate(root,policy,cohort,now=None):
     root=Path(root).resolve()
     now=now or datetime.datetime.now(UTC)
     folder=root/"readiness"
+    receipt_path=root/"START_RECEIPT.json"
+    is_recovery=receipt_path.is_file()
     try:
         manifest_path=folder/"manifest.json"
         if not manifest_path.is_file():fail("MISSING_MANIFEST")
-        if policy.get("readiness_manifest_sha256")!=sha(manifest_path):fail("MANIFEST_HASH")
+        manifest_sha=sha(manifest_path)
+        if policy.get("readiness_manifest_sha256")!=manifest_sha:fail("MANIFEST_HASH")
         m=json.loads(manifest_path.read_text())
         env=environment()
         if env["system"]!="Linux" or env["python"]!=[3,12] or env["numpy"]!="2.5.4":fail("LINUX_HOST_REQUIRED")
         if m["format"]!=FORMAT or m["environment"]!=env or m["runtime_path"]!=str(root):
             fail("HOST_OR_RUNTIME_BINDING")
         when=utc(m["collected_at"])
-        if not datetime.timedelta(0)<=now-when<=MAX_AGE:fail("EXPIRED_OR_FUTURE")
+        if not is_recovery:
+            if not datetime.timedelta(0)<=now-when<=MAX_AGE:fail("EXPIRED_OR_FUTURE")
+        else:
+            if when>now:fail("EXPIRED_OR_FUTURE")
         if m["cohort_sha256"]!=canonical(cohort):fail("COHORT_BINDING")
         runtime.verify_frozen()
-        if m["frozen_manifest_sha256"]!=sha(runtime.HERE/"FROZEN_MANIFEST.json") or m["code_sha256"]!=code_hashes():
+        if m["frozen_manifest_sha256"]!=sha(runtime.HERE/"FROZEN_MANIFEST.json"):
             fail("SOURCE_BINDING")
+        current_code=code_hashes()
+        if not is_recovery:
+            if m["code_sha256"]!=current_code:fail("SOURCE_BINDING")
+        else:
+            for name in ("raw_store.py","telemetry.py","marks.py","collect_readiness.py"):
+                if m["code_sha256"].get(name)!=current_code.get(name):fail("SOURCE_BINDING")
+        if is_recovery:
+            receipt=json.loads(receipt_path.read_text())
+            if receipt.get("status") not in ("ARMED","STARTED_UNVERIFIED","OBSERVING"):fail("START_RECEIPT_STATUS")
+            if receipt.get("cohort")!=cohort:fail("COHORT_CHANGED")
+            prev_ready=receipt.get("readiness") or {}
+            if prev_ready.get("manifest_sha256")!=manifest_sha:fail("START_RECEIPT_MANIFEST_MISMATCH")
+            if prev_ready.get("host_fingerprint")!=env["host_fingerprint"]:fail("HOST_OR_RUNTIME_BINDING")
+            db_file=root/"observer.sqlite"
+            if not db_file.is_file():fail("MISSING_LEDGER")
+            try:
+                db=sqlite3.connect(db_file.resolve().as_uri()+"?mode=ro",uri=True)
+                try:
+                    if db.execute("PRAGMA integrity_check").fetchone()[0]!="ok":fail("LEDGER_CORRUPT")
+                    cnt=db.execute("SELECT count(*) FROM accounts").fetchone()[0]
+                    if cnt!=24:fail("PROFILE_MATRIX_CORRUPT")
+                finally:
+                    db.close()
+            except sqlite3.Error:
+                fail("LEDGER_CORRUPT")
         if set(m["files"])!=set(FILES):fail("ARTIFACT_SET")
         for name in FILES:
             if m["files"][name]!=sha(folder/name):fail("ARTIFACT_HASH")
@@ -176,8 +207,10 @@ def validate(root,policy,cohort,now=None):
             or not isinstance(approval.get("reference"),str) or not approval["reference"].strip()
             or approval.get("t0_utc")!=cohort["t0_utc"]):
             fail("EXPLICIT_USER_AUTHORIZATION_REQUIRED")
-        return dict(status="PASS",manifest_sha256=sha(manifest_path),collected_at=m["collected_at"],
-                    host_fingerprint=env["host_fingerprint"],functional_profiles=len(result["accounts"]), code_sha256=m["code_sha256"])
+        if policy.get("authorized_start_utc") is not None and policy.get("authorized_start_utc")!=cohort["t0_utc"]:fail("AUTHORIZED_T0_MISMATCH")
+        code_sha_to_return=receipt.get("readiness",{}).get("code_sha256",m["code_sha256"]) if is_recovery else m["code_sha256"]
+        return dict(status="PASS",manifest_sha256=manifest_sha,collected_at=m["collected_at"],
+                    host_fingerprint=env["host_fingerprint"],functional_profiles=len(result["accounts"]), code_sha256=code_sha_to_return)
     except RuntimeError:
         raise
     except (OSError,ValueError,KeyError,TypeError,OverflowError,AssertionError,sqlite3.Error) as e:

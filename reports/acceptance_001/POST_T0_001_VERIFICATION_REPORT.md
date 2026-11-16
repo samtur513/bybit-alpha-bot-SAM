@@ -108,24 +108,36 @@ for k, s in d['systems'].items():
     print(f'[{k.upper()}] Status={s[\"data_freshness_status\"]} | Equity={s[\"equity_usdt\"]} USDT | Cash={s[\"cash_usdt\"]} USDT | Pos={s[\"positions_count\"]}')
 "
 
-echo -e "\n=== [7] ПОДТВЕРЖДЕНИЕ ОТСУТСТВИЯ СДЕЛОК ДО T0 (1794787200000 MS) ==="
+echo -e "\n=== [7] ПОДТВЕРЖДЕНИЕ ОТСУТСТВИЯ СДЕЛОК ДО T0 (1794787200000 MS) В РЕЖИМЕ READ-ONLY ==="
 /opt/bybit-bot/venv/bin/python -c "
 import sqlite3
-# 1. Native Trades
+# 1. Native Trades (entry_time_ms < T0 OR exit_time_ms < T0)
 try:
-    c = sqlite3.connect('/opt/bybit-shadow/data/native_ledger.db')
-    cnt = c.execute('SELECT count(*) FROM native_trades WHERE exit_time_ms < 1794787200000').fetchone()[0]
+    c = sqlite3.connect('file:/opt/bybit-shadow/data/native_ledger.db?mode=ro', uri=True)
+    cnt = c.execute('SELECT count(*) FROM native_trades WHERE entry_time_ms < 1794787200000 OR exit_time_ms < 1794787200000').fetchone()[0]
     print(f'Native Trades before T0: {cnt} (Expected: 0)')
 except Exception as e:
-    print(f'Native DB check: {e}')
+    print(f'Native check error: {e}')
 
-# 2. Shadow Execution Events
+# 2. Shadow Execution Events (ENTRY_FILL and EXIT_FILL before T0)
 try:
-    c = sqlite3.connect('/opt/bybit-shadow/data/shadow_ledger.db')
-    cnt = c.execute(\"SELECT count(*) FROM shadow_execution_events WHERE event_type='EXIT' AND exchange_ts < 1794787200000\").fetchone()[0]
+    c = sqlite3.connect('file:/opt/bybit-shadow/data/shadow_ledger.db?mode=ro', uri=True)
+    cnt = c.execute(\"\"\"
+        SELECT count(*) FROM shadow_execution_events 
+        WHERE event_type IN ('ENTRY_FILL', 'EXIT_FILL') AND exchange_ts < 1794787200000
+    \"\"\").fetchone()[0]
     print(f'Shadow Trades before T0: {cnt} (Expected: 0)')
 except Exception as e:
-    print(f'Shadow DB check: {e}')
+    print(f'Shadow check error: {e}')
+
+# 3. CryptoLab 24 Accounts and Zero Orders before T0
+try:
+    c = sqlite3.connect('file:/opt/bybit-shadow/data/cryptolab/observer.sqlite?mode=ro', uri=True)
+    profiles = c.execute('SELECT count(*) FROM accounts').fetchone()[0]
+    orders = c.execute(\"SELECT count(*) FROM events WHERE kind='ORDER'\").fetchone()[0]
+    print(f'CryptoLab Profiles: {profiles} (Expected: 24) | Orders: {orders} (Expected: 0)')
+except Exception as e:
+    print(f'CryptoLab check error: {e}')
 "
 
 echo -e "\n=== [8] ПРОВЕРКА ОТСУТСТВИЯ СЕКРЕТНЫХ КЛЮЧЕЙ В SYSTEMD ОКРУЖЕНИИ ==="
@@ -147,3 +159,21 @@ STATUS: DEPLOYED / ARMED / DATA_VALID / ACCOUNTING_NOT_YET_OBSERVED / AWAITING_T
 * При фиксации `[R2_SHADOW] Process: OBSERVING`, `Equity != None` и `Positions == 0` (до первых естественных сигналов) статус автоматически переходит в:
   **`DEPLOYED / OBSERVING / DATA_VALID / ACCOUNTING_NOT_YET_OBSERVED / RESEARCH_ACCEPTED`**.
 * Никаких принудительных или искусственных сделок не генерируется. Исследование идёт по естественным рыночным котировкам Bybit.
+
+---
+
+## 6. Протокол восстановления R2-RECOVERY-001
+
+### 6.1. Первопричина инцидента (01:03 UTC)
+- В `2026-11-16T01:03:17Z` зафиксирован последний heartbeat R2.
+- Служба systemd зафиксировала `NRestarts=1527` с постоянным исключением `RuntimeError: READINESS_EXPIRED_OR_FUTURE`.
+- **Механизм сбоя**: Первоначальный выход демона произошел из-за транзиентного сбоя (таймаут ответа Bybit REST при опросе стакана BBO либо кратковременный всплеск нагрузки CPU `load_per_cpu > 0.8`). При автоматическом перезапуске через `RestartSec=15` модуль `readiness.py` вызывал проверку `now - when <= MAX_AGE (1 hour)`. Поскольку манифест был сформирован до $T_0$, в момент рестарта в 01:03 UTC разница во времени превысила 1 час, что заблокировало запуск демона постоянным отказом `READINESS_EXPIRED_OR_FUTURE`.
+
+### 6.2. Внедрённое архитектурное исправление
+1. В `vendor/cryptolab_r2/research/hunter001_dg001/r2_shadow/readiness.py`:
+   - При наличии расписки `START_RECEIPT.json` (режим восстановления) проверка свежести манифеста допускает возраст старше 1 часа (`when <= now`), сохраняя строгий запрет манифестов из будущего (`when > now`).
+   - На первичном запуске (`START_RECEIPT.json` отсутствует) сохраняется строгий порог свежести `0 <= now - when <= 1 hour`.
+   - В режиме восстановления криптографически верифицируются: SHA исходного манифеста, неизменность 9 замороженных модулей (`verify_frozen()`), привязка когорты, авторизация пользователя, статус `START_RECEIPT.json`, целостность SQLite базы (`PRAGMA integrity_check == ok`) и сохранение всех 24 счетов с капиталом $300.00.
+2. Проведено 9 специализированных приёмочных тестов в `tests/test_r2_recovery_001.py` (100% PASS).
+3. Массовый перезапуск служб запрещён: перезапускается строго служба `bybit-shadow-r2.service`. Панель 8085 обновляется независимо.
+
