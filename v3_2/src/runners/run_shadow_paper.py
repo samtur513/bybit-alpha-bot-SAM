@@ -383,6 +383,7 @@ class ShadowPaperRunner:
             now_srv = self.client.get_server_time()
             for sym in self.symbols:  # Full original universe, not sliced!
                 try:
+                    time.sleep(0.18)  # startup catch-up paced; reduce simultaneous Bybit 10006 bursts
                     raw = self.client.get_kline(sym, interval=CANDLE_INTERVAL, limit=150)
                     if not raw:
                         continue
