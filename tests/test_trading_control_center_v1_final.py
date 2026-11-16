@@ -539,9 +539,10 @@ class TestFinancialScenarios:
         ]
         # Expected: 300.0 + 25.50 - 10.20 = 315.30
         status = engine.compute_accounting_reconciliation("NATIVE", 300.0, 315.30, trades)
-        assert status["status"] == "ACCOUNTING_VERIFIED"
-        assert status["reconciled"] is True
-        assert status["discrepancy_usdt"] == 0.0
+        # Matching one displayed balance does not prove fees/funding/fills/cash.
+        assert status["status"] == "ACCOUNTING_PENDING_RECONCILIATION"
+        assert status["reconciled"] is False
+        assert status["discrepancy_usdt"] is None
 
     def test_fin_03_failed_accounting_reconciliation(self, tmp_path):
         engine = TradingControlCenterDataEngine()
@@ -550,9 +551,11 @@ class TestFinancialScenarios:
         ]
         # Expected: 325.50, but actual is 300.0 -> discrepancy 25.50!
         status = engine.compute_accounting_reconciliation("NATIVE", 300.0, 300.0, trades)
-        assert status["status"] == "ACCOUNTING_FAILED"
+        # Current value could be MTM equity and does not establish an
+        # independent realized-ledger discrepancy.
+        assert status["status"] == "ACCOUNTING_PENDING_RECONCILIATION"
         assert status["reconciled"] is False
-        assert status["discrepancy_usdt"] == 25.50
+        assert status["discrepancy_usdt"] is None
 
     def test_fin_04_insufficient_sample_metrics(self, tmp_path):
         nat_db = tmp_path / "native.db"
