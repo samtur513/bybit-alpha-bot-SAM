@@ -1,0 +1,35 @@
+[Unit]
+Description=CryptoLab R2 external resource threshold observer (diagnostic, READ ONLY)
+Documentation=docs/RESEARCH_API10006_R2_RESOURCE_001.md
+After=local-fs.target
+# Deliberately independent: NEVER Requires=, PartOf=, BindsTo= R2 service.
+# Restarting this observer must not restart protected R2 or change its state.
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/bybit-shadow/bybit-alpha-bot-SAM
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/bybit-bot/venv/bin/python -u /opt/bybit-shadow/bybit-alpha-bot-SAM/tools/r2_resource_observer.py --root /opt/bybit-shadow/data/cryptolab --watch --interval-sec 15
+Restart=on-failure
+RestartSec=30
+Nice=19
+IOSchedulingClass=idle
+CPUWeight=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# No output files: only compact JSON samples go to journalctl.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=r2-resource-observer
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target
