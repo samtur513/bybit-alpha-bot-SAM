@@ -22,11 +22,12 @@ from datetime import datetime, timezone
 import html as html_lib
 import re
 from decimal import Decimal
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import json
 import logging
 from pathlib import Path
 import socket
+import threading
 from typing import Any, Dict, List, Optional
 import urllib.parse
 
@@ -1688,6 +1689,8 @@ class ThreeSystemDashboardHTTPHandler(BaseHTTPRequestHandler):
         self.send_response(status_code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.close_connection = True
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
@@ -1787,17 +1790,66 @@ class ThreeSystemDashboardHTTPHandler(BaseHTTPRequestHandler):
         return {"error": "Dashboard provider not attached"}
 
 
+class BoundedDashboardHTTPServer(ThreadingHTTPServer):
+    """Bounded concurrent read-only dashboard (small 1-vCPU/2-GiB VPS).
+
+    Unlike HTTPServer, one slow SQLite read or stalled remote browser must
+    not stop /health and other clients from being served. Keep a hard limit
+    on simultaneous handler threads so this fix cannot amplify resource
+    contention with the independent OKX collector or trading services.
+    """
+
+    allow_reuse_address = True
+    daemon_threads = True
+    block_on_close = False
+    request_queue_size = 32
+    max_active_requests = 8
+    client_socket_timeout_sec = 12.0
+
+    def __init__(self, server_address, RequestHandlerClass):
+        self._request_slots = threading.BoundedSemaphore(self.max_active_requests)
+        super().__init__(server_address, RequestHandlerClass)
+
+    def get_request(self):
+        request, client_address = super().get_request()
+        request.settimeout(self.client_socket_timeout_sec)
+        return request, client_address
+
+    def process_request(self, request, client_address):
+        if not self._request_slots.acquire(blocking=False):
+            # Avoid unbounded thread creation under concurrent browser tabs.
+            try:
+                request.settimeout(0.5)
+                request.sendall(
+                    b"HTTP/1.0 503 Service Unavailable\r\n"
+                    b"Content-Length: 0\r\n"
+                    b"Connection: close\r\n\r\n"
+                )
+            except OSError:
+                pass
+            finally:
+                request.close()
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._request_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._request_slots.release()
+
+
 def create_dashboard_server(
     host: str = "127.0.0.1",
     port: int = 8099,
     dashboard_provider: Optional[ThreeSystemComparativeDashboard] = None,
     report_supplier: Optional[Any] = None,
-) -> HTTPServer:
+) -> BoundedDashboardHTTPServer:
     handler_cls = ThreeSystemDashboardHTTPHandler
     handler_cls.dashboard_provider = dashboard_provider or ThreeSystemComparativeDashboard()
     handler_cls.report_supplier = report_supplier
-
-    class ReusableHTTPServer(HTTPServer):
-        allow_reuse_address = True
-
-    return ReusableHTTPServer((host, port), handler_cls)
+    return BoundedDashboardHTTPServer((host, port), handler_cls)
