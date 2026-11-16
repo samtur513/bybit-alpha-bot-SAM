@@ -675,7 +675,7 @@ class ThreeSystemComparativeDashboard:
         # Pull rich data from data_engine if available
         scanner_data = self.get_scanner_data()
         positions_data = self.get_positions_data()
-        journal_data = self.get_journal_data(limit=50)
+        journal_data = self.get_journal_data(limit=120)
         analytics_data = self.get_analytics_data()
         health_data = self.get_health_data()
 
@@ -1035,14 +1035,14 @@ class ThreeSystemComparativeDashboard:
     <div class="subtab-pane active" id="sub-nat-scan">
       <div class="funnel-grid">
         <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("native", {}).get("universe", 18)}</div><div class="funnel-lbl">Вселенная (Монет)</div></div>
-        <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("native", {}).get("evaluated", 18)}</div><div class="funnel-lbl">Оценено баров</div></div>
-        <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("native", {}).get("eligible", 0)}</div><div class="funnel-lbl">Прошли фильтры</div></div>
-        <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("native", {}).get("rejected", 0)}</div><div class="funnel-lbl">Отклонено фильтрами</div></div>
+        <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("native", {}).get("evaluated", 18)}</div><div class="funnel-lbl">Монет с обработанным баром</div></div>
+        <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("native", {}).get("eligible", 0)}</div><div class="funnel-lbl">Подтверждённые допуски</div></div>
+        <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("native", {}).get("rejected", 0)}</div><div class="funnel-lbl">Зафиксировано отказов</div></div>
         <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("native", {}).get("active_positions", 0)}</div><div class="funnel-lbl">Активных позиций</div></div>
       </div>
       <div class="filter-bar">
         <input type="text" class="search-input" id="search-nat-scan" placeholder="🔍 Поиск символа (BTC, SOL, ETH)..." onkeyup="filterTable('search-nat-scan', 'tbl-nat-scan')">
-        <span class="dim" style="font-size:12px;">Показаны все 18 инструментов постоянного пула v3.2</span>
+        <span class="dim" style="font-size:12px;">Наличие обработанного бара не доказывает сигнал. Непрошедшие, но не зарегистрированные фильтры показываются как NOT_RECORDED.</span>
       </div>
       <div class="table-responsive">
         <table id="tbl-nat-scan">
@@ -1084,10 +1084,13 @@ class ThreeSystemComparativeDashboard:
     <div class="subtab-pane" id="sub-sha-scan">
       <div class="funnel-grid">
         <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("shadow", {}).get("universe", 18)}</div><div class="funnel-lbl">Вселенная (Монет)</div></div>
-        <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("shadow", {}).get("evaluated", 18)}</div><div class="funnel-lbl">Оценено L2 стаканов</div></div>
-        <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("shadow", {}).get("eligible", 0)}</div><div class="funnel-lbl">Прошли фильтры</div></div>
-        <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("shadow", {}).get("rejected", 0)}</div><div class="funnel-lbl">Отклонено стаканом</div></div>
+        <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("shadow", {}).get("evaluated", 18)}</div><div class="funnel-lbl">Монет с обработанным баром</div></div>
+        <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("shadow", {}).get("eligible", 0)}</div><div class="funnel-lbl">Подтверждённые допуски</div></div>
+        <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("shadow", {}).get("rejected", 0)}</div><div class="funnel-lbl">Зафиксировано отказов</div></div>
         <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("shadow", {}).get("active_positions", 0)}</div><div class="funnel-lbl">Активных позиций</div></div>
+      </div>
+      <div class="banner">
+        <strong>Что означают нули:</strong> 18/18 означает подтверждённые обработанные бары, а не 18 успешных L2-входов. Ноль допусков и отказов означает отсутствие зарегистрированных торговых результатов, не доказательство отсутствия проверки.
       </div>
       <div class="filter-bar">
         <input type="text" class="search-input" id="search-sha-scan" placeholder="🔍 Поиск символа..." onkeyup="filterTable('search-sha-scan', 'tbl-sha-scan')">
@@ -1149,6 +1152,7 @@ class ThreeSystemComparativeDashboard:
               <th>Режим</th>
               <th>Сигнал</th>
               <th>Score (R2)</th>
+              <th>Дата решения (UTC)</th>
               <th>Целевой вес</th>
               <th>Допуск</th>
               <th>Статус решения</th>
@@ -1162,6 +1166,7 @@ class ThreeSystemComparativeDashboard:
               <td><span class="badge" style="background:#162030;color:#26a69a;">{esc(row.get("market_regime"))}</span></td>
               <td><strong>{esc(row.get("signal"))}</strong></td>
               <td><code>{esc(row.get("score"))}</code></td>
+              <td class="dim">{esc(row.get("event_at"))}</td>
               <td>{esc(row.get("target_weight"))}</td>
               <td>{fmt_status(row.get("eligible"))}</td>
               <td>{esc(row.get("decision"))}</td>
@@ -1314,9 +1319,15 @@ class ThreeSystemComparativeDashboard:
         <option value="CRYPTOLAB_R2">CryptoLab R2</option>
       </select>
       <input type="text" class="search-input" id="search-sym-journal" placeholder="🔍 Фильтр по символу (BTC, SOL)..." onkeyup="filterJournal()">
-      <span class="dim" style="font-size:12px;">Показано последних {len(journal_data.get("events", []))} событий из базы SQLite</span>
+      <span class="dim" style="font-size:12px;">Показано {len(journal_data.get("events", []))} подтверждённых событий из ограниченной выборки SQLite (не весь архив)</span>
     </div>
 
+    <div class="banner">
+      <strong>Что фиксируется:</strong> обработанные свечи Native и Shadow, зарегистрированные торговые события и суточное решение R2.
+      Обработка свечи не означает появление сигнала или сделки.
+      <strong>Последнее суточное решение R2:</strong> {esc(journal_data.get("r2_last_daily_decision_utc"))}.
+      <strong>Источники:</strong> {esc(journal_data.get("source_status"))}.
+    </div>
     ''' + (f'''<div class="empty-state">
       <div class="empty-icon">📜</div>
       <div class="empty-title">События пока не зарегистрированы</div>
@@ -1417,7 +1428,7 @@ class ThreeSystemComparativeDashboard:
   <!-- TAB 6: SYSTEM HEALTH -->
   <div class="tab-pane" id="tab-health">
     <div class="card" style="margin-bottom:16px;">
-      <h3 style="margin-top:0;font-size:16px;color:var(--accent-blue);">Статус 5 служб systemd (VPS 150.241.98.70)</h3>
+      <h3 style="margin-top:0;font-size:16px;color:var(--accent-blue);">Телеметрия и наблюдаемость пяти компонентов (статус systemd здесь не проверяется)</h3>
       <div class="table-responsive">
         <table>
           <thead>
@@ -1426,7 +1437,8 @@ class ThreeSystemComparativeDashboard:
               <th>Роль / Порт</th>
               <th>Телеметрия</th>
               <th>Возраст Heartbeat</th>
-              <th>Статус службы</th>
+              <th>Свежесть телеметрии</th>
+              <th>Состояние systemd</th>
             </tr>
           </thead>
           <tbody>
@@ -1435,6 +1447,7 @@ class ThreeSystemComparativeDashboard:
               <td>{esc(svc.get("role"))}</td>
               <td>{fmt_status("OK" if svc.get("telemetry_present") else "UNKNOWN")}</td>
               <td>{f"{svc.get('heartbeat_age_sec'):.1f}s" if svc.get('heartbeat_age_sec') is not None else "--"}</td>
+              <td>{fmt_status(svc.get("freshness", "NOT_RECORDED"))}</td>
               <td>{fmt_status(svc.get("status"))}</td>
             </tr>''' for svc in health_data.get("services", [])]) + f'''
           </tbody>
@@ -1443,7 +1456,26 @@ class ThreeSystemComparativeDashboard:
     </div>
 
     <div class="card" style="margin-bottom:16px;">
-      <h3 style="margin-top:0;font-size:16px;color:var(--accent-blue);">Целостность баз данных SQLite (WAL Checkpoints)</h3>
+      <h3 style="margin-top:0;font-size:16px;color:var(--accent-blue);">Фактический прогресс рыночных циклов</h3>
+      <div class="banner">Свежий heartbeat не доказывает получение свечей. Задержка означает отсутствие нового подтверждённого закрытого бара после ожидаемой границы (допуск 3 минуты). Для R2 ожидание суточного решения — около 24 часов.</div>
+      <div class="table-responsive">
+        <table>
+          <thead><tr><th>Система</th><th>Источник</th><th>Последний бар / решение (UTC)</th><th>Возраст наблюдения</th><th>Состояние цикла</th></tr></thead>
+          <tbody>
+            ''' + "".join([f'''<tr>
+              <td><strong>{esc(name.upper())}</strong></td>
+              <td>{esc(info.get("source"))}</td>
+              <td>{esc(info.get("last_observation_utc"))}</td>
+              <td>{f"{info.get('age_sec'):.0f} сек" if info.get('age_sec') is not None else "--"}</td>
+              <td>{fmt_status(info.get("status"))}</td>
+            </tr>''' for name, info in health_data.get("market_activity", {}).items()]) + f'''
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px;">
+      <h3 style="margin-top:0;font-size:16px;color:var(--accent-blue);">Доступность файлов SQLite и размер WAL (без проверки целостности/Checkpoint)</h3>
       <div class="table-responsive">
         <table>
           <thead>
@@ -1494,9 +1526,9 @@ class ThreeSystemComparativeDashboard:
             <tr>
               <td><code>R2-RESOURCE-LIMITS</code></td>
               <td>CryptoLab R2 Spot</td>
-              <td class="dim">2026-11-16 10:47:35Z (NRestarts: 1799)</td>
+              <td class="dim">2026-11-16 10:47:35Z (NRestarts на момент инцидента: 1799)</td>
               <td><code>READINESS_RESOURCE_LIMITS</code></td>
-              <td>Триггер: <code>TRIGGER_NOT_IDENTIFIED</code> (load > 0.8 / RAM &lt; 512MB). План: <code>docs/R2_RESOURCE_OBSERVABILITY_001.md</code>.</td>
+              <td>Триггер: <code>TRIGGER_NOT_IDENTIFIED</code>. CPU и RAM — лишь возможные пороги, реальная причина не доказана. План: <code>docs/R2_RESOURCE_OBSERVABILITY_001.md</code>.</td>
               <td><span class="badge" style="background:#ffa72622;color:#ffa726;">AUTO_RESTARTED</span></td>
             </tr>
           </tbody>
