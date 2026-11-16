@@ -1299,6 +1299,7 @@ class TradingControlCenterDataEngine:
         offset = min(max(0, int(offset)), 10000)
         eff_sys = system or system_filter
         eff_ev = event_type or event_type_filter
+        eff_sym = symbol
         now_iso = datetime.now(timezone.utc).isoformat()
         pool: List[Dict[str, Any]] = []
         source_diagnostics: Dict[str, str] = {}
