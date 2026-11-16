@@ -3,7 +3,7 @@
 # Usage: bash tools/deploy_dashboard_v1_final.sh <40-character-SHA>
 set -Eeuo pipefail
 REPO=/opt/bybit-shadow/bybit-alpha-bot-SAM
-BRANCH=fix/dashboard-v1-chatgpt-20261116
+BRANCH=fix/dashboard-activity-journal-health-20261116
 PY=/opt/bybit-bot/venv/bin/python
 SERVICE=bybit-shadow-dashboard.service
 SHA="${1:-}"

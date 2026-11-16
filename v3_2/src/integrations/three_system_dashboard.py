@@ -561,108 +561,162 @@ class ThreeSystemComparativeDashboard:
             },
         }
 
-    def _render_svg_equity_chart(self, series: List[Dict[str, Any]], width: int = 700, height: int = 200, color: str = "#64b5f6") -> str:
-        """Renders self-contained SVG equity line chart without external CDN libraries, splitting across observation gaps."""
-        if not series or len(series) < 2:
-            return f'''<svg width="100%" height="{height}" viewBox="0 0 {width} {height}" style="background:#121824;border-radius:6px;">
-                <rect width="100%" height="100%" fill="#121824"/>
-                <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#546e7a" font-size="12">
-                    AWAITING MULTI-POINT EQUITY HISTORY (Initial Capital $300.00)
-                </text>
-            </svg>'''
+    def _render_svg_equity_chart(
+        self, series: List[Dict[str, Any]], width: int = 700,
+        height: int = 200, color: str = "#64b5f6",
+    ) -> str:
+        """Chart actual UTC timestamps, never equally spaced sample indices.
 
-        equities = [float(p["equity"]) for p in series if p.get("equity") is not None]
-        if len(equities) < 2:
-            return ('<svg width="100%" height="200" viewBox="0 0 700 200">'
-                    '<text x="50%" y="50%" fill="#90a4ae" text-anchor="middle">'
-                    'UNVALUED_OR_STALE — AWAITING VERIFIED MTM</text></svg>')
-        min_eq = min(min(equities), 298.0)
-        max_eq = max(max(equities), 302.0)
-        rng = max_eq - min_eq if max_eq != min_eq else 1.0
+        An hourly model is sampled with normal scheduling jitter; an observation
+        gap only exists if time delta > 1.5 expected hours (5400 seconds).
+        Unknown valuations terminate a line; they are never replaced with $300.
+        No samples are invented to conceal a missing observation window.
+        """
+        from math import isfinite
 
-        pad_left = 55
-        pad_right = 20
-        pad_top = 20
-        pad_bottom = 25
-        pw = width - pad_left - pad_right
-        ph = height - pad_top - pad_bottom
+        def message(msg: str) -> str:
+            return (
+                f'<svg width="100%" height="{height}" viewBox="0 0 {width} {height}" '
+                'style="background:#121824;border-radius:6px;">'
+                f'<text x="50%" y="50%" text-anchor="middle" fill="#90a4ae" '
+                f'font-size="12">{html_lib.escape(msg)}</text></svg>'
+            )
 
-        def parse_iso(ts_str):
-            if not ts_str:
-                return None
+        observations = []
+        for item in series:
+            stamp = item.get("timestamp_utc")
             try:
-                clean_ts = str(ts_str).replace("Z", "+00:00")
-                return datetime.fromisoformat(clean_ts)
-            except Exception:
-                return None
-
-        n = len(series)
-        segments = []
-        current_seg = []
-        gap_intervals = []
-
-        for i, p in enumerate(series):
-            x = pad_left + (i / max(1, n - 1)) * pw
-            if p.get("equity") is None:
-                if current_seg:
-                    segments.append(current_seg)
-                current_seg = []
+                dt = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    continue
+                dt = dt.astimezone(timezone.utc)
+            except (TypeError, ValueError, OverflowError):
                 continue
-            eq = float(p["equity"])
-            y = pad_top + ph - ((eq - min_eq) / rng) * ph
-            pt_str = f"{x:.1f},{y:.1f}"
+            value = item.get("equity")
+            try:
+                equity = float(value) if value is not None else None
+                if equity is not None and not isfinite(equity):
+                    equity = None
+            except (TypeError, ValueError, OverflowError):
+                equity = None
+            observations.append((dt, equity))
 
-            if i > 0:
-                t_prev = parse_iso(series[i - 1].get("timestamp_utc"))
-                t_curr = parse_iso(p.get("timestamp_utc"))
-                if t_prev and t_curr:
-                    diff_sec = (t_curr - t_prev).total_seconds()
-                    if diff_sec > 3600:
-                        if current_seg:
-                            segments.append(current_seg)
-                        current_seg = []
-                        prev_x = pad_left + ((i - 1) / max(1, n - 1)) * pw
-                        gap_intervals.append((prev_x, x))
-            current_seg.append(pt_str)
+        observations.sort(key=lambda point: point[0])
+        confirmed = [v for _, v in observations if v is not None]
+        if len(confirmed) < 2:
+            state = "UNVALUED_OR_STALE — AWAITING VERIFIED MTM" if observations else "AWAITING UTC EQUITY DATA"
+            return message(state)
 
-        if current_seg:
-            segments.append(current_seg)
+        start_dt, end_dt = observations[0][0], observations[-1][0]
+        total_seconds = max((end_dt - start_dt).total_seconds(), 1.0)
+        min_eq, max_eq = min(confirmed), max(confirmed)
+        pad_y = max((max_eq - min_eq) * 0.08, 0.25)
+        low, high = min_eq - pad_y, max_eq + pad_y
+        range_eq = high - low
 
-        lines_svg = []
-        for seg in segments:
-            if len(seg) > 1:
-                lines_svg.append(f'<polyline fill="none" stroke="{color}" stroke-width="2" points="{" ".join(seg)}"/>')
-            elif len(seg) == 1:
-                px, py = seg[0].split(",")
-                lines_svg.append(f'<circle cx="{px}" cy="{py}" r="3" fill="{color}"/>')
+        left, right, top, bottom = 65, 22, 22, 34
+        plot_width = max(width - left - right, 1)
+        plot_height = max(height - top - bottom, 1)
 
-        gaps_svg = []
-        for gx1, gx2 in gap_intervals:
-            g_w = max(2.0, gx2 - gx1)
-            gaps_svg.append(f'''<rect x="{gx1:.1f}" y="{pad_top}" width="{g_w:.1f}" height="{ph}" fill="#ffa72611" stroke="#ffa72644" stroke-dasharray="2,2"/>
-            <text x="{(gx1+gx2)/2:.1f}" y="{pad_top+14}" text-anchor="middle" fill="#ffa726" font-size="9">GAP</text>''')
+        def x_at(dt: datetime) -> float:
+            return left + ((dt - start_dt).total_seconds() / total_seconds) * plot_width
 
-        base_300_y = pad_top + ph - ((300.0 - min_eq) / rng) * ph
-        last_pt = segments[-1][-1].split(",") if segments and segments[-1] else (f"{width-pad_right}", f"{pad_top+ph/2}")
+        def y_at(value: float) -> float:
+            return top + plot_height - ((value - low) / range_eq) * plot_height
 
-        return f'''<svg width="100%" height="{height}" viewBox="0 0 {width} {height}" style="background:#121824;border-radius:6px;">
-            <!-- Grid Lines -->
-            <line x1="{pad_left}" y1="{pad_top}" x2="{width-pad_right}" y2="{pad_top}" stroke="#1f2a3a" stroke-dasharray="3,3"/>
-            <line x1="{pad_left}" y1="{base_300_y:.1f}" x2="{width-pad_right}" y2="{base_300_y:.1f}" stroke="#2c3e55" stroke-dasharray="4,4"/>
-            <line x1="{pad_left}" y1="{pad_top+ph}" x2="{width-pad_right}" y2="{pad_top+ph}" stroke="#1f2a3a"/>
-            <!-- Labels -->
-            <text x="{pad_left-6}" y="{pad_top+4}" text-anchor="end" fill="#78909c" font-size="10">${max_eq:.1f}</text>
-            <text x="{pad_left-6}" y="{base_300_y+3:.1f}" text-anchor="end" fill="#64b5f6" font-size="10">$300.0</text>
-            <text x="{pad_left-6}" y="{pad_top+ph+3}" text-anchor="end" fill="#78909c" font-size="10">${min_eq:.1f}</text>
-            <!-- Baseline -->
-            <line x1="{pad_left}" y1="{base_300_y:.1f}" x2="{width-pad_right}" y2="{base_300_y:.1f}" stroke="#37474f" stroke-width="1"/>
-            <!-- Gaps -->
-            {" ".join(gaps_svg)}
-            <!-- Lines -->
-            {" ".join(lines_svg)}
-            <!-- Last point circle -->
-            <circle cx="{last_pt[0]}" cy="{last_pt[1]}" r="4" fill="{color}"/>
-        </svg>'''
+        pieces = [
+            f'<svg width="100%" height="{height}" viewBox="0 0 {width} {height}" '
+            'style="background:#121824;border-radius:6px;" role="img" '
+            'aria-label="Observed equity in USD by actual UTC time">',
+            f'<line x1="{left}" y1="{top}" x2="{left}" y2="{top+plot_height}" stroke="#37474f"/>',
+            f'<line x1="{left}" y1="{top+plot_height}" x2="{width-right}" '
+            f'y2="{top+plot_height}" stroke="#37474f"/>',
+            f'<text x="{left-7}" y="{top+4}" text-anchor="end" '
+            f'fill="#90a4ae" font-size="10">{high:.2f}</text>',
+            f'<text x="{left-7}" y="{top+plot_height}" text-anchor="end" '
+            f'fill="#90a4ae" font-size="10">{low:.2f}</text>',
+        ]
+
+        # UTC time axis; actual time spacing rather than one equal slot per sample.
+        for fraction in (0.0, 0.25, 0.5, 0.75, 1.0):
+            dt = start_dt + (end_dt - start_dt) * fraction
+            tick_x = left + plot_width * fraction
+            tick_text = dt.strftime("%d.%m %H:%M") if start_dt.date() != end_dt.date() else dt.strftime("%H:%M")
+            pieces.append(
+                f'<line x1="{tick_x:.1f}" y1="{top+plot_height}" x2="{tick_x:.1f}" '
+                f'y2="{top+plot_height+5}" stroke="#546e7a"/>'
+                f'<text x="{tick_x:.1f}" y="{height-10}" text-anchor="middle" '
+                f'fill="#90a4ae" font-size="9">{tick_text}</text>'
+            )
+        pieces.append(
+            f'<text x="{width-right}" y="{top+11}" text-anchor="end" '
+            'fill="#78909c" font-size="10">UTC / USD</text>'
+        )
+
+        # A one-hour periodic observer normally jitters by seconds or minutes.
+        # Do not label a 3603s or 3656s interval as downtime.
+        gap_threshold_sec = 5400.0
+        gap_count = 0
+        active = []
+        segments = []
+        previous = None
+        last_dot = None
+        for dt, equity in observations:
+            if equity is None:
+                if active:
+                    segments.append(active)
+                active = []
+                previous = None
+                continue
+
+            if previous is not None:
+                delta = (dt - previous).total_seconds()
+                if delta > gap_threshold_sec:
+                    if active:
+                        segments.append(active)
+                    active = []
+                    gap_count += 1
+                    x1 = x_at(previous)
+                    x2 = x_at(dt)
+                    span_x = max(x2 - x1, 1.0)
+                    minutes = int(delta // 60)
+                    duration_text = f"{minutes//60}h {minutes%60:02d}m"
+                    pieces.append(
+                        f'<rect data-gap="{gap_count}" x="{x1:.1f}" y="{top}" '
+                        f'width="{span_x:.1f}" height="{plot_height}" '
+                        'fill="#ffa72611" stroke="#ffa72644" stroke-dasharray="2,2"/>'
+                    )
+                    pieces.append(
+                        f'<text x="{(x1+x2)/2:.1f}" y="{top+15}" '
+                        f'text-anchor="middle" fill="#ffa726" font-size="10">'
+                        f'GAP {duration_text}</text>'
+                    )
+            xval, yval = x_at(dt), y_at(equity)
+            active.append(f"{xval:.1f},{yval:.1f}")
+            last_dot = (xval, yval)
+            previous = dt
+
+        if active:
+            segments.append(active)
+        for segment in segments:
+            if len(segment) > 1:
+                pieces.append(
+                    f'<polyline fill="none" stroke="{color}" stroke-width="2" '
+                    f'points="{" ".join(segment)}"/>'
+                )
+            elif segment:
+                xval, yval = segment[0].split(",")
+                pieces.append(f'<circle cx="{xval}" cy="{yval}" r="2.5" fill="{color}"/>')
+        if last_dot is not None:
+            xval, yval = last_dot
+            pieces.append(f'<circle cx="{xval:.1f}" cy="{yval:.1f}" r="3.5" fill="{color}"/>')
+            last_equity = next(v for _, v in reversed(observations) if v is not None)
+            pieces.append(
+                f'<text x="{left+8}" y="{top+12}" fill="{color}" '
+                f'font-size="10">Last confirmed: {last_equity:.2f} USD</text>'
+            )
+        pieces.append('</svg>')
+        return "".join(pieces)
 
     def render_html_dashboard(self, report: Dict[str, Any]) -> str:
         """Renders the comprehensive Trading Control Center v1.0 responsive interface."""
@@ -675,7 +729,7 @@ class ThreeSystemComparativeDashboard:
         # Pull rich data from data_engine if available
         scanner_data = self.get_scanner_data()
         positions_data = self.get_positions_data()
-        journal_data = self.get_journal_data(limit=50)
+        journal_data = self.get_journal_data(limit=120)
         analytics_data = self.get_analytics_data()
         health_data = self.get_health_data()
 
@@ -712,6 +766,7 @@ class ThreeSystemComparativeDashboard:
                 "TELEMETRY_FRESH": "#00e676", "TELEMETRY_STALE": "#ffa726",
                 "PROCESS_CONFIRMED_RUNNING": "#00e676", "SERVICE_STATE_UNKNOWN": "#78909c",
                 "OK_POSITIONS": "#00e676", "OK_EMPTY": "#78909c", "DATA_SOURCE_ERROR": "#ff5252",
+                "CURRENT": "#00e676", "OBSERVATION_DELAYED": "#ffa726", "NOT_RECORDED": "#78909c",
                 "IN_TRADE": "#26a69a", "RECORDED_POSITION": "#26a69a", "RECORDED_SIGNAL": "#00e676",
                 "PROVEN_FILTER_REJECTION": "#ffa726", "NO_SIGNAL_RECORDED": "#78909c",
             }
@@ -1035,14 +1090,14 @@ class ThreeSystemComparativeDashboard:
     <div class="subtab-pane active" id="sub-nat-scan">
       <div class="funnel-grid">
         <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("native", {}).get("universe", 18)}</div><div class="funnel-lbl">Вселенная (Монет)</div></div>
-        <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("native", {}).get("evaluated", 18)}</div><div class="funnel-lbl">Оценено баров</div></div>
-        <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("native", {}).get("eligible", 0)}</div><div class="funnel-lbl">Прошли фильтры</div></div>
-        <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("native", {}).get("rejected", 0)}</div><div class="funnel-lbl">Отклонено фильтрами</div></div>
+        <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("native", {}).get("evaluated", 18)}</div><div class="funnel-lbl">Монет с обработанным баром</div></div>
+        <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("native", {}).get("eligible", 0)}</div><div class="funnel-lbl">Подтверждённые допуски</div></div>
+        <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("native", {}).get("rejected", 0)}</div><div class="funnel-lbl">Зафиксировано отказов</div></div>
         <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("native", {}).get("active_positions", 0)}</div><div class="funnel-lbl">Активных позиций</div></div>
       </div>
       <div class="filter-bar">
         <input type="text" class="search-input" id="search-nat-scan" placeholder="🔍 Поиск символа (BTC, SOL, ETH)..." onkeyup="filterTable('search-nat-scan', 'tbl-nat-scan')">
-        <span class="dim" style="font-size:12px;">Показаны все 18 инструментов постоянного пула v3.2</span>
+        <span class="dim" style="font-size:12px;">Наличие обработанного бара не доказывает сигнал. Непрошедшие, но не зарегистрированные фильтры показываются как NOT_RECORDED.</span>
       </div>
       <div class="table-responsive">
         <table id="tbl-nat-scan">
@@ -1084,10 +1139,13 @@ class ThreeSystemComparativeDashboard:
     <div class="subtab-pane" id="sub-sha-scan">
       <div class="funnel-grid">
         <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("shadow", {}).get("universe", 18)}</div><div class="funnel-lbl">Вселенная (Монет)</div></div>
-        <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("shadow", {}).get("evaluated", 18)}</div><div class="funnel-lbl">Оценено L2 стаканов</div></div>
-        <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("shadow", {}).get("eligible", 0)}</div><div class="funnel-lbl">Прошли фильтры</div></div>
-        <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("shadow", {}).get("rejected", 0)}</div><div class="funnel-lbl">Отклонено стаканом</div></div>
+        <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("shadow", {}).get("evaluated", 18)}</div><div class="funnel-lbl">Монет с обработанным баром</div></div>
+        <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("shadow", {}).get("eligible", 0)}</div><div class="funnel-lbl">Подтверждённые допуски</div></div>
+        <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("shadow", {}).get("rejected", 0)}</div><div class="funnel-lbl">Зафиксировано отказов</div></div>
         <div class="funnel-item"><div class="funnel-val">{scanner_data.get("funnel", {}).get("shadow", {}).get("active_positions", 0)}</div><div class="funnel-lbl">Активных позиций</div></div>
+      </div>
+      <div class="banner">
+        <strong>Что означают нули:</strong> 18/18 означает подтверждённые обработанные бары, а не 18 успешных L2-входов. Ноль допусков и отказов означает отсутствие зарегистрированных торговых результатов, не доказательство отсутствия проверки.
       </div>
       <div class="filter-bar">
         <input type="text" class="search-input" id="search-sha-scan" placeholder="🔍 Поиск символа..." onkeyup="filterTable('search-sha-scan', 'tbl-sha-scan')">
@@ -1146,12 +1204,14 @@ class ThreeSystemComparativeDashboard:
             <tr>
               <th>Символ</th>
               <th>Стратегия</th>
-              <th>Режим</th>
+              <th>Расписание</th>
               <th>Сигнал</th>
               <th>Score (R2)</th>
+              <th>Дата решения (UTC)</th>
               <th>Целевой вес</th>
               <th>Допуск</th>
               <th>Статус решения</th>
+              <th>Причина отказа (если записана)</th>
               <th>Тип оценки</th>
             </tr>
           </thead>
@@ -1159,12 +1219,14 @@ class ThreeSystemComparativeDashboard:
             ''' + "".join([f'''<tr>
               <td><strong>{esc(row.get("symbol"))}</strong></td>
               <td>{esc(row.get("strategy"))}</td>
-              <td><span class="badge" style="background:#162030;color:#26a69a;">{esc(row.get("market_regime"))}</span></td>
+              <td><span class="badge" style="background:#162030;color:#26a69a;">{esc(row.get("schedule_note"))}</span></td>
               <td><strong>{esc(row.get("signal"))}</strong></td>
               <td><code>{esc(row.get("score"))}</code></td>
+              <td class="dim">{esc(row.get("event_at"))}</td>
               <td>{esc(row.get("target_weight"))}</td>
               <td>{fmt_status(row.get("eligible"))}</td>
               <td>{esc(row.get("decision"))}</td>
+              <td>{esc(row.get("rejection_reason"))}</td>
               <td><span class="badge" style="background:#78909c22;color:#90a4ae;">{esc(row.get("fill_claim_badge"))}</span></td>
             </tr>''' for row in scanner_data.get("r2_scanner", [])]) + f'''
           </tbody>
@@ -1276,7 +1338,7 @@ class ThreeSystemComparativeDashboard:
       </div>''' if positions_data.get("r2", {}).get("status") == "DATA_SOURCE_ERROR" else (f'''<div class="empty-state">
         <div class="empty-icon">🪙</div>
         <div class="empty-title">Позиций Spot Cash пока нет</div>
-        <div class="empty-desc">Все три экспортируемых профиля (BASE, STRESS, T01) находятся в 100% Cash ($300.00 USDT). До первых рыночных целевых весов монеты не закупаются.</div>
+        <div class="empty-desc">В подтверждённом основном профиле R2 открытых монет нет. Состояния других профилей и актуальность котировок здесь не утверждаются.</div>
       </div>''' if not positions_data.get("r2_positions") else '''<div class="table-responsive">
         <table>
           <thead>
@@ -1314,9 +1376,15 @@ class ThreeSystemComparativeDashboard:
         <option value="CRYPTOLAB_R2">CryptoLab R2</option>
       </select>
       <input type="text" class="search-input" id="search-sym-journal" placeholder="🔍 Фильтр по символу (BTC, SOL)..." onkeyup="filterJournal()">
-      <span class="dim" style="font-size:12px;">Показано последних {len(journal_data.get("events", []))} событий из базы SQLite</span>
+      <span class="dim" style="font-size:12px;">Показано {len(journal_data.get("events", []))} подтверждённых событий из ограниченной выборки SQLite (не весь архив)</span>
     </div>
 
+    <div class="banner">
+      <strong>Что фиксируется:</strong> обработанные свечи Native и Shadow, зарегистрированные торговые события и суточное решение R2.
+      Обработка свечи не означает появление сигнала или сделки.
+      <strong>Последнее суточное решение R2:</strong> {esc(journal_data.get("r2_last_daily_decision_utc"))}.
+      <strong>Источники:</strong> {esc(journal_data.get("source_status"))}.
+    </div>
     ''' + (f'''<div class="empty-state">
       <div class="empty-icon">📜</div>
       <div class="empty-title">События пока не зарегистрированы</div>
@@ -1417,7 +1485,8 @@ class ThreeSystemComparativeDashboard:
   <!-- TAB 6: SYSTEM HEALTH -->
   <div class="tab-pane" id="tab-health">
     <div class="card" style="margin-bottom:16px;">
-      <h3 style="margin-top:0;font-size:16px;color:var(--accent-blue);">Статус 5 служб systemd (VPS 150.241.98.70)</h3>
+      <h3 style="margin-top:0;font-size:16px;color:var(--accent-blue);">Телеметрия четырёх компонентов (состояние systemd независимо не измеряется)</h3>
+      <div class="banner">Показаны возраст телеметрии и доступность источников; панель не вызывает systemctl и поэтому не удостоверяет состояние процессов. Для наблюдения задержки стратегии используйте отдельную таблицу закрытых баров ниже.</div>
       <div class="table-responsive">
         <table>
           <thead>
@@ -1426,7 +1495,8 @@ class ThreeSystemComparativeDashboard:
               <th>Роль / Порт</th>
               <th>Телеметрия</th>
               <th>Возраст Heartbeat</th>
-              <th>Статус службы</th>
+              <th>Свежесть телеметрии</th>
+              <th>Состояние systemd</th>
             </tr>
           </thead>
           <tbody>
@@ -1435,6 +1505,7 @@ class ThreeSystemComparativeDashboard:
               <td>{esc(svc.get("role"))}</td>
               <td>{fmt_status("OK" if svc.get("telemetry_present") else "UNKNOWN")}</td>
               <td>{f"{svc.get('heartbeat_age_sec'):.1f}s" if svc.get('heartbeat_age_sec') is not None else "--"}</td>
+              <td>{fmt_status(svc.get("freshness", "NOT_RECORDED"))}</td>
               <td>{fmt_status(svc.get("status"))}</td>
             </tr>''' for svc in health_data.get("services", [])]) + f'''
           </tbody>
@@ -1443,7 +1514,27 @@ class ThreeSystemComparativeDashboard:
     </div>
 
     <div class="card" style="margin-bottom:16px;">
-      <h3 style="margin-top:0;font-size:16px;color:var(--accent-blue);">Целостность баз данных SQLite (WAL Checkpoints)</h3>
+      <h3 style="margin-top:0;font-size:16px;color:var(--accent-blue);">Фактический прогресс рыночных циклов</h3>
+      <div class="dim" style="padding-bottom:8px;">Load average за 1/5/15 мин (не процент CPU): {esc(health_data.get("host_resources", {}).get("load_average", "NOT_AVAILABLE"))}. Время сервера: {esc(health_data.get("host_resources", {}).get("server_time_utc"))}.</div>
+      <div class="banner">Свежий heartbeat не доказывает получение свечей. Задержка означает отсутствие нового подтверждённого закрытого бара после ожидаемой границы (допуск 3 минуты). Для R2 ожидание суточного решения — около 24 часов.</div>
+      <div class="table-responsive">
+        <table>
+          <thead><tr><th>Система</th><th>Источник</th><th>Последний бар / решение (UTC)</th><th>Возраст наблюдения</th><th>Состояние цикла</th></tr></thead>
+          <tbody>
+            ''' + "".join([f'''<tr>
+              <td><strong>{esc(name.upper())}</strong></td>
+              <td>{esc(info.get("source"))}</td>
+              <td>{esc(info.get("last_observation_utc"))}</td>
+              <td>{f"{info.get('age_sec'):.0f} сек" if info.get('age_sec') is not None else "--"}</td>
+              <td>{fmt_status(info.get("status"))}</td>
+            </tr>''' for name, info in health_data.get("market_activity", {}).items()]) + f'''
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px;">
+      <h3 style="margin-top:0;font-size:16px;color:var(--accent-blue);">Доступность файлов SQLite и размер WAL (без проверки целостности/Checkpoint)</h3>
       <div class="table-responsive">
         <table>
           <thead>
@@ -1494,9 +1585,9 @@ class ThreeSystemComparativeDashboard:
             <tr>
               <td><code>R2-RESOURCE-LIMITS</code></td>
               <td>CryptoLab R2 Spot</td>
-              <td class="dim">2026-11-16 10:47:35Z (NRestarts: 1799)</td>
+              <td class="dim">2026-11-16 10:47:35Z (NRestarts на момент инцидента: 1799)</td>
               <td><code>READINESS_RESOURCE_LIMITS</code></td>
-              <td>Триггер: <code>TRIGGER_NOT_IDENTIFIED</code> (load > 0.8 / RAM &lt; 512MB). План: <code>docs/R2_RESOURCE_OBSERVABILITY_001.md</code>.</td>
+              <td>Триггер: <code>TRIGGER_NOT_IDENTIFIED</code>. CPU и RAM — лишь возможные пороги, реальная причина не доказана. План: <code>docs/R2_RESOURCE_OBSERVABILITY_001.md</code>.</td>
               <td><span class="badge" style="background:#ffa72622;color:#ffa726;">AUTO_RESTARTED</span></td>
             </tr>
           </tbody>
