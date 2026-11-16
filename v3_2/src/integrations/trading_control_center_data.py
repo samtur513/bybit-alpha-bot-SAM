@@ -35,6 +35,7 @@ Architectural Invariants:
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 import json
+import math
 import logging
 import os
 from pathlib import Path
@@ -1573,26 +1574,39 @@ class TradingControlCenterDataEngine:
                 for r in j_rows:
                     realized_eq = float(r["shadow_realized_equity"])
                     unreal_sum = 0.0
+                    priced = True
                     try:
                         st = json.loads(r["state_json"])
-                        port = st.get("shadow_portfolio", {})
-                        for p in port.get("positions", {}).values():
-                            if p.get("unrealized_pnl") is not None:
-                                unreal_sum += float(p["unrealized_pnl"])
-                            elif (p.get("current_mark") or p.get("mark_price")) and float(p.get("entry_price", 0)) > 0:
-                                m = float(p.get("current_mark") or p.get("mark_price"))
-                                ep = float(p["entry_price"])
-                                q = float(p.get("current_qty", 0))
-                                d = int(p.get("direction", 1))
-                                unreal_sum += d * (m - ep) * q
-                    except Exception:
-                        pass
-                    mtm_eq = realized_eq + unreal_sum
+                        positions = st["shadow_portfolio"]["positions"]
+                        if not isinstance(positions, dict):
+                            raise ValueError("invalid positions")
+                        for position in positions.values():
+                            if position.get("unrealized_pnl") is not None:
+                                value = float(position["unrealized_pnl"])
+                            else:
+                                mark_raw = position.get("current_mark")
+                                if mark_raw is None:
+                                    mark_raw = position.get("mark_price")
+                                if mark_raw is None:
+                                    raise ValueError("mark not recorded")
+                                mark = float(mark_raw)
+                                entry = float(position["entry_price"])
+                                qty = float(position["current_qty"])
+                                direction = int(position["direction"])
+                                if mark <= 0 or entry <= 0 or qty < 0 or direction not in (-1, 1):
+                                    raise ValueError("invalid price/position")
+                                value = direction * (mark - entry) * qty
+                            if not math.isfinite(value):
+                                raise ValueError("nonfinite PnL")
+                            unreal_sum += value
+                    except (TypeError, KeyError, ValueError, json.JSONDecodeError):
+                        priced = False
                     shadow_equity_series.append({
                         "timestamp_utc": format_utc_ts(r["saved_at_utc"]),
-                        "equity": round(mtm_eq, 4),
+                        "equity": round(realized_eq + unreal_sum, 4) if priced else None,
+                        "valuation_status": "FRESH" if priced else "UNVALUED_OR_STALE",
                         "realized_equity": round(realized_eq, 4),
-                        "unrealized_pnl": round(unreal_sum, 4),
+                        "unrealized_pnl": round(unreal_sum, 4) if priced else None,
                     })
             except Exception as e:
                 logger.debug(f"Failed to query shadow state journal for equity: {e}")
