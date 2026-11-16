@@ -17,10 +17,10 @@ BACKUP=""
 MODIFIED=0
 RESTARTED=0
 
-abort() { echo "BLOCKED: $*" >&2; exit 1; }
+abort() { echo "BLOCKED: $*" >&2; on_error 1; }
 cleanup() { [[ -z "$STAGE" || ! -d "$STAGE" ]] || rm -rf -- "$STAGE"; }
 on_error() {
-  local exitcode=$?
+  local exitcode=${1:-$?}
   trap - ERR
   if [[ "$MODIFIED" == "1" ]]; then
     echo "INSTALL_FAILED: restoring previous Dashboard files from $BACKUP" >&2
