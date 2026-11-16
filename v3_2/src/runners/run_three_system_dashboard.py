@@ -48,6 +48,11 @@ DEFAULT_HOST = "0.0.0.0"
 DEFAULT_NATIVE_FILE = REPO_ROOT / "reports" / "telemetry_native.json"
 DEFAULT_SHADOW_FILE = REPO_ROOT / "reports" / "telemetry_shadow.json"
 DEFAULT_R2_FILE = REPO_ROOT / "docs" / "integrations" / "r2_shadow" / "telemetry.json"
+DEFAULT_NATIVE_LEDGER = REPO_ROOT / "reports" / "v32_native_ledger.db"
+DEFAULT_SHADOW_LEDGER = REPO_ROOT / "reports" / "v32_shadow_ledger.db"
+DEFAULT_R2_LEDGER = Path("/opt/bybit-shadow/data/cryptolab/observer.sqlite")
+DEFAULT_NATIVE_STATE = REPO_ROOT / "reports" / "v32_native_state.json"
+DEFAULT_SHADOW_STATE = REPO_ROOT / "reports" / "v32_shadow_state.json"
 
 
 class FileBackedDashboardSupplier:
@@ -60,6 +65,11 @@ class FileBackedDashboardSupplier:
         r2_file: Path,
         cohort_id: str = CANONICAL_COHORT_ID,
         t0_utc: str = CANONICAL_T0_UTC,
+        native_ledger_path: Optional[Path] = None,
+        shadow_ledger_path: Optional[Path] = None,
+        r2_ledger_path: Optional[Path] = None,
+        native_state_path: Optional[Path] = None,
+        shadow_state_path: Optional[Path] = None,
     ):
         self.native_file = Path(native_file).resolve()
         self.shadow_file = Path(shadow_file).resolve()
@@ -67,11 +77,23 @@ class FileBackedDashboardSupplier:
         self.cohort_id = cohort_id
         self.t0_utc = t0_utc
         self.r2_consumer = R2TelemetryConsumer()
+        from v3_2.src.integrations.trading_control_center_data import TradingControlCenterDataEngine
+        self.data_engine = TradingControlCenterDataEngine(
+            native_telemetry_path=self.native_file,
+            shadow_telemetry_path=self.shadow_file,
+            r2_telemetry_path=self.r2_file,
+            native_ledger_path=native_ledger_path or DEFAULT_NATIVE_LEDGER,
+            shadow_ledger_path=shadow_ledger_path or DEFAULT_SHADOW_LEDGER,
+            r2_ledger_path=r2_ledger_path or DEFAULT_R2_LEDGER,
+            native_state_path=native_state_path or DEFAULT_NATIVE_STATE,
+            shadow_state_path=shadow_state_path or DEFAULT_SHADOW_STATE,
+        )
         self.dashboard_core = ThreeSystemComparativeDashboard(
             r2_consumer=self.r2_consumer,
             r2_telemetry_path=self.r2_file,
             expected_cohort_id=cohort_id,
             expected_t0_utc=t0_utc,
+            data_engine=self.data_engine,
         )
 
     def _read_json_file(self, path: Path) -> Optional[Dict[str, Any]]:
@@ -136,6 +158,11 @@ def main():
     parser.add_argument("--native-telemetry", type=str, default=str(DEFAULT_NATIVE_FILE), help="Native telemetry JSON path")
     parser.add_argument("--shadow-telemetry", type=str, default=str(DEFAULT_SHADOW_FILE), help="Shadow telemetry JSON path")
     parser.add_argument("--r2-telemetry", type=str, default=str(DEFAULT_R2_FILE), help="R2 telemetry JSON path")
+    parser.add_argument("--native-ledger", type=str, default=str(DEFAULT_NATIVE_LEDGER), help="Native SQLite ledger path")
+    parser.add_argument("--shadow-ledger", type=str, default=str(DEFAULT_SHADOW_LEDGER), help="Shadow SQLite ledger path")
+    parser.add_argument("--r2-ledger", type=str, default=str(DEFAULT_R2_LEDGER), help="R2 SQLite observer path")
+    parser.add_argument("--native-state", type=str, default=str(DEFAULT_NATIVE_STATE), help="Native state JSON path")
+    parser.add_argument("--shadow-state", type=str, default=str(DEFAULT_SHADOW_STATE), help="Shadow state JSON path")
     parser.add_argument("--cohort-id", type=str, default=CANONICAL_COHORT_ID, help="Canonical cohort ID")
     parser.add_argument("--t0-utc", type=str, default=CANONICAL_T0_UTC, help="Scheduled T0 UTC")
     parser.add_argument("--dry-run", action="store_true", help="Generate report once, verify and exit")
@@ -148,6 +175,11 @@ def main():
         r2_file=Path(args.r2_telemetry),
         cohort_id=args.cohort_id,
         t0_utc=args.t0_utc,
+        native_ledger_path=Path(args.native_ledger),
+        shadow_ledger_path=Path(args.shadow_ledger),
+        r2_ledger_path=Path(args.r2_ledger),
+        native_state_path=Path(args.native_state),
+        shadow_state_path=Path(args.shadow_state),
     )
 
     if args.dry_run:

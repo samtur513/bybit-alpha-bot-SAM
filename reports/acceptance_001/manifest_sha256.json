@@ -1,8 +1,8 @@
 {
   "v3_2/src/runners/run_native_paper.py": "ef21f8d9846732496af3dbabaa8c6e6f8fdd73ffd9bd18418f6a3a24b76437eb",
   "v3_2/src/runners/run_shadow_paper.py": "a858cf3b70321da981c86a8a226db22a67c3b89ffdb38be7f079ba853161fd94",
-  "v3_2/src/runners/run_three_system_dashboard.py": "6719a7f96ae78923ebf242b18b65ef1a2ffc6bdf82a2ab6a587d7387236b6feb",
-  "v3_2/src/integrations/three_system_dashboard.py": "d2b58ef6273a45e43c536c6dd8f9712b667f6b344d4c1999aed8c8ed2e88d488",
+  "v3_2/src/runners/run_three_system_dashboard.py": "028aea1d8e09828aa6b62725eb052a0def4d338c17bf374e1a5e1f7b4025d169",
+  "v3_2/src/integrations/three_system_dashboard.py": "6688c2aae5896d94aa7d5455253b04aa2672663e16a4e0a055ef83f1610089dd",
   "v3_2/src/integrations/r2_consumer.py": "ab4b7e0a75c7597db5f072809315f5fca30cfc922405b0732a9e83459ac03e82",
   "tools/deploy_shadow_fleet_services.py": "f84c3de9fe84597e908690b1f9491edaebd684b2f2f8d42b790fca502b63d1a7",
   "tools/init_cryptolab_vps.py": "e896f7208ecfc02baa5c5a4b04389f289eb8c30ff4abd5bb89ad92977240e733",
@@ -59,5 +59,9 @@
     }
   },
   "cryptolab_git_commit": "313a908782271a6e1fffaee83be7ea1a616337cb",
-  "vendor/cryptolab_r2/research/hunter001_dg001/r2_shadow/RECOVERY_PATCH.json": "2234249b75b38596c162fa8c528784fccc564a42d5f28c60733fc39530a194d4"
+  "vendor/cryptolab_r2/research/hunter001_dg001/r2_shadow/RECOVERY_PATCH.json": "2234249b75b38596c162fa8c528784fccc564a42d5f28c60733fc39530a194d4",
+  "v3_2/src/integrations/trading_control_center_data.py": "c93beec3de58751ad0e0b90602499cb0c4acb1a160e68c35a7581cb34e40c292",
+  "tests/test_dashboard_observability_001.py": "5ca8a1b3908d8312613952fff809726cedf9ad8590a759a0ce706099ade03fcb",
+  "DASHBOARD_OBSERVABILITY_001_DATA_MAP.md": "eb3bc8bf969bf201f72163d9fc98ea097faed24adc34040671de7b4732f979db",
+  "reports/acceptance_001/DASHBOARD_OBSERVABILITY_001_REPORT.md": "e65565def6aa3582c4036230f5ffcb4c1ad04164903a137930e6cc58ebb33da7"
 }
