@@ -710,6 +710,11 @@ class ThreeSystemComparativeDashboard:
         if last_dot is not None:
             xval, yval = last_dot
             pieces.append(f'<circle cx="{xval:.1f}" cy="{yval:.1f}" r="3.5" fill="{color}"/>')
+            last_equity = next(v for _, v in reversed(observations) if v is not None)
+            pieces.append(
+                f'<text x="{left+8}" y="{top+12}" fill="{color}" '
+                f'font-size="10">Last confirmed: {last_equity:.2f} USD</text>'
+            )
         pieces.append('</svg>')
         return "".join(pieces)
 
