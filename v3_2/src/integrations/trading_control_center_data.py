@@ -35,6 +35,7 @@ Architectural Invariants:
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 import json
+import math
 import logging
 import os
 from pathlib import Path
@@ -282,7 +283,7 @@ class TradingControlCenterDataEngine:
            (not self.native_state_path or not self.native_state_path.is_file()):
             return {}, "DATA_SOURCE_ERROR", "DB_AND_STATE_FILES_NOT_FOUND"
 
-        return {}, "OK", None
+        return {}, "DATA_SOURCE_ERROR", "NO_AUTHORITATIVE_STATE_RECORD"
 
     def _get_authoritative_shadow_state(self) -> Tuple[Dict[str, Any], str, Optional[str]]:
         """
@@ -326,7 +327,7 @@ class TradingControlCenterDataEngine:
            (not self.shadow_state_path or not self.shadow_state_path.is_file()):
             return {}, "DATA_SOURCE_ERROR", "DB_AND_STATE_FILES_NOT_FOUND"
 
-        return {}, "OK", None
+        return {}, "DATA_SOURCE_ERROR", "NO_AUTHORITATIVE_STATE_RECORD"
 
     def _get_r2_data(self) -> Tuple[Dict[str, Any], Dict[str, Any], str, Optional[str]]:
         """
@@ -355,82 +356,65 @@ class TradingControlCenterDataEngine:
             finally:
                 conn.close()
 
-        # If DB not available, use telemetry profile
-        if not account_dict and telemetry_dict:
-            for p in telemetry_dict.get("profiles", []):
-                if p.get("profile") == R2_PRIMARY_PROFILE:
-                    account_dict = {
-                        "cash": p.get("cash_usdt", 300.0),
-                        "qty": [
-                            p.get("quantities", {}).get("BTCUSDT", 0.0),
-                            p.get("quantities", {}).get("ETHUSDT", 0.0),
-                            p.get("quantities", {}).get("SOLUSDT", 0.0),
-                        ],
-                        "mdd": p.get("mdd_pct", 0.0) / 100.0 if p.get("mdd_pct") is not None else 0.0,
-                        "risk_breached": p.get("risk_breached", False),
-                    }
+        # Never fabricate a primary R2 account or a $300 current balance.
+        if not account_dict:
+            for profile in telemetry_dict.get("profiles", []):
+                if profile.get("profile") != R2_PRIMARY_PROFILE:
+                    continue
+                cash, quantities = profile.get("cash_usdt"), profile.get("quantities")
+                if cash is None or not isinstance(quantities, dict):
                     break
-
-        if not account_dict and not telemetry_dict:
-            if (not self.r2_ledger_path or not self.r2_ledger_path.is_file()) and \
-               (not self.r2_telemetry_path or not self.r2_telemetry_path.is_file()):
-                return {}, {}, "DATA_SOURCE_ERROR", "R2_DB_AND_TELEMETRY_NOT_FOUND"
-
+                if not all(sym in quantities for sym in R2_SYMBOLS_3):
+                    break
+                account_dict = {
+                    "cash": cash,
+                    "qty": [quantities[sym] for sym in R2_SYMBOLS_3],
+                    "risk_breached": profile.get("risk_breached"),
+                    "_source": "DEGRADED_TELEMETRY_ONLY",
+                    "_as_of_utc": telemetry_dict.get("heartbeat_at"),
+                }
+                return account_dict, telemetry_dict, "DEGRADED_SOURCE", "R2_PRIMARY_SQLITE_UNAVAILABLE"
+            return {}, telemetry_dict, "DATA_SOURCE_ERROR", "R2_PRIMARY_ACCOUNT_NOT_CONFIRMED"
         return account_dict, telemetry_dict, "OK", None
 
     def compute_accounting_reconciliation(
-        self,
-        system: str,
-        initial_equity: float,
-        current_realized: float,
+        self, system: str, initial_equity: float, current_realized: float,
         closed_trades: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
+        """Never self-certify accounting using MTM equity or a limited trade sample.
+
+        Full certification requires an independent cash/fill/fee/funding/position
+        reconciliation which this dashboard does not perform.
         """
-        Authoritative 4-state accounting machine:
-        - ACCOUNTING_NOT_YET_OBSERVED: 0 closed trades
-        - ACCOUNTING_PENDING_RECONCILIATION: trades exist but balance check not yet sealed
-        - ACCOUNTING_VERIFIED: penny-perfect mathematical reconciliation proven
-        - ACCOUNTING_FAILED: balance discrepancy detected
-        """
-        n_trades = len(closed_trades)
-        if n_trades == 0:
+        if not closed_trades:
             return {
                 "system": system,
                 "status": "ACCOUNTING_NOT_YET_OBSERVED",
                 "trades_count": 0,
-                "discrepancy_usdt": 0.0,
                 "reconciled": False,
-                "note": "Сделок ещё не зафиксировано. Бухгалтерская сверка ожидает первого закрытия позиции."
+                "discrepancy_usdt": None,
+                "note": "Закрытых сделок нет; торговый учёт ещё не сверен.",
             }
-        
-        sum_net = sum(float(t.get("net_pnl_usdt", t.get("net_pnl", 0.0)) or 0.0) for t in closed_trades)
-        expected_realized = initial_equity + sum_net
-        diff = abs(current_realized - expected_realized)
-        
-        if diff <= 0.05:
-            return {
-                "system": system,
-                "status": "ACCOUNTING_VERIFIED",
-                "trades_count": n_trades,
-                "sum_net_pnl_usdt": round(sum_net, 4),
-                "expected_realized_usdt": round(expected_realized, 4),
-                "actual_realized_usdt": round(current_realized, 4),
-                "discrepancy_usdt": round(diff, 4),
-                "reconciled": True,
-                "note": "Пенни-перфектная верификация: realized_equity = initial_equity + sum(net_pnl)."
-            }
-        else:
-            return {
-                "system": system,
-                "status": "ACCOUNTING_FAILED",
-                "trades_count": n_trades,
-                "sum_net_pnl_usdt": round(sum_net, 4),
-                "expected_realized_usdt": round(expected_realized, 4),
-                "actual_realized_usdt": round(current_realized, 4),
-                "discrepancy_usdt": round(diff, 4),
-                "reconciled": False,
-                "note": f"Расхождение баланса и закрытых сделок: ${diff:.4f} USDT."
-            }
+        amounts = []
+        for trade in closed_trades:
+            value = trade.get("net_pnl_usdt", trade.get("net_pnl"))
+            try:
+                number = float(value)
+                if not math.isfinite(number):
+                    raise ValueError("nonfinite pnl")
+                amounts.append(number)
+            except (TypeError, ValueError):
+                amounts = []
+                break
+        return {
+            "system": system,
+            "status": "ACCOUNTING_PENDING_RECONCILIATION",
+            "trades_count": len(closed_trades),
+            "recent_trades_net_pnl_usdt": round(sum(amounts), 4) if amounts else None,
+            "reconciled": False,
+            "discrepancy_usdt": None,
+            "note": "Нет независимой сверки cash/fills/fees/funding/positions. Последние сделки не равны всей истории.",
+        }
 
     # =========================================================================
     # TAB 2: SCANNER & COIN SELECTION
@@ -494,8 +478,8 @@ class TradingControlCenterDataEngine:
             bar_ts = int(native_bars.get(sym, 0) or native_last_bar_ts.get(sym, 0) or 0)
             bar_cnt = native_bar_counts.get(sym, 1 if bar_ts > 0 else 0)
             has_evaluated_bar = (bar_ts > 0 or bar_cnt > 0)
-            bar_utc = format_utc_ts(bar_ts) if bar_ts > 0 else "NOT_RECORDED"
-            candle_age = max(0, int(now_dt.timestamp() - (bar_ts / 1000.0))) if bar_ts > 0 else None
+            bar_utc = format_utc_ts(bar_ts + 3600000) if bar_ts > 0 else "NOT_RECORDED"
+            candle_age = max(0, int(now_dt.timestamp() - ((bar_ts + 3600000) / 1000.0))) if bar_ts > 0 else None
 
             pos = native_open_positions.get(sym) or native_range_positions.get(sym)
             missed = native_missed_map.get(sym)
@@ -643,7 +627,7 @@ class TradingControlCenterDataEngine:
             ev = shadow_events_map.get(sym)
             bar_cnt = shadow_dedup_counts.get(sym, 0)
             last_ts = shadow_dedup_last_ts.get(sym, 0)
-            candle_age = max(0, int(now_dt.timestamp() - (last_ts / 1000.0))) if last_ts > 0 else None
+            candle_age = max(0, int(now_dt.timestamp() - ((last_ts + 3600000) / 1000.0))) if last_ts > 0 else None
 
             if pos:
                 s_evaluated_cnt += 1
@@ -657,7 +641,7 @@ class TradingControlCenterDataEngine:
                     "source": "SHADOW_STATE (shadow_portfolio.positions)",
                     "strategy": "Realistic Shadow (Donchian 4h + L2 Orderbook)",
                     "bars_processed_after_t0": bar_cnt,
-                    "last_candle_utc": format_utc_ts(last_ts) if last_ts > 0 else "NOT_RECORDED",
+                    "last_candle_utc": format_utc_ts(last_ts + 3600000) if last_ts > 0 else "NOT_RECORDED",
                     "last_candle_msk": format_msk_ts(last_ts) if last_ts > 0 else "NOT_RECORDED",
                     "candle_age_sec": candle_age,
                     "market_regime": "IN_POSITION",
@@ -681,7 +665,7 @@ class TradingControlCenterDataEngine:
                     "source": "SHADOW_LEDGER (shadow_execution_events)",
                     "strategy": "Realistic Shadow (Donchian 4h + L2 Orderbook)",
                     "bars_processed_after_t0": bar_cnt,
-                    "last_candle_utc": format_utc_ts(last_ts) if last_ts > 0 else "NOT_RECORDED",
+                    "last_candle_utc": format_utc_ts(last_ts + 3600000) if last_ts > 0 else "NOT_RECORDED",
                     "last_candle_msk": format_msk_ts(last_ts) if last_ts > 0 else "NOT_RECORDED",
                     "candle_age_sec": candle_age,
                     "market_regime": "L2_EXECUTION_REJECTED",
@@ -812,7 +796,7 @@ class TradingControlCenterDataEngine:
                     r2_quantities = {k: float(v) for k, v in p.get("quantities", {}).items()}
                     break
 
-        r2_event_at = r2_telemetry.get("heartbeat_at") or r2_telemetry.get("generated_at") or "NOT_RECORDED"
+        r2_event_at = "NOT_RECORDED"  # Heartbeat is NOT a decision timestamp
 
         for sym in R2_SYMBOLS_3:
             qty = r2_quantities.get(sym, 0.0)
@@ -872,7 +856,7 @@ class TradingControlCenterDataEngine:
                 "signal": signal_str,
                 "score": f"{score:.4f}" if isinstance(score, (int, float)) else "NOT_AVAILABLE",
                 "eligible": eligible_str,
-                "target_weight": f"{weight*100:.1f}%" if isinstance(weight, (int, float)) else "0.0%",
+                "target_weight": f"{weight*100:.1f}%" if isinstance(weight, (int, float)) else "NOT_RECORDED",
                 "rejection_reason": rejection_reason,
                 "decision": decision,
                 "confidence_status": confidence,
@@ -1590,26 +1574,39 @@ class TradingControlCenterDataEngine:
                 for r in j_rows:
                     realized_eq = float(r["shadow_realized_equity"])
                     unreal_sum = 0.0
+                    priced = True
                     try:
                         st = json.loads(r["state_json"])
-                        port = st.get("shadow_portfolio", {})
-                        for p in port.get("positions", {}).values():
-                            if p.get("unrealized_pnl") is not None:
-                                unreal_sum += float(p["unrealized_pnl"])
-                            elif (p.get("current_mark") or p.get("mark_price")) and float(p.get("entry_price", 0)) > 0:
-                                m = float(p.get("current_mark") or p.get("mark_price"))
-                                ep = float(p["entry_price"])
-                                q = float(p.get("current_qty", 0))
-                                d = int(p.get("direction", 1))
-                                unreal_sum += d * (m - ep) * q
-                    except Exception:
-                        pass
-                    mtm_eq = realized_eq + unreal_sum
+                        positions = st["shadow_portfolio"]["positions"]
+                        if not isinstance(positions, dict):
+                            raise ValueError("invalid positions")
+                        for position in positions.values():
+                            if position.get("unrealized_pnl") is not None:
+                                value = float(position["unrealized_pnl"])
+                            else:
+                                mark_raw = position.get("current_mark")
+                                if mark_raw is None:
+                                    mark_raw = position.get("mark_price")
+                                if mark_raw is None:
+                                    raise ValueError("mark not recorded")
+                                mark = float(mark_raw)
+                                entry = float(position["entry_price"])
+                                qty = float(position["current_qty"])
+                                direction = int(position["direction"])
+                                if mark <= 0 or entry <= 0 or qty < 0 or direction not in (-1, 1):
+                                    raise ValueError("invalid price/position")
+                                value = direction * (mark - entry) * qty
+                            if not math.isfinite(value):
+                                raise ValueError("nonfinite PnL")
+                            unreal_sum += value
+                    except (TypeError, KeyError, ValueError, json.JSONDecodeError):
+                        priced = False
                     shadow_equity_series.append({
                         "timestamp_utc": format_utc_ts(r["saved_at_utc"]),
-                        "equity": round(mtm_eq, 4),
+                        "equity": round(realized_eq + unreal_sum, 4) if priced else None,
+                        "valuation_status": "FRESH" if priced else "UNVALUED_OR_STALE",
                         "realized_equity": round(realized_eq, 4),
-                        "unrealized_pnl": round(unreal_sum, 4),
+                        "unrealized_pnl": round(unreal_sum, 4) if priced else None,
                     })
             except Exception as e:
                 logger.debug(f"Failed to query shadow state journal for equity: {e}")
@@ -1689,7 +1686,7 @@ class TradingControlCenterDataEngine:
                         ):
                             r2_equity_series.append({
                                 "timestamp_utc": format_utc_ts(r["at"]),
-                                "equity": float(pld.get("mtm", 300.0)),
+                                "equity": float(pld["mtm"]),
                             })
                     except Exception:
                         pass
@@ -1706,7 +1703,7 @@ class TradingControlCenterDataEngine:
                     for h in p.get("equity_history", []):
                         r2_equity_series.append({
                             "timestamp_utc": format_utc_ts(h.get("at")),
-                            "equity": float(h.get("equity_usdt", 300.0)),
+                            "equity": float(h["equity_usdt"]),
                         })
                     break
 
@@ -1918,8 +1915,8 @@ class TradingControlCenterDataEngine:
                     "name": "bybit-shadow-dashboard.service",
                     "role": "Three-System Trading Control Center (Port 8085)",
                     "port": 8085,
-                    "status": "ACTIVE_RUNNING",
-                    "verification": "INDEPENDENT_HTTP_LISTENER",
+                    "status": "HTTP_HANDLER_RESPONDING",
+                    "verification": "CURRENT_HTTP_REQUEST_ONLY; SYSTEMD_STATE_UNKNOWN",
                     "public_access": "0.0.0.0:8085 (READ_ONLY)",
                 },
             ],
