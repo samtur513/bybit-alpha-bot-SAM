@@ -757,9 +757,15 @@ class TradingControlCenterDataEngine:
                 elif isinstance(v, (int, float)):
                     r2_signal_map[k] = {"score": float(v), "eligible": True}
 
+        r2_decision_time = "NOT_RECORDED"
         conn_r2 = self._ro_sqlite_connect(self.r2_ledger_path)
         if conn_r2:
             try:
+                decision_row = conn_r2.execute(
+                    "SELECT at FROM events WHERE kind='DECISION' ORDER BY at DESC LIMIT 1"
+                ).fetchone()
+                if decision_row:
+                    r2_decision_time = decision_row["at"]
                 rows = conn_r2.execute(
                     """SELECT at, payload FROM events
                        WHERE kind='SNAPSHOT' ORDER BY rowid DESC LIMIT 100;"""
@@ -796,7 +802,7 @@ class TradingControlCenterDataEngine:
                     r2_quantities = {k: float(v) for k, v in p.get("quantities", {}).items()}
                     break
 
-        r2_event_at = "NOT_RECORDED"  # Heartbeat is NOT a decision timestamp
+        r2_event_at = r2_decision_time  # SQLite decision, never the heartbeat
 
         for sym in R2_SYMBOLS_3:
             qty = r2_quantities.get(sym, 0.0)
