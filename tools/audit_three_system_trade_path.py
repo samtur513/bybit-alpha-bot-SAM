@@ -113,8 +113,8 @@ def unit_status(name, kind):
             argv=[v.decode("utf-8",errors="replace") for v in cmd if v]
         except OSError:
             continue
-        if kind in RUNNER_NAMES and any(RUNNER_NAMES[kind] in a for a in argv):
-            runners.append({"pid":i, "schedule_active_cli": "--schedule-active" in argv,
+        if kind in RUNNER_NAMES and any(RUNNER_NAMES[kind] in a for a in argv) and any("python" in a.lower() for a in argv[:1]):
+            runners.append({"pid":i, "schedule_active_cli": any("--schedule-active" in a for a in argv),
                             "t0_arg":next((argv[j+1] for j,a in enumerate(argv[:-1]) if a=="--t0-utc"),None),
                             "telemetry_file":next((argv[j+1] for j,a in enumerate(argv[:-1]) if a=="--telemetry-file"),None)})
     return {"active":values.get("ActiveState"),"pid":values.get("MainPID"),
@@ -282,6 +282,20 @@ def main():
             warnings.append(name.upper()+"_LESS_THAN_18_SYMBOLS_WITH_PERSISTED_CLOSED_BARS")
         elif not bars.get("publication_grace") and bars.get("symbols_caught_up",0)<18:
             warnings.append(name.upper()+"_HOUR_BAR_CATCHUP_LAG")
+    r2_t0 = result["ledgers"]["r2"].get("cohort_t0_utc")
+    for name in ("native","shadow"):
+        t=result["telemetry"][name]
+        t0=t.get("t0_utc")
+        if not t0 or t.get("file_age_sec") is None or t["file_age_sec"]>120:
+            continue
+        if r2_t0 and str(t0).replace("+00:00","Z") != str(r2_t0).replace("+00:00","Z"):
+            warnings.append(name.upper()+"_COHORT_T0_MISMATCH")
+        try:
+            when=dt.datetime.fromisoformat(str(t0).replace("Z","+00:00"))
+            if when.tzinfo is not None and when.timestamp()*1000>now_ms:
+                warnings.append(name.upper()+"_RUNTIME_T0_STILL_IN_FUTURE")
+        except ValueError:
+            warnings.append(name.upper()+"_INVALID_RUNTIME_T0")
     if result["ledgers"]["r2"].get("accounts")!=24:
         warnings.append("R2_24_ACCOUNTS_UNVERIFIED")
     result["findings"]=warnings
