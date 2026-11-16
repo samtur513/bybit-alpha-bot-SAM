@@ -91,7 +91,7 @@ class ThreeSystemComparativeDashboard:
         self.r2_telemetry_path = r2_telemetry_path
         self.expected_cohort_id = expected_cohort_id
         self.expected_t0_utc = expected_t0_utc
-        self.data_engine = data_engine
+        self.data_engine = data_engine or TradingControlCenterDataEngine()
 
     def get_scanner_data(self) -> Dict[str, Any]:
         if self.data_engine:
@@ -725,11 +725,15 @@ class ThreeSystemComparativeDashboard:
         sha_trades = analytics_data.get("shadow", {}).get("closed_trades", [])
         r2_trades = (analytics_data.get("r2") or analytics_data.get("r2_shadow") or {}).get("closed_trades", [])
 
-        acc_status_a = "OK" if len(nat_trades) > 0 else "ACCOUNTING_NOT_YET_OBSERVED"
-        acc_status_b = "OK" if len(sha_trades) > 0 else "ACCOUNTING_NOT_YET_OBSERVED"
-        acc_status_c = "OK" if len(r2_trades) > 0 else "ACCOUNTING_NOT_YET_OBSERVED"
+        engine = self.data_engine or TradingControlCenterDataEngine()
+        acc_a = engine.compute_accounting_reconciliation("NATIVE", 300.0, float(a.get("equity_usdt", 300.0) or 300.0), nat_trades)
+        acc_b = engine.compute_accounting_reconciliation("SHADOW", 300.0, float(b.get("equity_usdt", 300.0) or 300.0), sha_trades)
+        acc_c = engine.compute_accounting_reconciliation("CRYPTOLAB_R2", 300.0, float(c.get("equity_usdt", 300.0) or 300.0), r2_trades)
 
-        # HTML Assembly
+        acc_status_a = acc_a["status"]
+        acc_status_b = acc_b["status"]
+        acc_status_c = acc_c["status"]
+
         html_content = f'''<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -1036,9 +1040,11 @@ class ThreeSystemComparativeDashboard:
           <thead>
             <tr>
               <th>Символ</th>
+              <th>Свечей (T0+)</th>
+              <th>Последний бар (UTC)</th>
+              <th>Возраст свечи</th>
               <th>Источник</th>
               <th>Стратегия</th>
-              <th>Время события (UTC)</th>
               <th>Сигнал</th>
               <th>Допуск</th>
               <th>Причина отбора / отказа</th>
@@ -1049,13 +1055,15 @@ class ThreeSystemComparativeDashboard:
           <tbody>
             ''' + "".join([f'''<tr>
               <td><strong>{esc(row.get("symbol"))}</strong></td>
+              <td><strong>{row.get("bars_processed_after_t0", 0)}</strong></td>
+              <td class="dim">{esc(row.get("last_candle_utc", row.get("event_at")))}</td>
+              <td>{f"{row.get('candle_age_sec')}с" if row.get('candle_age_sec') is not None else "--"}</td>
               <td><span class="badge" style="background:#162030;color:#90a4ae;">{esc(row.get("source"))}</span></td>
               <td>{esc(row.get("strategy"))}</td>
-              <td class="dim">{esc(row.get("event_at"))}</td>
               <td><strong>{esc(row.get("signal"))}</strong></td>
               <td>{fmt_status(row.get("eligible"))}</td>
               <td>{esc(row.get("rejection_reason"))}</td>
-              <td><span class="badge" style="background:#162030;color:#64b5f6;">{esc(row.get("confidence_status"))}</span></td>
+              <td><span class="badge" style="background:{'#00e67622' if 'BAR_PROCESSED' in str(row.get('confidence_status')) else '#162030'};color:{'#00e676' if 'BAR_PROCESSED' in str(row.get('confidence_status')) else '#64b5f6'};">{esc(row.get("confidence_status"))}</span></td>
               <td><strong>{esc(row.get("decision"))}</strong></td>
             </tr>''' for row in scanner_data.get("native_scanner", [])]) + f'''
           </tbody>
@@ -1080,9 +1088,11 @@ class ThreeSystemComparativeDashboard:
           <thead>
             <tr>
               <th>Символ</th>
+              <th>Свечей (T0+)</th>
+              <th>Последний бар (UTC)</th>
+              <th>Возраст свечи</th>
               <th>Источник</th>
               <th>Стратегия</th>
-              <th>Время события (UTC)</th>
               <th>Сигнал</th>
               <th>Допуск</th>
               <th>Причина отбора / отказа</th>
@@ -1093,13 +1103,15 @@ class ThreeSystemComparativeDashboard:
           <tbody>
             ''' + "".join([f'''<tr>
               <td><strong>{esc(row.get("symbol"))}</strong></td>
+              <td><strong>{row.get("bars_processed_after_t0", 0)}</strong></td>
+              <td class="dim">{esc(row.get("last_candle_utc", row.get("event_at")))}</td>
+              <td>{f"{row.get('candle_age_sec')}с" if row.get('candle_age_sec') is not None else "--"}</td>
               <td><span class="badge" style="background:#162030;color:#ab47bc;">{esc(row.get("source"))}</span></td>
               <td>{esc(row.get("strategy"))}</td>
-              <td class="dim">{esc(row.get("event_at"))}</td>
               <td><strong>{esc(row.get("signal"))}</strong></td>
               <td>{fmt_status(row.get("eligible"))}</td>
               <td>{esc(row.get("rejection_reason"))}</td>
-              <td><span class="badge" style="background:#162030;color:#64b5f6;">{esc(row.get("confidence_status"))}</span></td>
+              <td><span class="badge" style="background:{'#00e67622' if 'BAR_PROCESSED' in str(row.get('confidence_status')) else '#162030'};color:{'#00e676' if 'BAR_PROCESSED' in str(row.get('confidence_status')) else '#64b5f6'};">{esc(row.get("confidence_status"))}</span></td>
               <td><strong>{esc(row.get("decision"))}</strong></td>
             </tr>''' for row in scanner_data.get("shadow_scanner", [])]) + f'''
           </tbody>
@@ -1421,7 +1433,7 @@ class ThreeSystemComparativeDashboard:
       </div>
     </div>
 
-    <div class="card">
+    <div class="card" style="margin-bottom:16px;">
       <h3 style="margin-top:0;font-size:16px;color:var(--accent-blue);">Целостность баз данных SQLite (WAL Checkpoints)</h3>
       <div class="table-responsive">
         <table>
@@ -1442,6 +1454,42 @@ class ThreeSystemComparativeDashboard:
               <td>{db_info.get("wal_size_kb", 0)} KB</td>
               <td><span class="badge" style="background:#00e67622;color:#00e676;">{db_info.get("status")}</span></td>
             </tr>''' for db_name, db_info in health_data.get("databases", {}).items()]) + f'''
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;font-size:16px;color:var(--accent-amber);">Зарегистрированные инциденты и исторический простой</h3>
+      <div class="table-responsive">
+        <table>
+          <thead>
+            <tr>
+              <th>Идентификатор</th>
+              <th>Система</th>
+              <th>Интервал / Время (UTC)</th>
+              <th>Тип ошибки</th>
+              <th>Детали расследования и план наблюдаемости</th>
+              <th>Статус</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>R2-RECOVERY-001</code></td>
+              <td>CryptoLab R2 Spot</td>
+              <td class="dim">2026-11-16 01:03:32Z — 09:20:00Z (~8.3ч)</td>
+              <td><code>READINESS_EXPIRED_OR_FUTURE</code></td>
+              <td>Устранено коммитом <code>46c28e36</code> (readiness window). T0 сохранён.</td>
+              <td><span class="badge" style="background:#00e67622;color:#00e676;">RECOVERED</span></td>
+            </tr>
+            <tr>
+              <td><code>R2-RESOURCE-LIMITS</code></td>
+              <td>CryptoLab R2 Spot</td>
+              <td class="dim">2026-11-16 10:47:35Z (NRestarts: 1799)</td>
+              <td><code>READINESS_RESOURCE_LIMITS</code></td>
+              <td>Триггер: <code>TRIGGER_NOT_IDENTIFIED</code> (load > 0.8 / RAM &lt; 512MB). План: <code>docs/R2_RESOURCE_OBSERVABILITY_001.md</code>.</td>
+              <td><span class="badge" style="background:#ffa72622;color:#ffa726;">AUTO_RESTARTED</span></td>
+            </tr>
           </tbody>
         </table>
       </div>

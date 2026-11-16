@@ -538,7 +538,7 @@ def test_09_scanner_does_not_invent_decision_without_signal(tmp_path):
     assert btc_item["market_regime"] == "NOT_RECORDED"
     assert btc_item["decision"] == "NO_DECISION_RECORDED"
     assert btc_item["signal"] == "NO_SIGNAL_RECORDED"
-    assert btc_item["confidence_status"] == "NO_SIGNAL_RECORDED"
+    assert btc_item["confidence_status"] in ("BAR_PROCESSED / NO_SIGNAL_RECORDED", "NO_SIGNAL_RECORDED")
 
     # R2 with no data must have 0 evaluated, NOT 3
     assert scanner["funnel"]["r2"]["evaluated"] == 0

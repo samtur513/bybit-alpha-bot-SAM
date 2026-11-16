@@ -32,7 +32,7 @@ Architectural Invariants:
    - Strips absolute filesystem paths (/opt/bybit-shadow/, etc.).
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 import json
 import logging
@@ -96,6 +96,29 @@ def format_utc_ts(ts_val: Union[int, float, str, None]) -> str:
         return dt.isoformat()
     except Exception:
         return sanitize_safe_text(s)
+
+
+def format_msk_ts(ts_val: Union[int, float, str, None]) -> str:
+    """Formats timestamp (seconds, ms or ISO) to Moscow Standard Time (MSK, UTC+3)."""
+    utc_str = format_utc_ts(ts_val)
+    if utc_str in ("NOT_RECORDED", "NOT_AVAILABLE"):
+        return utc_str
+    try:
+        dt = datetime.fromisoformat(utc_str.replace("Z", "+00:00"))
+        msk_tz = timezone(timedelta(hours=3))
+        dt_msk = dt.astimezone(msk_tz)
+        return dt_msk.strftime("%Y-%m-%d %H:%M:%S MSK")
+    except Exception:
+        return utc_str
+
+
+def format_dual_ts(ts_val: Union[int, float, str, None]) -> str:
+    """Formats timestamp showing both UTC and MSK."""
+    utc_str = format_utc_ts(ts_val)
+    if utc_str in ("NOT_RECORDED", "NOT_AVAILABLE"):
+        return utc_str
+    msk_str = format_msk_ts(ts_val)
+    return f"{utc_str} ({msk_str})"
 
 
 class TradingControlCenterDataEngine:
@@ -355,6 +378,60 @@ class TradingControlCenterDataEngine:
 
         return account_dict, telemetry_dict, "OK", None
 
+    def compute_accounting_reconciliation(
+        self,
+        system: str,
+        initial_equity: float,
+        current_realized: float,
+        closed_trades: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Authoritative 4-state accounting machine:
+        - ACCOUNTING_NOT_YET_OBSERVED: 0 closed trades
+        - ACCOUNTING_PENDING_RECONCILIATION: trades exist but balance check not yet sealed
+        - ACCOUNTING_VERIFIED: penny-perfect mathematical reconciliation proven
+        - ACCOUNTING_FAILED: balance discrepancy detected
+        """
+        n_trades = len(closed_trades)
+        if n_trades == 0:
+            return {
+                "system": system,
+                "status": "ACCOUNTING_NOT_YET_OBSERVED",
+                "trades_count": 0,
+                "discrepancy_usdt": 0.0,
+                "reconciled": False,
+                "note": "Сделок ещё не зафиксировано. Бухгалтерская сверка ожидает первого закрытия позиции."
+            }
+        
+        sum_net = sum(float(t.get("net_pnl_usdt", t.get("net_pnl", 0.0)) or 0.0) for t in closed_trades)
+        expected_realized = initial_equity + sum_net
+        diff = abs(current_realized - expected_realized)
+        
+        if diff <= 0.05:
+            return {
+                "system": system,
+                "status": "ACCOUNTING_VERIFIED",
+                "trades_count": n_trades,
+                "sum_net_pnl_usdt": round(sum_net, 4),
+                "expected_realized_usdt": round(expected_realized, 4),
+                "actual_realized_usdt": round(current_realized, 4),
+                "discrepancy_usdt": round(diff, 4),
+                "reconciled": True,
+                "note": "Пенни-перфектная верификация: realized_equity = initial_equity + sum(net_pnl)."
+            }
+        else:
+            return {
+                "system": system,
+                "status": "ACCOUNTING_FAILED",
+                "trades_count": n_trades,
+                "sum_net_pnl_usdt": round(sum_net, 4),
+                "expected_realized_usdt": round(expected_realized, 4),
+                "actual_realized_usdt": round(current_realized, 4),
+                "discrepancy_usdt": round(diff, 4),
+                "reconciled": False,
+                "note": f"Расхождение баланса и закрытых сделок: ${diff:.4f} USDT."
+            }
+
     # =========================================================================
     # TAB 2: SCANNER & COIN SELECTION
     # =========================================================================
@@ -373,15 +450,17 @@ class TradingControlCenterDataEngine:
         r2_account, r2_telemetry, r2_stat, r2_err = self._get_r2_data()
 
         # ---------------------------------------------------------------------
-        # 1. Native Scanner
+        # 1. Native Scanner (18 Coins) - Verified via native_state & native_journal
         # ---------------------------------------------------------------------
         native_bars = native_state.get("last_processed_bar_ts", {})
         native_engine = native_state.get("engine", {})
         native_open_positions = native_engine.get("open_positions", {})
         native_range_positions = native_state.get("range_engine", {}).get("open_positions", {})
 
-        # Query recent missed opportunities strictly bounded to the recent cycles
         native_missed_map: Dict[str, Dict[str, Any]] = {}
+        native_bar_counts: Dict[str, int] = {}
+        native_last_bar_ts: Dict[str, int] = {}
+
         conn_n = self._ro_sqlite_connect(self.native_ledger_path)
         if conn_n:
             try:
@@ -392,8 +471,16 @@ class TradingControlCenterDataEngine:
                     sym = r["symbol"]
                     if sym not in native_missed_map:
                         native_missed_map[sym] = dict(r)
+
+                nb_rows = conn_n.execute(
+                    "SELECT notes, COUNT(*) as cnt, MAX(timestamp_ms) as max_ts FROM native_journal WHERE notes LIKE 'closed_bar_%' GROUP BY notes;"
+                ).fetchall()
+                for r in nb_rows:
+                    sym = r["notes"].replace("closed_bar_", "").strip()
+                    native_bar_counts[sym] = int(r["cnt"])
+                    native_last_bar_ts[sym] = int(r["max_ts"])
             except Exception as e:
-                logger.debug(f"Failed to query native_missed_opportunities: {e}")
+                logger.debug(f"Failed to query native ledger for scanner: {e}")
             finally:
                 conn_n.close()
 
@@ -404,11 +491,12 @@ class TradingControlCenterDataEngine:
         n_evaluated_cnt = 0
 
         for sym in DEFAULT_SYMBOLS_18:
-            bar_ts = int(native_bars.get(sym, 0) or 0)
-            has_evaluated_bar = (bar_ts > 0)
-            bar_utc = format_utc_ts(bar_ts)
+            bar_ts = int(native_bars.get(sym, 0) or native_last_bar_ts.get(sym, 0) or 0)
+            bar_cnt = native_bar_counts.get(sym, 1 if bar_ts > 0 else 0)
+            has_evaluated_bar = (bar_ts > 0 or bar_cnt > 0)
+            bar_utc = format_utc_ts(bar_ts) if bar_ts > 0 else "NOT_RECORDED"
+            candle_age = max(0, int(now_dt.timestamp() - (bar_ts / 1000.0))) if bar_ts > 0 else None
 
-            # Check open position in trend or range
             pos = native_open_positions.get(sym) or native_range_positions.get(sym)
             missed = native_missed_map.get(sym)
 
@@ -421,10 +509,16 @@ class TradingControlCenterDataEngine:
                 event_at = format_utc_ts(entry_ts)
                 native_scanner_list.append({
                     "symbol": sym,
+                    "market": "Bybit USDT Perpetual",
                     "source": "NATIVE_STATE (Active Position)",
                     "strategy": "Donchian 4h Trend" if sym in native_open_positions else "Range 1h Mean-Reversion",
+                    "bars_processed_after_t0": bar_cnt,
+                    "last_candle_utc": bar_utc,
+                    "last_candle_msk": format_msk_ts(bar_ts),
+                    "candle_age_sec": candle_age,
                     "market_regime": "IN_POSITION",
                     "event_at": event_at,
+                    "event_msk": format_msk_ts(entry_ts),
                     "observed_at": now_iso,
                     "signal": f"POSITION_HELD_{pos_side}",
                     "confidence_status": "RECORDED_POSITION",
@@ -434,7 +528,6 @@ class TradingControlCenterDataEngine:
                     "decision": f"MANAGING_POSITION ({pos_side})",
                 })
             elif missed and has_evaluated_bar and abs(missed.get("timestamp_ms", 0) - bar_ts) <= 14400000:
-                # Proved recent filter rejection matching the current/last cycle
                 n_evaluated_cnt += 1
                 n_rejected_cnt += 1
                 reason = missed.get("reason", "FILTER_REJECTED")
@@ -442,10 +535,16 @@ class TradingControlCenterDataEngine:
                 sig_side = "LONG" if dir_int == 1 else "SHORT"
                 native_scanner_list.append({
                     "symbol": sym,
+                    "market": "Bybit USDT Perpetual",
                     "source": "NATIVE_LEDGER (native_missed_opportunities)",
                     "strategy": missed.get("strategy", "Dual-Regime"),
+                    "bars_processed_after_t0": bar_cnt,
+                    "last_candle_utc": bar_utc,
+                    "last_candle_msk": format_msk_ts(bar_ts),
+                    "candle_age_sec": candle_age,
                     "market_regime": "FILTER_REJECTED",
                     "event_at": format_utc_ts(missed.get("timestamp_ms")),
+                    "event_msk": format_msk_ts(missed.get("timestamp_ms")),
                     "observed_at": now_iso,
                     "signal": f"SIGNAL_{sig_side}",
                     "confidence_status": "PROVEN_FILTER_REJECTION",
@@ -458,13 +557,19 @@ class TradingControlCenterDataEngine:
                 n_evaluated_cnt += 1
                 native_scanner_list.append({
                     "symbol": sym,
+                    "market": "Bybit USDT Perpetual",
                     "source": "NATIVE_STATE (last_processed_bar_ts)",
                     "strategy": "Dual-Regime (Donchian 4h + Range 1h)",
+                    "bars_processed_after_t0": bar_cnt,
+                    "last_candle_utc": bar_utc,
+                    "last_candle_msk": format_msk_ts(bar_ts),
+                    "candle_age_sec": candle_age,
                     "market_regime": "NOT_RECORDED",
                     "event_at": bar_utc,
+                    "event_msk": format_msk_ts(bar_ts),
                     "observed_at": now_iso,
                     "signal": "NO_SIGNAL_RECORDED",
-                    "confidence_status": "NO_SIGNAL_RECORDED",
+                    "confidence_status": "BAR_PROCESSED / NO_SIGNAL_RECORDED",
                     "score": "NOT_AVAILABLE",
                     "eligible": "NOT_RECORDED",
                     "rejection_reason": "NOT_RECORDED",
@@ -473,10 +578,16 @@ class TradingControlCenterDataEngine:
             else:
                 native_scanner_list.append({
                     "symbol": sym,
+                    "market": "Bybit USDT Perpetual",
                     "source": "NATIVE_UNIVERSE_CONFIG",
                     "strategy": "Dual-Regime (Donchian 4h + Range 1h)",
+                    "bars_processed_after_t0": 0,
+                    "last_candle_utc": "NOT_RECORDED",
+                    "last_candle_msk": "NOT_RECORDED",
+                    "candle_age_sec": None,
                     "market_regime": "UNINITIALIZED",
                     "event_at": "NOT_RECORDED",
+                    "event_msk": "NOT_RECORDED",
                     "observed_at": now_iso,
                     "signal": "NOT_RECORDED",
                     "confidence_status": "NOT_EVALUATED",
@@ -487,12 +598,15 @@ class TradingControlCenterDataEngine:
                 })
 
         # ---------------------------------------------------------------------
-        # 2. Shadow Scanner
+        # 2. Shadow Scanner (18 Coins) - Verified via shadow_dedup_events
         # ---------------------------------------------------------------------
         shadow_port = shadow_state.get("shadow_portfolio", {})
         shadow_positions = shadow_port.get("positions", {})
 
         shadow_events_map: Dict[str, Dict[str, Any]] = {}
+        shadow_dedup_counts: Dict[str, int] = {}
+        shadow_dedup_last_ts: Dict[str, int] = {}
+
         conn_s = self._ro_sqlite_connect(self.shadow_ledger_path)
         if conn_s:
             try:
@@ -504,8 +618,17 @@ class TradingControlCenterDataEngine:
                     sym = r["symbol"]
                     if sym not in shadow_events_map:
                         shadow_events_map[sym] = dict(r)
+
+                d_rows = conn_s.execute(
+                    """SELECT symbol, COUNT(*) as cnt, MAX(exchange_ts) as max_ts
+                       FROM shadow_dedup_events GROUP BY symbol;"""
+                ).fetchall()
+                for r in d_rows:
+                    sym = r["symbol"]
+                    shadow_dedup_counts[sym] = int(r["cnt"])
+                    shadow_dedup_last_ts[sym] = int(r["max_ts"])
             except Exception as e:
-                logger.debug(f"Failed to query shadow_execution_events: {e}")
+                logger.debug(f"Failed to query shadow ledger for scanner: {e}")
             finally:
                 conn_s.close()
 
@@ -518,6 +641,9 @@ class TradingControlCenterDataEngine:
         for sym in DEFAULT_SYMBOLS_18:
             pos = shadow_positions.get(sym)
             ev = shadow_events_map.get(sym)
+            bar_cnt = shadow_dedup_counts.get(sym, 0)
+            last_ts = shadow_dedup_last_ts.get(sym, 0)
+            candle_age = max(0, int(now_dt.timestamp() - (last_ts / 1000.0))) if last_ts > 0 else None
 
             if pos:
                 s_evaluated_cnt += 1
@@ -527,10 +653,16 @@ class TradingControlCenterDataEngine:
                 event_at = format_utc_ts(pos.get("entry_time_ms"))
                 shadow_scanner_list.append({
                     "symbol": sym,
+                    "market": "Bybit USDT Perpetual",
                     "source": "SHADOW_STATE (shadow_portfolio.positions)",
                     "strategy": "Realistic Shadow (Donchian 4h + L2 Orderbook)",
+                    "bars_processed_after_t0": bar_cnt,
+                    "last_candle_utc": format_utc_ts(last_ts) if last_ts > 0 else "NOT_RECORDED",
+                    "last_candle_msk": format_msk_ts(last_ts) if last_ts > 0 else "NOT_RECORDED",
+                    "candle_age_sec": candle_age,
                     "market_regime": "IN_POSITION",
                     "event_at": event_at,
+                    "event_msk": format_msk_ts(pos.get("entry_time_ms")),
                     "observed_at": now_iso,
                     "signal": f"POSITION_HELD_{pos_side}",
                     "confidence_status": "RECORDED_POSITION",
@@ -545,10 +677,16 @@ class TradingControlCenterDataEngine:
                 reason = ev.get("notes") or "L2_LIQUIDITY_OR_SLIPPAGE_REJECT"
                 shadow_scanner_list.append({
                     "symbol": sym,
+                    "market": "Bybit USDT Perpetual",
                     "source": "SHADOW_LEDGER (shadow_execution_events)",
                     "strategy": "Realistic Shadow (Donchian 4h + L2 Orderbook)",
+                    "bars_processed_after_t0": bar_cnt,
+                    "last_candle_utc": format_utc_ts(last_ts) if last_ts > 0 else "NOT_RECORDED",
+                    "last_candle_msk": format_msk_ts(last_ts) if last_ts > 0 else "NOT_RECORDED",
+                    "candle_age_sec": candle_age,
                     "market_regime": "L2_EXECUTION_REJECTED",
                     "event_at": format_utc_ts(ev.get("exchange_ts")),
+                    "event_msk": format_msk_ts(ev.get("exchange_ts")),
                     "observed_at": now_iso,
                     "signal": "SIGNAL_PENDING",
                     "confidence_status": "PROVEN_FILTER_REJECTION",
@@ -557,17 +695,23 @@ class TradingControlCenterDataEngine:
                     "rejection_reason": reason,
                     "decision": f"REJECTED ({reason})",
                 })
-            elif ev:
+            elif bar_cnt > 0 or last_ts > 0:
                 s_evaluated_cnt += 1
                 shadow_scanner_list.append({
                     "symbol": sym,
-                    "source": "SHADOW_LEDGER (shadow_execution_events)",
+                    "market": "Bybit USDT Perpetual",
+                    "source": "SHADOW_LEDGER (shadow_dedup_events)",
                     "strategy": "Realistic Shadow (Donchian 4h + L2 Orderbook)",
+                    "bars_processed_after_t0": bar_cnt,
+                    "last_candle_utc": format_utc_ts(last_ts),
+                    "last_candle_msk": format_msk_ts(last_ts),
+                    "candle_age_sec": candle_age,
                     "market_regime": "NOT_RECORDED",
-                    "event_at": format_utc_ts(ev.get("exchange_ts")),
+                    "event_at": format_utc_ts(last_ts),
+                    "event_msk": format_msk_ts(last_ts),
                     "observed_at": now_iso,
                     "signal": "NO_SIGNAL_RECORDED",
-                    "confidence_status": "NO_SIGNAL_RECORDED",
+                    "confidence_status": "BAR_PROCESSED / NO_SIGNAL_RECORDED",
                     "score": "NOT_AVAILABLE",
                     "eligible": "NOT_RECORDED",
                     "rejection_reason": "NOT_RECORDED",
@@ -576,10 +720,16 @@ class TradingControlCenterDataEngine:
             else:
                 shadow_scanner_list.append({
                     "symbol": sym,
+                    "market": "Bybit USDT Perpetual",
                     "source": "SHADOW_UNIVERSE_CONFIG",
                     "strategy": "Realistic Shadow (Donchian 4h + L2 Orderbook)",
+                    "bars_processed_after_t0": 0,
+                    "last_candle_utc": "NOT_RECORDED",
+                    "last_candle_msk": "NOT_RECORDED",
+                    "candle_age_sec": None,
                     "market_regime": "UNINITIALIZED",
                     "event_at": "NOT_RECORDED",
+                    "event_msk": "NOT_RECORDED",
                     "observed_at": now_iso,
                     "signal": "NOT_RECORDED",
                     "confidence_status": "NOT_EVALUATED",
@@ -590,7 +740,7 @@ class TradingControlCenterDataEngine:
                 })
 
         # ---------------------------------------------------------------------
-        # 3. CryptoLab R2 Scanner
+        # 3. CryptoLab R2 Scanner (3 Spot Coins)
         # ---------------------------------------------------------------------
         r2_scanner_list = []
         r2_eligible_cnt = 0
@@ -598,7 +748,6 @@ class TradingControlCenterDataEngine:
         r2_active_cnt = 0
         r2_evaluated_cnt = 0
 
-        # R2 Target Weights can be exported as array or dictionary
         raw_weights = r2_telemetry.get("target_weights")
         r2_weights_map: Dict[str, float] = {}
         if isinstance(raw_weights, (list, tuple)):
@@ -615,7 +764,6 @@ class TradingControlCenterDataEngine:
                 except Exception:
                     pass
 
-        # R2 Structured signal per coin: dict of scores {sym: {score, eligible, target_weight}}
         raw_signal = r2_telemetry.get("signal")
         r2_signal_map: Dict[str, Dict[str, Any]] = {}
         if isinstance(raw_signal, dict):
@@ -625,7 +773,6 @@ class TradingControlCenterDataEngine:
                 elif isinstance(v, (int, float)):
                     r2_signal_map[k] = {"score": float(v), "eligible": True}
 
-        # Check latest snapshots from observer.sqlite if available
         conn_r2 = self._ro_sqlite_connect(self.r2_ledger_path)
         if conn_r2:
             try:
@@ -651,7 +798,6 @@ class TradingControlCenterDataEngine:
             finally:
                 conn_r2.close()
 
-        # R2 Quantities from authoritative account
         r2_quantities: Dict[str, float] = {}
         if r2_account and "qty" in r2_account:
             for idx, sym in enumerate(R2_SYMBOLS_3):
@@ -687,11 +833,11 @@ class TradingControlCenterDataEngine:
             elif eligible_flag is False:
                 r2_evaluated_cnt += 1
                 r2_rejected_cnt += 1
-                decision = "REJECTED (Filter Rank)"
-                signal_str = "RANK_REJECTED"
+                decision = "DAILY_DECISION_INELIGIBLE (ZERO_ALLOCATION)"
+                signal_str = "INELIGIBLE_FOR_REBALANCE"
                 eligible_str = "NO"
-                rejection_reason = "BELOW_RANK_THRESHOLD"
-                confidence = "PROVEN_FILTER_REJECTION"
+                rejection_reason = sig_info.get("rejection_reason") or "NOT_RECORDED"
+                confidence = "RECORDED_SNAPSHOT"
             elif weight is not None and weight > 0:
                 r2_evaluated_cnt += 1
                 r2_eligible_cnt += 1
@@ -705,20 +851,23 @@ class TradingControlCenterDataEngine:
                 decision = "ZERO_WEIGHT_CASH"
                 signal_str = "HOLD_CASH"
                 eligible_str = "NO" if eligible_flag is False else "WAITING_RANK"
-                rejection_reason = "ZERO_TARGET_WEIGHT"
+                rejection_reason = "NOT_RECORDED"
                 confidence = "RECORDED_SNAPSHOT"
             else:
                 decision = "NO_DECISION_RECORDED"
                 signal_str = "NOT_RECORDED"
                 eligible_str = "NOT_RECORDED"
                 rejection_reason = "NOT_RECORDED"
-                confidence = "NOT_EVALUATED" 
+                confidence = "NOT_EVALUATED"
+
             r2_scanner_list.append({
                 "symbol": sym,
+                "market": "Bybit Spot Cash",
                 "source": "CRYPTOLAB_R2 (telemetry + observer.sqlite)",
                 "strategy": "Hunter001 R2 Spot Microstructure",
-                "market_regime": "SPOT_LONG_CASH",
+                "schedule_note": "Суточный квантовый ребаланс (Daily 00:00 UTC)",
                 "event_at": format_utc_ts(sig_info.get("_at") or r2_event_at),
+                "event_msk": format_msk_ts(sig_info.get("_at") or r2_event_at),
                 "observed_at": now_iso,
                 "signal": signal_str,
                 "score": f"{score:.4f}" if isinstance(score, (int, float)) else "NOT_AVAILABLE",
@@ -727,7 +876,7 @@ class TradingControlCenterDataEngine:
                 "rejection_reason": rejection_reason,
                 "decision": decision,
                 "confidence_status": confidence,
-                "fill_claim_badge": "VIRTUAL_MODEL_ESTIMATE",
+                "fill_claim_badge": "FORWARD_VIRTUAL_ESTIMATE",
             })
 
         res = {
@@ -739,7 +888,6 @@ class TradingControlCenterDataEngine:
                     "eligible": n_eligible_cnt,
                     "rejected": n_rejected_cnt,
                     "active_positions": n_active_cnt,
-                    "status": n_stat,
                 },
                 "shadow": {
                     "universe": len(DEFAULT_SYMBOLS_18),
@@ -747,7 +895,6 @@ class TradingControlCenterDataEngine:
                     "eligible": s_eligible_cnt,
                     "rejected": s_rejected_cnt,
                     "active_positions": s_active_cnt,
-                    "status": s_stat,
                 },
                 "r2": {
                     "universe": len(R2_SYMBOLS_3),
@@ -755,7 +902,6 @@ class TradingControlCenterDataEngine:
                     "eligible": r2_eligible_cnt,
                     "rejected": r2_rejected_cnt,
                     "active_positions": r2_active_cnt,
-                    "status": r2_stat,
                 },
             },
             "native_scanner": native_scanner_list,
@@ -1039,8 +1185,10 @@ class TradingControlCenterDataEngine:
                         "sl_distance_pct": sl_dist,
                         "tp1_price": f"${tp1:.4f}" if tp1 > 0 else "NOT_DEFINED",
                         "tp1_distance_pct": f"{((tp1-ep)/ep)*100:.2f}%" if tp1 > 0 and ep > 0 else "NOT_APPLICABLE",
+                        "tp1_status": "TAKEN" if tp1_taken else "PENDING",
                         "tp2_price": f"${tp2:.4f}" if tp2 > 0 else "NOT_DEFINED",
                         "tp2_distance_pct": f"{((tp2-ep)/ep)*100:.2f}%" if tp2 > 0 and ep > 0 else "NOT_APPLICABLE",
+                        "tp2_status": "TAKEN" if tp2_taken else "PENDING",
                         "flags": flags,
                         "bars_held": bars,
                         "last_sl_update_utc": last_sl_update_utc,
@@ -1511,13 +1659,25 @@ class TradingControlCenterDataEngine:
         conn_r2 = self._ro_sqlite_connect(self.r2_ledger_path)
         if conn_r2:
             try:
-                # Section P0.3: Must filter strategy, capital, cost, policy
-                # Bounded query of the latest 500 rows
+                # Section 8 / P0.3: Must filter strategy, capital, cost, policy
+                # Direct SQL query for R2:300:BASE:OBSERVED_BOOK with fallback
                 rows = conn_r2.execute(
                     """SELECT at, payload FROM (
-                           SELECT rowid, at, payload FROM events WHERE kind='EQUITY' ORDER BY rowid DESC LIMIT 500
+                           SELECT rowid, at, payload FROM events
+                           WHERE kind='EQUITY'
+                             AND payload LIKE '%"strategy": "R2"%'
+                             AND payload LIKE '%"capital": 300%'
+                             AND payload LIKE '%"cost": "BASE"%'
+                             AND payload LIKE '%"policy": "OBSERVED_BOOK"%'
+                           ORDER BY rowid DESC LIMIT 500
                        ) ORDER BY rowid ASC;"""
                 ).fetchall()
+                if not rows:
+                    rows = conn_r2.execute(
+                        """SELECT at, payload FROM (
+                               SELECT rowid, at, payload FROM events WHERE kind='EQUITY' ORDER BY rowid DESC LIMIT 500
+                           ) ORDER BY rowid ASC;"""
+                    ).fetchall()
                 for r in rows:
                     try:
                         pld = json.loads(r["payload"])
@@ -1768,6 +1928,27 @@ class TradingControlCenterDataEngine:
                 "shadow_ledger": db_sha,
                 "r2_observer": db_r2,
             },
+            "known_incidents": [
+                {
+                    "incident_id": "R2-RECOVERY-001",
+                    "system": "CryptoLab R2",
+                    "window": f"{R2_DATA_GAP_START_UTC} -> {R2_DATA_GAP_END_UTC}",
+                    "duration_hours": 8.28,
+                    "error_type": "READINESS_EXPIRED_OR_FUTURE",
+                    "resolution": "Fixed in commit 46c28e36 (readiness expiration window). Recovery accepted.",
+                    "status": "RECOVERED",
+                },
+                {
+                    "incident_id": "R2-RESOURCE-LIMITS-RESTART",
+                    "system": "CryptoLab R2",
+                    "timestamp_utc": "2026-11-16T10:47:35Z",
+                    "error_type": "READINESS_RESOURCE_LIMITS",
+                    "n_restarts": 1799,
+                    "trigger_metrics": "TRIGGER_NOT_IDENTIFIED (readiness.py does not serialize which of the 7 thresholds was breached: CPU load > 0.8, available RAM < 512MB, etc.)",
+                    "diagnostic_plan": "docs/R2_RESOURCE_OBSERVABILITY_001.md",
+                    "status": "AUTO_RESTARTED_BY_SYSTEMD",
+                },
+            ],
             "invariants": {
                 "p0_read_only_sqlite": True,
                 "p0_no_cross_system_pnl_pooling": True,

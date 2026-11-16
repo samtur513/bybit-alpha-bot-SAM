@@ -2,7 +2,7 @@
   "v3_2/src/runners/run_native_paper.py": "ef21f8d9846732496af3dbabaa8c6e6f8fdd73ffd9bd18418f6a3a24b76437eb",
   "v3_2/src/runners/run_shadow_paper.py": "a858cf3b70321da981c86a8a226db22a67c3b89ffdb38be7f079ba853161fd94",
   "v3_2/src/runners/run_three_system_dashboard.py": "289556e2856eb0f0efd3e031e6f1ce75712e247641a9b80f35bb9f4aa72d3a9c",
-  "v3_2/src/integrations/three_system_dashboard.py": "1d64153a2599ab01af248c9e071c7d13b4bb1f5f904cc6014999516c4017469b",
+  "v3_2/src/integrations/three_system_dashboard.py": "dc1c2c96fdea89dd067a53922e215f337258aaa7e4b97a232d7c7efc905ee64c",
   "v3_2/src/integrations/r2_consumer.py": "ab4b7e0a75c7597db5f072809315f5fca30cfc922405b0732a9e83459ac03e82",
   "tools/deploy_shadow_fleet_services.py": "f84c3de9fe84597e908690b1f9491edaebd684b2f2f8d42b790fca502b63d1a7",
   "tools/init_cryptolab_vps.py": "e896f7208ecfc02baa5c5a4b04389f289eb8c30ff4abd5bb89ad92977240e733",
@@ -60,8 +60,14 @@
   },
   "cryptolab_git_commit": "313a908782271a6e1fffaee83be7ea1a616337cb",
   "vendor/cryptolab_r2/research/hunter001_dg001/r2_shadow/RECOVERY_PATCH.json": "2234249b75b38596c162fa8c528784fccc564a42d5f28c60733fc39530a194d4",
-  "v3_2/src/integrations/trading_control_center_data.py": "fe3b0f1fca4a3e37a8a5639b95a1b8113bf673d0755ecd268d34a020405aa7c6",
-  "tests/test_dashboard_observability_001.py": "3429490c05af5425a5df965813878c8fff50464302a647f8e09377aa582df578",
-  "DASHBOARD_OBSERVABILITY_001_DATA_MAP.md": "9f792047c5de7462cb95e26bf6dc5798688f9f415ee096536d1c545aeaaf1411",
-  "reports/acceptance_001/DASHBOARD_OBSERVABILITY_001_REPORT.md": "36936a2445a87729555d5346745386081e9848615e9108b207b18283833a8608"
+  "v3_2/src/integrations/trading_control_center_data.py": "7a081de00895849e95c4fd6ceb9aa3d359070e179f3a11f52b21f2da04032f66",
+  "tests/test_dashboard_observability_001.py": "2daab7f40eaf819587a2d1d5e26ae048a09cad696b0272b92eb958a9198d4ffe",
+  "DASHBOARD_OBSERVABILITY_001_DATA_MAP.md": "f1395e76bcaa758aacbe8bcd37ea4938448475c3aa5dcb4958a7ccf677391571",
+  "reports/acceptance_001/DASHBOARD_OBSERVABILITY_001_REPORT.md": "f8d688f36586cc349ce26cfd009de9edf010741175e5d80a3e4de0876ef73ff8",
+  "tools/deploy_dashboard_v1_final.sh": "b19bb687c9de11a38d9c6b7d869fb784fbb0fe612c2a073b0e24253d594cd700",
+  "tools/run_performance_benchmark.py": "b45971f63bcf318932df27caad2d7c8bf56065f708f129a105687c669181d4b2",
+  "tests/test_trading_control_center_v1_final.py": "35ad1a21f227b53e6bdab23738e8178a03ac4011ce8c0e96431d14ec2b5e82c1",
+  "tests/test_deploy_and_rollback.py": "4d933fd7b1844f093784ad5a5044bd732c637cf208321247d07a24c27319392a",
+  "docs/R2_RESOURCE_OBSERVABILITY_001.md": "c119b86b49a8b36cc5c9384afca5a4fa10aa95d98c8600f003a1bb4e53c2ec25",
+  "reports/BENCHMARK_REPORT.md": "f4a872aa39e2d1aae0d3771e4bab7b3279ceaacc63560f4179f32176da700c43"
 }
