@@ -571,7 +571,11 @@ class ThreeSystemComparativeDashboard:
                 </text>
             </svg>'''
 
-        equities = [float(p.get("equity", 300.0)) for p in series]
+        equities = [float(p["equity"]) for p in series if p.get("equity") is not None]
+        if len(equities) < 2:
+            return ('<svg width="100%" height="200" viewBox="0 0 700 200">'
+                    '<text x="50%" y="50%" fill="#90a4ae" text-anchor="middle">'
+                    'UNVALUED_OR_STALE — AWAITING VERIFIED MTM</text></svg>')
         min_eq = min(min(equities), 298.0)
         max_eq = max(max(equities), 302.0)
         rng = max_eq - min_eq if max_eq != min_eq else 1.0
@@ -599,7 +603,12 @@ class ThreeSystemComparativeDashboard:
 
         for i, p in enumerate(series):
             x = pad_left + (i / max(1, n - 1)) * pw
-            eq = float(p.get("equity", 300.0))
+            if p.get("equity") is None:
+                if current_seg:
+                    segments.append(current_seg)
+                current_seg = []
+                continue
+            eq = float(p["equity"])
             y = pad_top + ph - ((eq - min_eq) / rng) * ph
             pt_str = f"{x:.1f},{y:.1f}"
 
@@ -726,9 +735,9 @@ class ThreeSystemComparativeDashboard:
         r2_trades = (analytics_data.get("r2") or analytics_data.get("r2_shadow") or {}).get("closed_trades", [])
 
         engine = self.data_engine or TradingControlCenterDataEngine()
-        acc_a = engine.compute_accounting_reconciliation("NATIVE", 300.0, float(a.get("equity_usdt", 300.0) or 300.0), nat_trades)
-        acc_b = engine.compute_accounting_reconciliation("SHADOW", 300.0, float(b.get("equity_usdt", 300.0) or 300.0), sha_trades)
-        acc_c = engine.compute_accounting_reconciliation("CRYPTOLAB_R2", 300.0, float(c.get("equity_usdt", 300.0) or 300.0), r2_trades)
+        acc_a = engine.compute_accounting_reconciliation("NATIVE", 300.0, 0.0, nat_trades)
+        acc_b = engine.compute_accounting_reconciliation("SHADOW", 300.0, 0.0, sha_trades)
+        acc_c = engine.compute_accounting_reconciliation("CRYPTOLAB_R2", 300.0, 0.0, r2_trades)
 
         acc_status_a = acc_a["status"]
         acc_status_b = acc_b["status"]
