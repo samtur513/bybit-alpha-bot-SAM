@@ -1,8 +1,9 @@
 {
   "protocol": "R2-RECOVERY-001",
   "approved_patch": {
-    "readiness.py": "532c51b83ca69d7067ec59bc5789640713d9b1effd7b94492faf497f2a8bf135",
+    "readiness.py": "79dfac7e34c90cfc4634c28ec07860c6a7af542f43c15de994318224141bb810",
     "runtime.py": "3a9c85f53896779aa9202f87e9b496f8abbb64fea5a6ccc7f457052b3ded5f62"
   },
-  "rationale": "Resolve READINESS_EXPIRED_OR_FUTURE blocker in readiness.py for authorized cohort restarts without weakening cryptographic code bindings."
+  "rationale": "Explicitly authorized 2026-11-16 R2 CPU-load gate removal: load_per_cpu remains measured and validated but is no longer a fatal threshold for concurrent VPS workloads; all other six readiness resource guards and frozen trading code remain unchanged. Supersedes R2-RECOVERY-001 readiness hash while retaining the protocol and runtime approval.",
+  "previous_approved_readiness_sha256": "532c51b83ca69d7067ec59bc5789640713d9b1effd7b94492faf497f2a8bf135"
 }

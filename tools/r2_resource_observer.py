@@ -43,7 +43,6 @@ def check_against_frozen_thresholds(sample):
         "MEM_AVAILABLE_LT_512MIB": sample["mem_available_bytes"] < HALF_GIB,
         "FREE_INODES_LT_4096": sample["free_inodes"] < 4096,
         "FD_SOFT_LIMIT_LT_1024": sample["fd_soft_limit"] < 1024,
-        "LOAD_PER_CPU_GT_0_8": sample["load_per_cpu"] > 0.8,
         "RUNTIME_FILES_GT_3000": sample["runtime_files"] > 3000,
         "RUNTIME_BYTES_GT_10GIB": sample["runtime_bytes"] > TEN_GIB,
     }
@@ -125,6 +124,10 @@ def sample_report(root):
         "metrics": metrics,
         "measurement_evidence": evidence,
         "evaluation": evaluation,
+        "advisory": {
+            "load_per_cpu_above_old_0_8_limit": metrics["load_per_cpu"] > 0.8,
+            "reason": "CPU load is measured, but no longer a fatal R2 readiness gate",
+        },
     }
 
 

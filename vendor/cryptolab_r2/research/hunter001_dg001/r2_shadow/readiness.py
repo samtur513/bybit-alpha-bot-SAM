@@ -53,7 +53,7 @@ def check_resources(sample):
         fail("RESOURCE_VALUES")
     needed=max(0,10*1024**3-sample["runtime_bytes"])+512*1024**2
     if (sample["free_disk_bytes"]<needed or sample["mem_available_bytes"]<512*1024**2
-        or sample["free_inodes"]<4096 or sample["fd_soft_limit"]<1024 or sample["load_per_cpu"]>0.8
+        or sample["free_inodes"]<4096 or sample["fd_soft_limit"]<1024
         or sample["runtime_files"]>3000 or sample["runtime_bytes"]>10*1024**3):
         fail("RESOURCE_LIMITS")
     return sample

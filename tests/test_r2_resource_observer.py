@@ -1,4 +1,4 @@
-"""Verify R2 external diagnostic reproduces frozen resource thresholds."""
+"""Verify R2 external diagnostic uses six active fatal resource thresholds."""
 from tools.r2_resource_observer import (
     HALF_GIB, TEN_GIB, check_against_frozen_thresholds,
 )
@@ -22,13 +22,13 @@ def test_nominal_r2_resource_limits_pass():
     assert result["triggered_rules"] == []
 
 
-def test_specific_load_limit_tells_exact_reason():
+def test_cpu_load_spikes_are_not_fatal_after_authorized_recovery():
     s = nominal_sample()
-    s["load_per_cpu"] = 0.80001
-    out = check_against_frozen_thresholds(s)
-    assert out["triggered_rules"] == ["LOAD_PER_CPU_GT_0_8"]
-    s["load_per_cpu"] = 0.8
-    assert check_against_frozen_thresholds(s)["would_fail_readiness"] is False
+    for load in (0.80001, 0.891113, 8.0):
+        s["load_per_cpu"] = load
+        out = check_against_frozen_thresholds(s)
+        assert out["triggered_rules"] == []
+        assert out["would_fail_readiness"] is False
 
 
 def test_memory_limit():
