@@ -712,6 +712,7 @@ class ThreeSystemComparativeDashboard:
                 "TELEMETRY_FRESH": "#00e676", "TELEMETRY_STALE": "#ffa726",
                 "PROCESS_CONFIRMED_RUNNING": "#00e676", "SERVICE_STATE_UNKNOWN": "#78909c",
                 "OK_POSITIONS": "#00e676", "OK_EMPTY": "#78909c", "DATA_SOURCE_ERROR": "#ff5252",
+                "CURRENT": "#00e676", "OBSERVATION_DELAYED": "#ffa726", "NOT_RECORDED": "#78909c",
                 "IN_TRADE": "#26a69a", "RECORDED_POSITION": "#26a69a", "RECORDED_SIGNAL": "#00e676",
                 "PROVEN_FILTER_REJECTION": "#ffa726", "NO_SIGNAL_RECORDED": "#78909c",
             }
@@ -1281,7 +1282,7 @@ class ThreeSystemComparativeDashboard:
       </div>''' if positions_data.get("r2", {}).get("status") == "DATA_SOURCE_ERROR" else (f'''<div class="empty-state">
         <div class="empty-icon">🪙</div>
         <div class="empty-title">Позиций Spot Cash пока нет</div>
-        <div class="empty-desc">Все три экспортируемых профиля (BASE, STRESS, T01) находятся в 100% Cash ($300.00 USDT). До первых рыночных целевых весов монеты не закупаются.</div>
+        <div class="empty-desc">В подтверждённом основном профиле R2 открытых монет нет. Состояния других профилей и актуальность котировок здесь не утверждаются.</div>
       </div>''' if not positions_data.get("r2_positions") else '''<div class="table-responsive">
         <table>
           <thead>
@@ -1428,7 +1429,8 @@ class ThreeSystemComparativeDashboard:
   <!-- TAB 6: SYSTEM HEALTH -->
   <div class="tab-pane" id="tab-health">
     <div class="card" style="margin-bottom:16px;">
-      <h3 style="margin-top:0;font-size:16px;color:var(--accent-blue);">Телеметрия и наблюдаемость пяти компонентов (статус systemd здесь не проверяется)</h3>
+      <h3 style="margin-top:0;font-size:16px;color:var(--accent-blue);">Телеметрия четырёх компонентов (состояние systemd независимо не измеряется)</h3>
+      <div class="banner">Показаны возраст телеметрии и доступность источников; панель не вызывает systemctl и поэтому не удостоверяет состояние процессов. Для наблюдения задержки стратегии используйте отдельную таблицу закрытых баров ниже.</div>
       <div class="table-responsive">
         <table>
           <thead>
@@ -1457,6 +1459,7 @@ class ThreeSystemComparativeDashboard:
 
     <div class="card" style="margin-bottom:16px;">
       <h3 style="margin-top:0;font-size:16px;color:var(--accent-blue);">Фактический прогресс рыночных циклов</h3>
+      <div class="dim" style="padding-bottom:8px;">Load average за 1/5/15 мин (не процент CPU): {esc(health_data.get("host_resources", {}).get("load_average", "NOT_AVAILABLE"))}. Время сервера: {esc(health_data.get("host_resources", {}).get("server_time_utc"))}.</div>
       <div class="banner">Свежий heartbeat не доказывает получение свечей. Задержка означает отсутствие нового подтверждённого закрытого бара после ожидаемой границы (допуск 3 минуты). Для R2 ожидание суточного решения — около 24 часов.</div>
       <div class="table-responsive">
         <table>
