@@ -1,0 +1,33 @@
+name: Dashboard bounded HTTP concurrency safety
+on:
+  push:
+    branches: [fix/dashboard-bounded-http-20261116]
+  pull_request:
+    paths:
+      - 'v3_2/src/integrations/three_system_dashboard.py'
+      - 'tests/test_dashboard_bounded_http_20261116.py'
+      - 'tools/deploy_dashboard_bounded_http.sh'
+      - '.github/workflows/dashboard-bounded-http-ci.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pytest
+        run: python -m pip install -q pytest
+      - name: Validate syntax
+        run: |
+          python -m py_compile v3_2/src/integrations/three_system_dashboard.py
+          python -m py_compile tests/test_dashboard_bounded_http_20261116.py
+          bash -n tools/deploy_dashboard_bounded_http.sh
+      - name: Prove concurrent GET, backpressure, and connection closure
+        run: python -m pytest -q tests/test_dashboard_bounded_http_20261116.py
+      - name: Existing dashboard activity and integration regressions
+        run: python -m pytest -q tests/test_dashboard_observability_001.py tests/test_dashboard_activity_20261116.py
