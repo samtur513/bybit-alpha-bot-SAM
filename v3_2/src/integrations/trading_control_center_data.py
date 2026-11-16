@@ -283,7 +283,7 @@ class TradingControlCenterDataEngine:
            (not self.native_state_path or not self.native_state_path.is_file()):
             return {}, "DATA_SOURCE_ERROR", "DB_AND_STATE_FILES_NOT_FOUND"
 
-        return {}, "OK", None
+        return {}, "DATA_SOURCE_ERROR", "NO_AUTHORITATIVE_STATE_RECORD"
 
     def _get_authoritative_shadow_state(self) -> Tuple[Dict[str, Any], str, Optional[str]]:
         """
@@ -327,7 +327,7 @@ class TradingControlCenterDataEngine:
            (not self.shadow_state_path or not self.shadow_state_path.is_file()):
             return {}, "DATA_SOURCE_ERROR", "DB_AND_STATE_FILES_NOT_FOUND"
 
-        return {}, "OK", None
+        return {}, "DATA_SOURCE_ERROR", "NO_AUTHORITATIVE_STATE_RECORD"
 
     def _get_r2_data(self) -> Tuple[Dict[str, Any], Dict[str, Any], str, Optional[str]]:
         """
